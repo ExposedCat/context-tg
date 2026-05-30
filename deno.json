@@ -1,0 +1,16 @@
+{
+	"tasks": {
+		"format": "deno run -A @biomejs/biome format --write; deno run -A @biomejs/biome lint --write",
+		"dev": "./dev.sh",
+		"check": "deno run -A @biomejs/biome check"
+	},
+	"imports": {
+		"@biomejs/biome": "npm:@biomejs/biome@2.3.8",
+		"@grammyjs/debug": "jsr:@grammyjs/debug@^0.2.1",
+		"grammy": "https://deno.land/x/grammy@v1.38.3/mod.ts",
+		"grammy-i18n": "https://deno.land/x/grammy_i18n@v1.1.0/mod.ts",
+		"lefthook": "npm:lefthook@^2.0.11",
+		"mongodb": "npm:mongodb@^7.0.0",
+		"typebox": "npm:typebox@^1.0.62"
+	}
+}
