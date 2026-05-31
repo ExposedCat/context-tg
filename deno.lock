@@ -1,26 +1,87 @@
 {
   "version": "5",
   "specifiers": {
+    "jsr:@db/sqlite@*": "0.13.0",
+    "jsr:@db/sqlite@0.13": "0.13.0",
+    "jsr:@denosaurs/plug@1": "1.1.0",
     "jsr:@grammyjs/debug@~0.2.1": "0.2.1",
+    "jsr:@kysely/kysely@*": "0.28.17",
+    "jsr:@kysely/kysely@0.28": "0.28.17",
+    "jsr:@kysely/kysely@~0.28.17": "0.28.17",
+    "jsr:@marshift/kysely-deno-sqlite3@*": "1.0.0",
+    "jsr:@marshift/kysely-deno-sqlite3@1": "1.0.0",
+    "jsr:@std/encoding@1": "1.0.10",
+    "jsr:@std/fmt@1": "1.0.9",
+    "jsr:@std/fs@1": "1.0.23",
     "jsr:@std/internal@^1.0.10": "1.0.12",
+    "jsr:@std/internal@^1.0.12": "1.0.12",
+    "jsr:@std/path@1": "1.1.4",
+    "jsr:@std/path@1.0": "1.0.9",
     "jsr:@std/path@1.1.2": "1.1.2",
+    "jsr:@std/path@^1.1.4": "1.1.4",
     "npm:@biomejs/biome@*": "2.3.8",
     "npm:@biomejs/biome@2.3.8": "2.3.8",
-    "npm:lefthook@^2.0.11": "2.0.11",
-    "npm:mongodb@7": "7.0.0",
-    "npm:typebox@^1.0.62": "1.0.62"
+    "npm:lefthook@^2.0.11": "2.0.11"
   },
   "jsr": {
+    "@db/sqlite@0.13.0": {
+      "integrity": "4545c635e0b3d4ddfdc0f2240f932f24b8ad0178e9c2e3a0f9403e7b18ae2fb5",
+      "dependencies": [
+        "jsr:@denosaurs/plug",
+        "jsr:@std/path@1.0"
+      ]
+    },
+    "@denosaurs/plug@1.1.0": {
+      "integrity": "eb2f0b7546c7bca2000d8b0282c54d50d91cf6d75cb26a80df25a6de8c4bc044",
+      "dependencies": [
+        "jsr:@std/encoding",
+        "jsr:@std/fmt",
+        "jsr:@std/fs",
+        "jsr:@std/path@1"
+      ]
+    },
     "@grammyjs/debug@0.2.1": {
       "integrity": "4534e0008be90370abfb6658914a7369e5caccb0a80a570875e281c9efa447ec"
+    },
+    "@kysely/kysely@0.28.17": {
+      "integrity": "19230f46728035602a455f3ee69f284150104a1b6e336dceb1d7c3751e4e1b03"
+    },
+    "@marshift/kysely-deno-sqlite3@1.0.0": {
+      "integrity": "71c8184f396061523a0d0d82c282ca60b64c4a0267da8687f1aa49d326dbeb59",
+      "dependencies": [
+        "jsr:@db/sqlite@0.13",
+        "jsr:@kysely/kysely@0.28"
+      ]
+    },
+    "@std/encoding@1.0.10": {
+      "integrity": "8783c6384a2d13abd5e9e87a7ae0520a30e9f56aeeaa3bdf910a3eaaf5c811a1"
+    },
+    "@std/fmt@1.0.9": {
+      "integrity": "2487343e8899fb2be5d0e3d35013e54477ada198854e52dd05ed0422eddcabe0"
+    },
+    "@std/fs@1.0.23": {
+      "integrity": "3ecbae4ce4fee03b180fa710caff36bb5adb66631c46a6460aaad49515565a37",
+      "dependencies": [
+        "jsr:@std/internal@^1.0.12",
+        "jsr:@std/path@^1.1.4"
+      ]
     },
     "@std/internal@1.0.12": {
       "integrity": "972a634fd5bc34b242024402972cd5143eac68d8dffaca5eaa4dba30ce17b027"
     },
+    "@std/path@1.0.9": {
+      "integrity": "260a49f11edd3db93dd38350bf9cd1b4d1366afa98e81b86167b4e3dd750129e"
+    },
     "@std/path@1.1.2": {
       "integrity": "c0b13b97dfe06546d5e16bf3966b1cadf92e1cc83e56ba5476ad8b498d9e3038",
       "dependencies": [
-        "jsr:@std/internal"
+        "jsr:@std/internal@^1.0.10"
+      ]
+    },
+    "@std/path@1.1.4": {
+      "integrity": "1d2d43f39efb1b42f0b1882a25486647cb851481862dc7313390b2bb044314b5",
+      "dependencies": [
+        "jsr:@std/internal@^1.0.12"
       ]
     }
   },
@@ -78,24 +139,6 @@
       "integrity": "sha512-RguzimPoZWtBapfKhKjcWXBVI91tiSprqdBYu7tWhgN8pKRZhw24rFeNZTNf6UiBfjCYCi9eFQs/JzJZIhuK4w==",
       "os": ["win32"],
       "cpu": ["x64"]
-    },
-    "@mongodb-js/saslprep@1.4.0": {
-      "integrity": "sha512-ZHzx7Z3rdlWL1mECydvpryWN/ETXJiCxdgQKTAH+djzIPe77HdnSizKBDi1TVDXZjXyOj2IqEG/vPw71ULF06w==",
-      "dependencies": [
-        "sparse-bitfield"
-      ]
-    },
-    "@types/webidl-conversions@7.0.3": {
-      "integrity": "sha512-CiJJvcRtIgzadHCYXw7dqEnMNRjhGZlYK05Mj9OyktqV8uVT8fD2BFOB7S1uwBE3Kj2Z+4UyPmFw/Ixgw/LAlA=="
-    },
-    "@types/whatwg-url@13.0.0": {
-      "integrity": "sha512-N8WXpbE6Wgri7KUSvrmQcqrMllKZ9uxkYWMt+mCSGwNc0Hsw9VQTW7ApqI4XNrx6/SaM2QQJCzMPDEXE058s+Q==",
-      "dependencies": [
-        "@types/webidl-conversions"
-      ]
-    },
-    "bson@7.0.0": {
-      "integrity": "sha512-Kwc6Wh4lQ5OmkqqKhYGKIuELXl+EPYSCObVE6bWsp1T/cGkOCBN0I8wF/T44BiuhHyNi1mmKVPXk60d41xZ7kw=="
     },
     "lefthook-darwin-arm64@2.0.11": {
       "integrity": "sha512-RfpdcJJQXstdgDiIBDRffncayKiXx+0LyMUCunIxDEO2JMXPpYK2hIdpUU0rkitzptAADchG7u1OXJ31rrtIAA==",
@@ -163,52 +206,6 @@
       ],
       "scripts": true,
       "bin": true
-    },
-    "memory-pager@1.5.0": {
-      "integrity": "sha512-ZS4Bp4r/Zoeq6+NLJpP+0Zzm0pR8whtGPf1XExKLJBAczGMnSi3It14OiNCStjQjM6NU1okjQGSxgEZN8eBYKg=="
-    },
-    "mongodb-connection-string-url@7.0.0": {
-      "integrity": "sha512-irhhjRVLE20hbkRl4zpAYLnDMM+zIZnp0IDB9akAFFUZp/3XdOfwwddc7y6cNvF2WCEtfTYRwYbIfYa2kVY0og==",
-      "dependencies": [
-        "@types/whatwg-url",
-        "whatwg-url"
-      ]
-    },
-    "mongodb@7.0.0": {
-      "integrity": "sha512-vG/A5cQrvGGvZm2mTnCSz1LUcbOPl83hfB6bxULKQ8oFZauyox/2xbZOoGNl+64m8VBrETkdGCDBdOsCr3F3jg==",
-      "dependencies": [
-        "@mongodb-js/saslprep",
-        "bson",
-        "mongodb-connection-string-url"
-      ]
-    },
-    "punycode@2.3.1": {
-      "integrity": "sha512-vYt7UD1U9Wg6138shLtLOvdAu+8DsC/ilFtEVHcH+wydcSpNE20AfSOduf6MkRFahL5FY7X1oU7nKVZFtfq8Fg=="
-    },
-    "sparse-bitfield@3.0.3": {
-      "integrity": "sha512-kvzhi7vqKTfkh0PZU+2D2PIllw2ymqJKujUcyPMd9Y75Nv4nPbGJZXNhxsgdQab2BmlDct1YnfQCguEvHr7VsQ==",
-      "dependencies": [
-        "memory-pager"
-      ]
-    },
-    "tr46@5.1.1": {
-      "integrity": "sha512-hdF5ZgjTqgAntKkklYw0R03MG2x/bSzTtkxmIRw/sTNV8YXsCJ1tfLAX23lhxhHJlEf3CRCOCGGWw3vI3GaSPw==",
-      "dependencies": [
-        "punycode"
-      ]
-    },
-    "typebox@1.0.62": {
-      "integrity": "sha512-iWxUfvzC5tGZWFrhoPLUKQJgFif4aDVgyaBbCURFIswex8to1JsnwDtenM2GqNI1VC/vqNlHtGc0ZR5eh0vbww=="
-    },
-    "webidl-conversions@7.0.0": {
-      "integrity": "sha512-VwddBukDzu71offAQR975unBIGqfKZpM+8ZX6ySk8nYhVoo5CYaZyzt3YBvYtRtO+aoGlqxPg/B87NGVZ/fu6g=="
-    },
-    "whatwg-url@14.2.0": {
-      "integrity": "sha512-De72GdQZzNTUBBChsXueQUnPKDkg/5A5zp7pFDuQAj5UFoENpiACU0wlCvzpAGnTkj++ihpKwKyYewn/XNUbKw==",
-      "dependencies": [
-        "tr46",
-        "webidl-conversions"
-      ]
     }
   },
   "redirects": {
@@ -288,11 +285,12 @@
   },
   "workspace": {
     "dependencies": [
+      "jsr:@db/sqlite@0.13",
       "jsr:@grammyjs/debug@~0.2.1",
+      "jsr:@kysely/kysely@~0.28.17",
+      "jsr:@marshift/kysely-deno-sqlite3@1",
       "npm:@biomejs/biome@2.3.8",
-      "npm:lefthook@^2.0.11",
-      "npm:mongodb@7",
-      "npm:typebox@^1.0.62"
+      "npm:lefthook@^2.0.11"
     ]
   }
 }
