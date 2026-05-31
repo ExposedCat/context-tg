@@ -1,15 +1,35 @@
 import { createDebug } from "@grammyjs/debug";
 import OpenAI from "@openai/openai";
 import { APP_ENV } from "./env.ts";
+import { fetchTickerPrice } from "./stocks.ts";
 
 export const TOOL_DEFINITIONS = {
   web_search: {
     type: "web_search",
     search_context_size: "low",
   },
+  fetch_ticker_price: {
+    type: "function",
+    name: "fetch_ticker_price",
+    description:
+      "Fetch the latest available last price for a Stooq ticker, for example AAPL.US or VUAA.UK.",
+    parameters: {
+      type: "object",
+      properties: {
+        ticker: {
+          type: "string",
+          description: "Stooq ticker symbol, for example AAPL.US or VUAA.UK.",
+        },
+      },
+      required: ["ticker"],
+      additionalProperties: false,
+    },
+    strict: true,
+  },
 } as const;
 
 export type ToolName = keyof typeof TOOL_DEFINITIONS;
+type FunctionToolName = "fetch_ticker_price";
 
 export type LlmCitation = {
   start_index: number;
@@ -44,6 +64,9 @@ type ApiResponseOutputItem = {
   type: string;
   action?: unknown;
   content?: unknown;
+  name?: unknown;
+  arguments?: unknown;
+  call_id?: unknown;
 };
 
 type WebSearchAction = {
@@ -62,11 +85,31 @@ type OutputTextContent = {
   }>;
 };
 
+type FunctionToolCall = ApiResponseOutputItem & {
+  type: "function_call";
+  name: FunctionToolName;
+  arguments: string;
+  call_id: string;
+};
+
+type FunctionCallOutput = {
+  type: "function_call_output";
+  call_id: string;
+  output: string;
+};
+
 const logDebug = createDebug("app:llm:debug");
 
 const SYSTEM_INSTRUCTIONS = `You are an assistant with a goal to provide a meaningful context in a chat.
-You have various tools at your disposal, whenever you need to use them, do so properly.
-Never respond with any formatting, citation links or sources, because this will be done automatically after you send the response.`;
+You have various tools at your disposal, whenever you need to use them, you must use a tool by name properly, not write parameters in a response to user.
+Never respond with any formatting except citaitons and allowed tags.
+Markdown and HTML are NOT supported, you can ONLY use following small subset:
+- <b> for bold
+- <i> for italic
+- <code lang=""> for code snippets
+- <code> for code snippets without language
+- <a href=""> for links (not citations, send citations normally)
+Don't overuse formatting. Use it only when needed.`;
 
 function getClient(): OpenAI {
   return new OpenAI({
@@ -77,6 +120,12 @@ function getClient(): OpenAI {
 
 function getToolDefinitions(tools: ToolName[]): ToolDefinition[] {
   return tools.map((tool) => TOOL_DEFINITIONS[tool]);
+}
+
+function getResponseInclude(tools: ToolName[]) {
+  return tools.includes("web_search")
+    ? ["web_search_call.action.sources" as const]
+    : undefined;
 }
 
 function isOutputText(content: unknown): content is OutputTextContent {
@@ -105,6 +154,22 @@ function isWebSearchCall(
   action: WebSearchAction;
 } {
   return item.type === "web_search_call" && isWebSearchAction(item.action);
+}
+
+function isFunctionToolName(tool: string): tool is FunctionToolName {
+  return tool === "fetch_ticker_price";
+}
+
+function isFunctionToolCall(
+  item: ApiResponseOutputItem,
+): item is FunctionToolCall {
+  return (
+    item.type === "function_call" &&
+    typeof item.name === "string" &&
+    isFunctionToolName(item.name) &&
+    typeof item.arguments === "string" &&
+    typeof item.call_id === "string"
+  );
 }
 
 function pushUniqueLink(links: string[], link: string | null | undefined) {
@@ -173,10 +238,99 @@ function getCalledTools(response: ApiResponse): ToolName[] {
   for (const item of response.output) {
     if (item.type === "web_search_call") {
       calledTools.add("web_search");
+    } else if (isFunctionToolCall(item)) {
+      calledTools.add(item.name);
     }
   }
 
   return [...calledTools];
+}
+
+function getFunctionToolCalls(response: ApiResponse): FunctionToolCall[] {
+  return response.output.filter(isFunctionToolCall);
+}
+
+function parseJsonObject(data: string): Record<string, unknown> | null {
+  try {
+    const parsed = JSON.parse(data);
+    return typeof parsed === "object" &&
+      parsed !== null &&
+      !Array.isArray(parsed)
+      ? parsed
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+async function runFunctionToolCall(
+  call: FunctionToolCall,
+): Promise<FunctionCallOutput> {
+  const args = parseJsonObject(call.arguments);
+
+  if (call.name === "fetch_ticker_price") {
+    const ticker = typeof args?.ticker === "string" ? args.ticker.trim() : "";
+    const price = ticker ? await fetchTickerPrice(ticker) : null;
+
+    return {
+      type: "function_call_output",
+      call_id: call.call_id,
+      output: JSON.stringify({ ticker, price }),
+    };
+  }
+
+  return {
+    type: "function_call_output",
+    call_id: call.call_id,
+    output: JSON.stringify({ error: `Unknown tool: ${call.name}` }),
+  };
+}
+
+async function createLlmResponse(
+  client: OpenAI,
+  input: string | FunctionCallOutput[],
+  tools: ToolName[],
+  responseId?: string | null,
+): Promise<ApiResponse> {
+  return await client.responses.create({
+    model: APP_ENV.LLM_MODEL,
+    input,
+    instructions: SYSTEM_INSTRUCTIONS,
+    temperature: APP_ENV.LLM_TEMPERATURE,
+    tools: getToolDefinitions(tools),
+    tool_choice: "auto",
+    include: getResponseInclude(tools),
+    previous_response_id: responseId == null ? undefined : responseId,
+  });
+}
+
+async function resolveFunctionToolCalls(
+  client: OpenAI,
+  initialResponse: ApiResponse,
+  tools: ToolName[],
+): Promise<{ response: ApiResponse; calledTools: ToolName[] }> {
+  const calledTools = new Set(getCalledTools(initialResponse));
+  let response = initialResponse;
+
+  for (let index = 0; index < 4; index += 1) {
+    const functionCalls = getFunctionToolCalls(response);
+
+    if (functionCalls.length === 0) {
+      break;
+    }
+
+    const toolOutputs = await Promise.all(
+      functionCalls.map((call) => runFunctionToolCall(call)),
+    );
+
+    response = await createLlmResponse(client, toolOutputs, tools, response.id);
+
+    for (const tool of getCalledTools(response)) {
+      calledTools.add(tool);
+    }
+  }
+
+  return { response, calledTools: [...calledTools] };
 }
 
 export async function requestLlm(
@@ -185,18 +339,18 @@ export async function requestLlm(
   responseId?: string | null,
 ): Promise<LlmResponse> {
   logDebug("Sending request to LLM:", { request, tools, responseId });
-  const response = await getClient().responses.create({
-    model: APP_ENV.LLM_MODEL,
-    input: request,
-    instructions: SYSTEM_INSTRUCTIONS,
-    temperature: APP_ENV.LLM_TEMPERATURE,
-    tools: getToolDefinitions(tools),
-    tool_choice: "auto",
-    include: tools.includes("web_search")
-      ? ["web_search_call.action.sources"]
-      : undefined,
-    previous_response_id: responseId == null ? undefined : responseId,
-  });
+  const client = getClient();
+  const initialResponse = await createLlmResponse(
+    client,
+    request,
+    tools,
+    responseId,
+  );
+  const { response, calledTools } = await resolveFunctionToolCalls(
+    client,
+    initialResponse,
+    tools,
+  );
   logDebug("Received response from LLM:", response);
 
   const citations = getCitations(response);
@@ -204,7 +358,6 @@ export async function requestLlm(
   const sources = getWebSearchSourceLinks(response)
     .filter((link) => !citationLinks.has(link))
     .map((link) => ({ link }));
-  const calledTools = getCalledTools(response);
   const responseText = response.output_text || undefined;
 
   return {
