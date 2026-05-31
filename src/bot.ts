@@ -3,6 +3,7 @@ import { Bot, type Context as GrammyContext } from "grammy";
 import { I18n, type I18nFlavor } from "grammy-i18n";
 import { chatComposer } from "./features/chat.ts";
 import type { Database } from "./features/database.ts";
+import { messagesComposer } from "./features/messages.ts";
 import { stateComposer } from "./features/state.ts";
 
 export type Context = GrammyContext &
@@ -28,6 +29,7 @@ export function initBot(token: string, database: Database) {
   bot.use(i18n);
 
   bot.use(stateComposer);
+  bot.use(messagesComposer);
   bot.use(chatComposer);
 
   bot.catch((error) => logError("Grammy error", { error }));

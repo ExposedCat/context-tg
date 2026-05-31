@@ -1,6 +1,7 @@
 import { createDebug } from "@grammyjs/debug";
 import OpenAI from "@openai/openai";
 import { APP_ENV } from "./env.ts";
+import { search as searchMessages } from "./messages.ts";
 import { fetchTickerPrice } from "./stocks.ts";
 
 export const TOOL_DEFINITIONS = {
@@ -26,10 +27,51 @@ export const TOOL_DEFINITIONS = {
     },
     strict: true,
   },
+  search_chat: {
+    type: "function",
+    name: "search_chat",
+    description:
+      "Search remembered text messages in the current Telegram chat. The sender_id and date filters are optional; only use them when the user explicitly needs a sender or date range filter. Prefer using only queries.",
+    parameters: {
+      type: "object",
+      properties: {
+        queries: {
+          type: "array",
+          description:
+            "One or more semantic search queries. Prefer concise natural-language queries, and include a sender name in the query when searching by name.",
+          items: {
+            type: "string",
+          },
+        },
+        from: {
+          type: "string",
+          description:
+            "Optional inclusive ISO 8601 start date. Only use when the user explicitly asks for a date or time range.",
+        },
+        to: {
+          type: "string",
+          description:
+            "Optional inclusive ISO 8601 end date. Only use when the user explicitly asks for a date or time range.",
+        },
+        sender_id: {
+          type: "number",
+          description:
+            "Optional Telegram sender id. Only use when the user explicitly gives or requires a sender id filter.",
+        },
+      },
+      required: ["queries"],
+      additionalProperties: false,
+    },
+    strict: false,
+  },
 } as const;
 
 export type ToolName = keyof typeof TOOL_DEFINITIONS;
-type FunctionToolName = "fetch_ticker_price";
+type FunctionToolName = "fetch_ticker_price" | "search_chat";
+
+export type LlmToolContext = {
+  chatId: number;
+};
 
 export type LlmCitation = {
   start_index: number;
@@ -157,7 +199,7 @@ function isWebSearchCall(
 }
 
 function isFunctionToolName(tool: string): tool is FunctionToolName {
-  return tool === "fetch_ticker_price";
+  return tool === "fetch_ticker_price" || tool === "search_chat";
 }
 
 function isFunctionToolCall(
@@ -263,8 +305,33 @@ function parseJsonObject(data: string): Record<string, unknown> | null {
   }
 }
 
+function parseOptionalDate(value: unknown): Date | undefined {
+  if (typeof value !== "string" || !value.trim()) {
+    return undefined;
+  }
+
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? undefined : date;
+}
+
+function parseOptionalNumber(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return undefined;
+  }
+
+  return value;
+}
+
+function formatSearchChatLine(
+  result: Awaited<ReturnType<typeof searchMessages>>[number],
+): string {
+  const content = result.text.replaceAll(/\s+/g, " ").trim();
+  return `[${result.date}] ${result.sender_name}: ${JSON.stringify(content)}`;
+}
+
 async function runFunctionToolCall(
   call: FunctionToolCall,
+  context?: LlmToolContext,
 ): Promise<FunctionCallOutput> {
   const args = parseJsonObject(call.arguments);
 
@@ -276,6 +343,39 @@ async function runFunctionToolCall(
       type: "function_call_output",
       call_id: call.call_id,
       output: JSON.stringify({ ticker, price }),
+    };
+  }
+
+  if (call.name === "search_chat") {
+    if (!context) {
+      return {
+        type: "function_call_output",
+        call_id: call.call_id,
+        output: "Cannot search chat: current chat context is unavailable.",
+      };
+    }
+
+    const queries = Array.isArray(args?.queries)
+      ? args.queries.filter(
+          (query): query is string => typeof query === "string",
+        )
+      : [];
+    const results = await searchMessages({
+      queries,
+      from: parseOptionalDate(args?.from),
+      to: parseOptionalDate(args?.to),
+      chatId: context.chatId,
+      senderId: parseOptionalNumber(args?.sender_id),
+      limit: 20,
+    });
+
+    return {
+      type: "function_call_output",
+      call_id: call.call_id,
+      output:
+        results.length > 0
+          ? results.map(formatSearchChatLine).join("\n")
+          : "No matching chat messages found.",
     };
   }
 
@@ -308,6 +408,7 @@ async function resolveFunctionToolCalls(
   client: OpenAI,
   initialResponse: ApiResponse,
   tools: ToolName[],
+  context?: LlmToolContext,
 ): Promise<{ response: ApiResponse; calledTools: ToolName[] }> {
   const calledTools = new Set(getCalledTools(initialResponse));
   let response = initialResponse;
@@ -320,7 +421,7 @@ async function resolveFunctionToolCalls(
     }
 
     const toolOutputs = await Promise.all(
-      functionCalls.map((call) => runFunctionToolCall(call)),
+      functionCalls.map((call) => runFunctionToolCall(call, context)),
     );
 
     response = await createLlmResponse(client, toolOutputs, tools, response.id);
@@ -337,6 +438,7 @@ export async function requestLlm(
   request: string,
   tools: ToolName[],
   responseId?: string | null,
+  context?: LlmToolContext,
 ): Promise<LlmResponse> {
   logDebug("Sending request to LLM:", { request, tools, responseId });
   const client = getClient();
@@ -350,8 +452,15 @@ export async function requestLlm(
     client,
     initialResponse,
     tools,
+    context,
   );
   logDebug("Received response from LLM:", response);
+
+  if (!response.output_text && getFunctionToolCalls(response).length > 0) {
+    logDebug("LLM response still contains unresolved function calls", {
+      response,
+    });
+  }
 
   const citations = getCitations(response);
   const citationLinks = new Set(citations.map((citation) => citation.link));

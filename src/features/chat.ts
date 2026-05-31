@@ -21,7 +21,11 @@ const logError = createDebug("app:chat:error");
 
 export const chatComposer = new Composer<Context>();
 
-const LLM_TOOLS: ToolName[] = ["web_search", "fetch_ticker_price"];
+const LLM_TOOLS: ToolName[] = [
+  "web_search",
+  "fetch_ticker_price",
+  "search_chat",
+];
 
 const linkPreviewOptions = {
   link_preview_options: {
@@ -198,10 +202,14 @@ chatComposer.on("message", async (ctx, next) => {
 
   try {
     const llmResponse = thread?.response_id
-      ? await requestLlm(text, LLM_TOOLS, thread.response_id)
+      ? await requestLlm(text, LLM_TOOLS, thread.response_id, {
+          chatId: ctx.chat.id,
+        })
       : await requestLlm(
           buildRootRequest(text, reply && getMessageText(reply)),
           LLM_TOOLS,
+          undefined,
+          { chatId: ctx.chat.id },
         );
     const formattedResponse = formatLlmResponse(llmResponse);
     const sentMessage = await ctx.reply(formattedResponse.text, {
