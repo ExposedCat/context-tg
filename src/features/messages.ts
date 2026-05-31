@@ -336,16 +336,36 @@ export async function search(
     .slice(0, limit);
 }
 
-messagesComposer.on("message:text", async (ctx, next) => {
+async function handleIndexMessage(
+  message: TextMessage,
+  sender: Sender,
+  chatId: number,
+  action: "indexed" | "reindexed",
+): Promise<void> {
   try {
-    await indexMessage(ctx.message, ctx.from, ctx.chat.id);
-    logDebug("Indexed text message", {
-      chatId: ctx.chat.id,
-      messageId: ctx.message.message_id,
+    await indexMessage(message, sender, chatId);
+    logDebug(`Text message ${action}`, {
+      chatId,
+      messageId: message.message_id,
     });
   } catch (error) {
-    logError("Failed to index text message", { error });
+    logError(`Failed to ${action} text message`, { error });
   }
+}
+
+messagesComposer.on("message:text", async (ctx, next) => {
+  await handleIndexMessage(ctx.message, ctx.from, ctx.chat.id, "indexed");
+
+  await next();
+});
+
+messagesComposer.on("edited_message:text", async (ctx, next) => {
+  await handleIndexMessage(
+    ctx.editedMessage,
+    ctx.from,
+    ctx.chat.id,
+    "reindexed",
+  );
 
   await next();
 });

@@ -329,30 +329,61 @@ function formatSearchChatLine(
   return `[${result.date}] ${result.sender_name}: ${JSON.stringify(content)}`;
 }
 
+function formatToolCallLog(call: FunctionToolCall): Record<string, unknown> {
+  return {
+    callId: call.call_id,
+    name: call.name,
+    arguments: parseJsonObject(call.arguments) ?? call.arguments,
+  };
+}
+
+function formatResponseSummary(response: ApiResponse): Record<string, unknown> {
+  return {
+    id: response.id,
+    outputTextLength: response.output_text?.length ?? 0,
+    outputTypes: response.output.map((item) => item.type),
+    functionCalls: getFunctionToolCalls(response).map(formatToolCallLog),
+    tools: getCalledTools(response),
+  };
+}
+
+function createToolOutput(
+  call: FunctionToolCall,
+  output: string,
+): FunctionCallOutput {
+  logDebug("Tool call response", {
+    callId: call.call_id,
+    name: call.name,
+    output,
+  });
+
+  return {
+    type: "function_call_output",
+    call_id: call.call_id,
+    output,
+  };
+}
+
 async function runFunctionToolCall(
   call: FunctionToolCall,
   context?: LlmToolContext,
 ): Promise<FunctionCallOutput> {
   const args = parseJsonObject(call.arguments);
+  logDebug("Running tool call", formatToolCallLog(call));
 
   if (call.name === "fetch_ticker_price") {
     const ticker = typeof args?.ticker === "string" ? args.ticker.trim() : "";
     const price = ticker ? await fetchTickerPrice(ticker) : null;
 
-    return {
-      type: "function_call_output",
-      call_id: call.call_id,
-      output: JSON.stringify({ ticker, price }),
-    };
+    return createToolOutput(call, JSON.stringify({ ticker, price }));
   }
 
   if (call.name === "search_chat") {
     if (!context) {
-      return {
-        type: "function_call_output",
-        call_id: call.call_id,
-        output: "Cannot search chat: current chat context is unavailable.",
-      };
+      return createToolOutput(
+        call,
+        "Cannot search chat: current chat context is unavailable.",
+      );
     }
 
     const queries = Array.isArray(args?.queries)
@@ -369,21 +400,18 @@ async function runFunctionToolCall(
       limit: 20,
     });
 
-    return {
-      type: "function_call_output",
-      call_id: call.call_id,
-      output:
-        results.length > 0
-          ? results.map(formatSearchChatLine).join("\n")
-          : "No matching chat messages found.",
-    };
+    return createToolOutput(
+      call,
+      results.length > 0
+        ? results.map(formatSearchChatLine).join("\n")
+        : "No matching chat messages found.",
+    );
   }
 
-  return {
-    type: "function_call_output",
-    call_id: call.call_id,
-    output: JSON.stringify({ error: `Unknown tool: ${call.name}` }),
-  };
+  return createToolOutput(
+    call,
+    JSON.stringify({ error: `Unknown tool: ${call.name}` }),
+  );
 }
 
 async function createLlmResponse(
@@ -440,7 +468,7 @@ export async function requestLlm(
   responseId?: string | null,
   context?: LlmToolContext,
 ): Promise<LlmResponse> {
-  logDebug("Sending request to LLM:", { request, tools, responseId });
+  logDebug("Sending request to LLM", { tools, responseId });
   const client = getClient();
   const initialResponse = await createLlmResponse(
     client,
@@ -454,11 +482,11 @@ export async function requestLlm(
     tools,
     context,
   );
-  logDebug("Received response from LLM:", response);
+  logDebug("Received response from LLM", formatResponseSummary(response));
 
   if (!response.output_text && getFunctionToolCalls(response).length > 0) {
     logDebug("LLM response still contains unresolved function calls", {
-      response,
+      response: formatResponseSummary(response),
     });
   }
 
