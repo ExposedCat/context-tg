@@ -5,44 +5,44 @@ import { APP_ENV } from "./env.ts";
 import { migrateThreads, type ThreadsTable } from "./threads.ts";
 
 export type DatabaseSchema = {
-	threads: ThreadsTable;
+  threads: ThreadsTable;
 };
 
 export type Database = Kysely<DatabaseSchema>;
 
 async function ensureDatabaseDirectory(databasePath: string) {
-	if (databasePath === ":memory:") {
-		return;
-	}
+  if (databasePath === ":memory:") {
+    return;
+  }
 
-	const separatorIndex = databasePath.lastIndexOf("/");
-	if (separatorIndex <= 0) {
-		return;
-	}
+  const separatorIndex = databasePath.lastIndexOf("/");
+  if (separatorIndex <= 0) {
+    return;
+  }
 
-	await Deno.mkdir(databasePath.slice(0, separatorIndex), { recursive: true });
+  await Deno.mkdir(databasePath.slice(0, separatorIndex), { recursive: true });
 }
 
 export function initDatabase() {
-	const databasePath = APP_ENV.SQLITE_PATH;
+  const databasePath = APP_ENV.SQLITE_PATH;
 
-	const connect = async (): Promise<Database> => {
-		await ensureDatabaseDirectory(databasePath);
+  const connect = async (): Promise<Database> => {
+    await ensureDatabaseDirectory(databasePath);
 
-		const sqlite = new SqliteDatabase(databasePath);
-		sqlite.exec("PRAGMA foreign_keys = ON");
-		sqlite.exec("PRAGMA journal_mode = WAL");
+    const sqlite = new SqliteDatabase(databasePath);
+    sqlite.exec("PRAGMA foreign_keys = ON");
+    sqlite.exec("PRAGMA journal_mode = WAL");
 
-		const database = new Kysely<DatabaseSchema>({
-			dialect: new DenoSqlite3Dialect({
-				database: sqlite,
-			}),
-		});
+    const database = new Kysely<DatabaseSchema>({
+      dialect: new DenoSqlite3Dialect({
+        database: sqlite,
+      }),
+    });
 
-		await migrateThreads(database);
+    await migrateThreads(database);
 
-		return database;
-	};
+    return database;
+  };
 
-	return connect;
+  return connect;
 }
