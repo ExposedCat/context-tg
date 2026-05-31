@@ -1,3 +1,4 @@
+import { createDebug } from "@grammyjs/debug";
 import OpenAI from "@openai/openai";
 import { APP_ENV } from "./env.ts";
 
@@ -60,6 +61,12 @@ type OutputTextContent = {
     url?: string;
   }>;
 };
+
+const logDebug = createDebug("app:llm:debug");
+
+const SYSTEM_INSTRUCTIONS = `You are an assistant with a goal to provide a meaningful context in a chat.
+You have various tools at your disposal, whenever you need to use them, do so properly.
+Never respond with any formatting, citation links or sources, because this will be done automatically after you send the response.`;
 
 function getClient(): OpenAI {
   return new OpenAI({
@@ -177,9 +184,11 @@ export async function requestLlm(
   tools: ToolName[],
   responseId?: string | null,
 ): Promise<LlmResponse> {
+  logDebug("Sending request to LLM:", { request, tools, responseId });
   const response = await getClient().responses.create({
     model: APP_ENV.LLM_MODEL,
     input: request,
+    instructions: SYSTEM_INSTRUCTIONS,
     temperature: APP_ENV.LLM_TEMPERATURE,
     tools: getToolDefinitions(tools),
     tool_choice: "auto",
@@ -188,6 +197,7 @@ export async function requestLlm(
       : undefined,
     previous_response_id: responseId == null ? undefined : responseId,
   });
+  logDebug("Received response from LLM:", response);
 
   const citations = getCitations(response);
   const citationLinks = new Set(citations.map((citation) => citation.link));

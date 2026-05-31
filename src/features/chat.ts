@@ -39,19 +39,20 @@ function buildRootRequest(text: string, replyText?: string): string {
 chatComposer.on("message", async (ctx, next) => {
   const message = ctx.message as TextMessage;
   const text = getMessageText(message);
-  if (!text || !isAddressed(text, ctx.me.username)) {
+  const reply = message.reply_to_message;
+  const thread = reply
+    ? await getThread(ctx.database, {
+        chat_id: ctx.chat.id,
+        message_id: reply.message_id,
+      })
+    : undefined;
+
+  if (!text || (!isAddressed(text, ctx.me.username) && !thread)) {
     await next();
     return;
   }
 
   try {
-    const reply = message.reply_to_message;
-    const thread = reply
-      ? await getThread(ctx.database, {
-          chat_id: ctx.chat.id,
-          message_id: reply.message_id,
-        })
-      : undefined;
     const llmResponse = thread?.response_id
       ? await requestLlm(text, ["web_search"], thread.response_id)
       : await requestLlm(
