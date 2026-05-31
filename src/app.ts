@@ -1,6 +1,7 @@
 import { createDebug } from "@grammyjs/debug";
 import { initBot } from "./bot.ts";
 import { type Database, initDatabase } from "./features/database.ts";
+import { APP_ENV } from "./features/env.ts";
 
 const [logDebug, logError] = [
 	createDebug("app:main:debug"),
@@ -18,11 +19,7 @@ try {
 }
 
 try {
-	const botToken = Deno.env.get("BOT_TOKEN");
-	if (!botToken) {
-		throw new Error("BOT_TOKEN is not set");
-	}
-	const startBot = initBot(botToken, database);
+	const startBot = initBot(APP_ENV.BOT_TOKEN, database);
 	await startBot();
 } catch (error) {
 	logError("Failed to start bot", { error });

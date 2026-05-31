@@ -1,9 +1,8 @@
 import { Database as SqliteDatabase } from "@db/sqlite";
 import { Kysely } from "@kysely/kysely";
 import { DenoSqlite3Dialect } from "@marshift/kysely-deno-sqlite3";
+import { APP_ENV } from "./env.ts";
 import { migrateThreads, type ThreadsTable } from "./threads.ts";
-
-const DEFAULT_SQLITE_PATH = "data/context-tg.sqlite";
 
 export type DatabaseSchema = {
 	threads: ThreadsTable;
@@ -25,7 +24,7 @@ async function ensureDatabaseDirectory(databasePath: string) {
 }
 
 export function initDatabase() {
-	const databasePath = Deno.env.get("SQLITE_PATH") ?? DEFAULT_SQLITE_PATH;
+	const databasePath = APP_ENV.SQLITE_PATH;
 
 	const connect = async (): Promise<Database> => {
 		await ensureDatabaseDirectory(databasePath);

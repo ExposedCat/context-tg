@@ -10,6 +10,7 @@
     "jsr:@kysely/kysely@~0.28.17": "0.28.17",
     "jsr:@marshift/kysely-deno-sqlite3@*": "1.0.0",
     "jsr:@marshift/kysely-deno-sqlite3@1": "1.0.0",
+    "jsr:@openai/openai@*": "6.38.0",
     "jsr:@std/encoding@1": "1.0.10",
     "jsr:@std/fmt@1": "1.0.9",
     "jsr:@std/fs@1": "1.0.23",
@@ -52,6 +53,9 @@
         "jsr:@db/sqlite@0.13",
         "jsr:@kysely/kysely@0.28"
       ]
+    },
+    "@openai/openai@6.38.0": {
+      "integrity": "d01e3e09b51572cc371bce37a784b45f4046a03ccb54adecff02080f7979e2e4"
     },
     "@std/encoding@1.0.10": {
       "integrity": "8783c6384a2d13abd5e9e87a7ae0520a30e9f56aeeaa3bdf910a3eaaf5c811a1"
@@ -289,6 +293,7 @@
       "jsr:@grammyjs/debug@~0.2.1",
       "jsr:@kysely/kysely@~0.28.17",
       "jsr:@marshift/kysely-deno-sqlite3@1",
+      "jsr:@openai/openai@*",
       "npm:@biomejs/biome@2.3.8",
       "npm:lefthook@^2.0.11"
     ]
