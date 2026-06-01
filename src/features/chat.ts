@@ -30,6 +30,7 @@ const TYPING_ACTION_INTERVAL_MS = 3000;
 const LLM_TOOLS: ToolName[] = [
   "web_search",
   "fetch_ticker_price",
+  "get_markets_state",
   "search_chat",
   "read_last_messages",
 ];
@@ -64,7 +65,7 @@ function buildThreadRequest(text: string, quoteText?: string): string {
   const quote = quoteText?.trim();
 
   return quote
-    ? `Replying to: ${JSON.stringify(quote)}\nUser: ${JSON.stringify(text)}`
+    ? `Replying to quote: ${JSON.stringify(quote)}\nUser: ${JSON.stringify(text)}`
     : text;
 }
 
@@ -131,6 +132,10 @@ function getAttributeValue(
 
 function normalizeAllowedTag(tag: string): string | null {
   const tagBody = tag.slice(1, -1).trim();
+
+  if (/^br\s*\/?$/i.test(tagBody)) {
+    return "\n";
+  }
 
   if (tagBody.startsWith("/")) {
     const tagName = tagBody.slice(1).trim().toLocaleLowerCase();

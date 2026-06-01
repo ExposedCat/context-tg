@@ -3,7 +3,7 @@ import OpenAI from "@openai/openai";
 import { APP_ENV } from "./env.ts";
 import { MAX_LAST_MESSAGES_COUNT, readLastMessages } from "./last-messages.ts";
 import { search as searchMessages } from "./messages.ts";
-import { fetchTickerPrice } from "./stocks.ts";
+import { fetchTickerPrice, getMarketsState } from "./stocks.ts";
 
 export const TOOL_DEFINITIONS = {
   web_search: {
@@ -14,7 +14,7 @@ export const TOOL_DEFINITIONS = {
     type: "function",
     name: "fetch_ticker_price",
     description:
-      "Fetch the latest available last price for a Stooq ticker, for example AAPL.US or VUAA.UK.",
+      "Fetch the latest available price details for a Stooq ticker, including open, high, low, close, and volume. For example AAPL.US or VUAA.UK.",
     parameters: {
       type: "object",
       properties: {
@@ -24,6 +24,19 @@ export const TOOL_DEFINITIONS = {
         },
       },
       required: ["ticker"],
+      additionalProperties: false,
+    },
+    strict: true,
+  },
+  get_markets_state: {
+    type: "function",
+    name: "get_markets_state",
+    description:
+      "Get precomputed UK and US market session state. Returns current Europe/Prague and Europe/Kyiv times, each exchange's current state, next state, time until next state, next-state time in Prague/Kyiv, and the full regular weekday schedule localized to both Prague and Kyiv.",
+    parameters: {
+      type: "object",
+      properties: {},
+      required: [],
       additionalProperties: false,
     },
     strict: true,
@@ -91,6 +104,7 @@ export const TOOL_DEFINITIONS = {
 export type ToolName = keyof typeof TOOL_DEFINITIONS;
 type FunctionToolName =
   | "fetch_ticker_price"
+  | "get_markets_state"
   | "search_chat"
   | "read_last_messages";
 
@@ -192,8 +206,7 @@ Markdown and HTML are NOT supported, you can ONLY use following small subset:
 - <a href=""> for links (not citations, send citations normally)
 - <blockquote> for quoted passages. Use <blockquote expandable> for longer citations.
 Do not nest blockquotes.
-Do NOT use too much formatting! You can use no formatting at all, or a little bit to highlight something.
-Only always format code snippets.
+Each tag is paid with real money, so except code blocks, use formatting tags rarely and only when absolutely required.
 Use regular dashes for lists.
 
 # Filtering
@@ -251,6 +264,7 @@ function isWebSearchCall(
 function isFunctionToolName(tool: string): tool is FunctionToolName {
   return (
     tool === "fetch_ticker_price" ||
+    tool === "get_markets_state" ||
     tool === "search_chat" ||
     tool === "read_last_messages"
   );
@@ -437,9 +451,13 @@ async function runFunctionToolCall(
 
   if (call.name === "fetch_ticker_price") {
     const ticker = typeof args?.ticker === "string" ? args.ticker.trim() : "";
-    const price = ticker ? await fetchTickerPrice(ticker) : null;
+    const priceDetails = ticker ? await fetchTickerPrice(ticker) : null;
 
-    return createToolOutput(call, JSON.stringify({ ticker, price }));
+    return createToolOutput(call, JSON.stringify({ ticker, priceDetails }));
+  }
+
+  if (call.name === "get_markets_state") {
+    return createToolOutput(call, JSON.stringify(getMarketsState()));
   }
 
   if (call.name === "search_chat") {
