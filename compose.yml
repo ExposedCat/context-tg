@@ -20,7 +20,7 @@ services:
       DEBUG: app:*:warn,app:*:error
       QDRANT_URL: http://qdrant:6333
     volumes:
-      - .:/app
+      - .:/app:Z
       - deno_cache:/deno-dir
     depends_on:
       - qdrant
