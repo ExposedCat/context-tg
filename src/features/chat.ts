@@ -5,6 +5,7 @@ import { APP_ENV } from "./env.ts";
 import {
   type LlmCitation,
   type LlmResponse,
+  type LlmToolContext,
   requestLlm,
   type ToolName,
 } from "./llm.ts";
@@ -25,6 +26,7 @@ const LLM_TOOLS: ToolName[] = [
   "web_search",
   "fetch_ticker_price",
   "search_chat",
+  "read_last_messages",
 ];
 
 const linkPreviewOptions = {
@@ -51,6 +53,17 @@ function isAddressed(text: string, ownUsername: string): boolean {
 
 function buildRootRequest(text: string, replyText?: string): string {
   return replyText ? `${replyText}\n\n${text}` : text;
+}
+
+function getLlmToolContext(
+  chatId: number,
+  message: TextMessage,
+): LlmToolContext {
+  return {
+    chatId,
+    messageId: message.message_id,
+    replyMessageId: message.reply_to_message?.message_id,
+  };
 }
 
 function escapeHtml(text: string): string {
@@ -83,14 +96,14 @@ function normalizeAllowedTag(tag: string): string | null {
 
   if (tagBody.startsWith("/")) {
     const tagName = tagBody.slice(1).trim().toLocaleLowerCase();
-    return ["b", "i", "code", "a"].includes(tagName) ? `</${tagName}>` : null;
+    return ["b", "code", "a"].includes(tagName) ? `</${tagName}>` : null;
   }
 
   const match = tagBody.match(/^([a-z]+)(.*)$/i);
   const tagName = match?.[1]?.toLocaleLowerCase();
   const attributes = match?.[2]?.trim() ?? "";
 
-  if (tagName === "b" || tagName === "i") {
+  if (tagName === "b") {
     return attributes ? null : `<${tagName}>`;
   }
 
@@ -201,15 +214,14 @@ chatComposer.on("message", async (ctx, next) => {
   }
 
   try {
+    const toolContext = getLlmToolContext(ctx.chat.id, message);
     const llmResponse = thread?.response_id
-      ? await requestLlm(text, LLM_TOOLS, thread.response_id, {
-          chatId: ctx.chat.id,
-        })
+      ? await requestLlm(text, LLM_TOOLS, thread.response_id, toolContext)
       : await requestLlm(
           buildRootRequest(text, reply && getMessageText(reply)),
           LLM_TOOLS,
           undefined,
-          { chatId: ctx.chat.id },
+          toolContext,
         );
     const formattedResponse = formatLlmResponse(llmResponse);
     const sentMessage = await ctx.reply(formattedResponse.text, {

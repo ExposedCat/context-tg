@@ -42,7 +42,7 @@ export type MessageSearchResult = MessageMetadata & {
   queries: string[];
 };
 
-type QdrantResponse<T> = {
+export type QdrantResponse<T> = {
   result: T;
   status: string;
   time: number;
@@ -75,7 +75,7 @@ function getQdrantUrl(path: string): string {
   return `${APP_ENV.QDRANT_URL.replace(/\/+$/, "")}${path}`;
 }
 
-function getCollectionPath(suffix = ""): string {
+export function getCollectionPath(suffix = ""): string {
   return `/collections/${encodeURIComponent(APP_ENV.QDRANT_COLLECTION)}${suffix}`;
 }
 
@@ -86,7 +86,7 @@ function getQdrantHeaders(): HeadersInit {
   };
 }
 
-async function qdrantRequest<T>(
+export async function qdrantRequest<T>(
   path: string,
   init: RequestInit = {},
 ): Promise<QdrantResponse<T>> {
@@ -270,7 +270,7 @@ function getSearchFilter(options: MessageSearchOptions) {
   return must.length > 0 ? { must } : undefined;
 }
 
-function isMessageMetadata(
+export function isMessageMetadata(
   payload: Partial<MessageMetadata>,
 ): payload is MessageMetadata {
   return (

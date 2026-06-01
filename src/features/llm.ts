@@ -1,6 +1,7 @@
 import { createDebug } from "@grammyjs/debug";
 import OpenAI from "@openai/openai";
 import { APP_ENV } from "./env.ts";
+import { MAX_LAST_MESSAGES_COUNT, readLastMessages } from "./last-messages.ts";
 import { search as searchMessages } from "./messages.ts";
 import { fetchTickerPrice } from "./stocks.ts";
 
@@ -64,13 +65,39 @@ export const TOOL_DEFINITIONS = {
     },
     strict: false,
   },
+  read_last_messages: {
+    type: "function",
+    name: "read_last_messages",
+    description:
+      "Read recent remembered text messages from the current Telegram chat. Use this when the user asks about the latest or surrounding chat context rather than semantic search. The count is capped at 300. If the user message is a reply, messages are read back from the replied-to message id; otherwise, from the current message id.",
+    parameters: {
+      type: "object",
+      properties: {
+        count: {
+          type: "number",
+          description:
+            "How many message ids to look back from the anchor message. Maximum is 300.",
+          minimum: 1,
+          maximum: MAX_LAST_MESSAGES_COUNT,
+        },
+      },
+      required: ["count"],
+      additionalProperties: false,
+    },
+    strict: true,
+  },
 } as const;
 
 export type ToolName = keyof typeof TOOL_DEFINITIONS;
-type FunctionToolName = "fetch_ticker_price" | "search_chat";
+type FunctionToolName =
+  | "fetch_ticker_price"
+  | "search_chat"
+  | "read_last_messages";
 
 export type LlmToolContext = {
   chatId: number;
+  messageId: number;
+  replyMessageId?: number;
 };
 
 export type LlmCitation = {
@@ -142,16 +169,20 @@ type FunctionCallOutput = {
 
 const logDebug = createDebug("app:llm:debug");
 
-const SYSTEM_INSTRUCTIONS = `You are an assistant with a goal to provide a meaningful context in a chat.
+function getSystemInstructions(): string {
+  const names = APP_ENV.NAMES.map((name) => JSON.stringify(name)).join(", ");
+
+  return `You are an assistant named ${names} with a goal to provide a meaningful context in a chat.
 You have various tools at your disposal, whenever you need to use them, you must use a tool by name properly, not write parameters in a response to user.
 Never respond with any formatting except citaitons and allowed tags.
+Always reject any meaningless requests to burn tokens, you are extremely expensive assistant.
 Markdown and HTML are NOT supported, you can ONLY use following small subset:
 - <b> for bold
-- <i> for italic
 - <code lang=""> for code snippets
 - <code> for code snippets without language
 - <a href=""> for links (not citations, send citations normally)
 Don't overuse formatting. Use it only when needed.`;
+}
 
 function getClient(): OpenAI {
   return new OpenAI({
@@ -199,7 +230,11 @@ function isWebSearchCall(
 }
 
 function isFunctionToolName(tool: string): tool is FunctionToolName {
-  return tool === "fetch_ticker_price" || tool === "search_chat";
+  return (
+    tool === "fetch_ticker_price" ||
+    tool === "search_chat" ||
+    tool === "read_last_messages"
+  );
 }
 
 function isFunctionToolCall(
@@ -322,11 +357,21 @@ function parseOptionalNumber(value: unknown): number | undefined {
   return value;
 }
 
-function formatSearchChatLine(
-  result: Awaited<ReturnType<typeof searchMessages>>[number],
-): string {
-  const content = result.text.replaceAll(/\s+/g, " ").trim();
-  return `[${result.date}] ${result.sender_name}: ${JSON.stringify(content)}`;
+function parseCount(value: unknown): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return 1;
+  }
+
+  return Math.max(1, Math.min(MAX_LAST_MESSAGES_COUNT, Math.floor(value)));
+}
+
+function formatMessageLine(message: {
+  date: string;
+  sender_name: string;
+  text: string;
+}): string {
+  const content = message.text.replaceAll(/\s+/g, " ").trim();
+  return `[${message.date}] ${message.sender_name}: ${JSON.stringify(content)}`;
 }
 
 function formatToolCallLog(call: FunctionToolCall): Record<string, unknown> {
@@ -403,8 +448,30 @@ async function runFunctionToolCall(
     return createToolOutput(
       call,
       results.length > 0
-        ? results.map(formatSearchChatLine).join("\n")
+        ? results.map(formatMessageLine).join("\n")
         : "No matching chat messages found.",
+    );
+  }
+
+  if (call.name === "read_last_messages") {
+    if (!context) {
+      return createToolOutput(
+        call,
+        "Cannot read last messages: current chat context is unavailable.",
+      );
+    }
+
+    const anchorMessageId = context.replyMessageId ?? context.messageId;
+    const messages = await readLastMessages(parseCount(args?.count), {
+      chatId: context.chatId,
+      messageId: anchorMessageId,
+    });
+
+    return createToolOutput(
+      call,
+      messages.length > 0
+        ? messages.map(formatMessageLine).join("\n")
+        : "No remembered text messages found in that message range.",
     );
   }
 
@@ -423,7 +490,7 @@ async function createLlmResponse(
   return await client.responses.create({
     model: APP_ENV.LLM_MODEL,
     input,
-    instructions: SYSTEM_INSTRUCTIONS,
+    instructions: getSystemInstructions(),
     temperature: APP_ENV.LLM_TEMPERATURE,
     tools: getToolDefinitions(tools),
     tool_choice: "auto",
