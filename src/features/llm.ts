@@ -181,7 +181,7 @@ Markdown and HTML are NOT supported, you can ONLY use following small subset:
 - <code lang=""> for code snippets
 - <code> for code snippets without language
 - <a href=""> for links (not citations, send citations normally)
-Don't overuse formatting. Use it only when needed.`;
+Don't overuse formatting. Use it only when actually needed.`;
 }
 
 function getClient(): OpenAI {
