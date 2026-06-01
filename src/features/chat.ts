@@ -22,6 +22,8 @@ const logError = createDebug("app:chat:error");
 
 export const chatComposer = new Composer<Context>();
 
+const TYPING_ACTION_INTERVAL_MS = 3000;
+
 const LLM_TOOLS: ToolName[] = [
   "web_search",
   "fetch_ticker_price",
@@ -64,6 +66,31 @@ function getLlmToolContext(
     messageId: message.message_id,
     replyMessageId: message.reply_to_message?.message_id,
   };
+}
+
+async function submitTypingAction(ctx: Context): Promise<void> {
+  try {
+    await ctx.replyWithChatAction("typing");
+  } catch (error) {
+    logError("Failed to submit typing action:", error);
+  }
+}
+
+async function withTypingAction<T>(
+  ctx: Context,
+  callback: () => Promise<T>,
+): Promise<T> {
+  await submitTypingAction(ctx);
+
+  const intervalId = setInterval(() => {
+    void submitTypingAction(ctx);
+  }, TYPING_ACTION_INTERVAL_MS);
+
+  try {
+    return await callback();
+  } finally {
+    clearInterval(intervalId);
+  }
 }
 
 function escapeHtml(text: string): string {
@@ -215,14 +242,16 @@ chatComposer.on("message", async (ctx, next) => {
 
   try {
     const toolContext = getLlmToolContext(ctx.chat.id, message);
-    const llmResponse = thread?.response_id
-      ? await requestLlm(text, LLM_TOOLS, thread.response_id, toolContext)
-      : await requestLlm(
-          buildRootRequest(text, reply && getMessageText(reply)),
-          LLM_TOOLS,
-          undefined,
-          toolContext,
-        );
+    const llmResponse = await withTypingAction(ctx, () => {
+      return thread?.response_id
+        ? requestLlm(text, LLM_TOOLS, thread.response_id, toolContext)
+        : requestLlm(
+            buildRootRequest(text, reply && getMessageText(reply)),
+            LLM_TOOLS,
+            undefined,
+            toolContext,
+          );
+    });
     const formattedResponse = formatLlmResponse(llmResponse);
     const sentMessage = await ctx.reply(formattedResponse.text, {
       ...linkPreviewOptions,

@@ -354,18 +354,18 @@ async function handleIndexMessage(
 }
 
 messagesComposer.on("message:text", async (ctx, next) => {
-  await handleIndexMessage(ctx.message, ctx.from, ctx.chat.id, "indexed");
-
   await next();
+
+  void handleIndexMessage(ctx.message, ctx.from, ctx.chat.id, "indexed");
 });
 
 messagesComposer.on("edited_message:text", async (ctx, next) => {
-  await handleIndexMessage(
+  await next();
+
+  void handleIndexMessage(
     ctx.editedMessage,
     ctx.from,
     ctx.chat.id,
     "reindexed",
   );
-
-  await next();
 });
