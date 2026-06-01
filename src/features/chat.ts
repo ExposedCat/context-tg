@@ -134,7 +134,9 @@ function normalizeAllowedTag(tag: string): string | null {
 
   if (tagBody.startsWith("/")) {
     const tagName = tagBody.slice(1).trim().toLocaleLowerCase();
-    return ["b", "code", "a"].includes(tagName) ? `</${tagName}>` : null;
+    return ["b", "code", "a", "blockquote"].includes(tagName)
+      ? `</${tagName}>`
+      : null;
   }
 
   const match = tagBody.match(/^([a-z]+)(.*)$/i);
@@ -157,6 +159,16 @@ function normalizeAllowedTag(tag: string): string | null {
   if (tagName === "a") {
     const href = getAttributeValue(attributes, "href");
     return href === null ? null : `<a href="${escapeHtmlAttribute(href)}">`;
+  }
+
+  if (tagName === "blockquote") {
+    if (!attributes) {
+      return "<blockquote>";
+    }
+
+    return attributes.toLocaleLowerCase() === "expandable"
+      ? "<blockquote expandable>"
+      : null;
   }
 
   return null;

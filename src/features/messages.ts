@@ -8,6 +8,13 @@ type TextMessage = {
   message_id: number;
   date: number;
   text: string;
+  entities?: MessageEntity[];
+  via_bot?: unknown;
+  forward_origin?: ForwardOrigin;
+  forward_from?: Sender;
+  forward_sender_name?: string;
+  forward_from_chat?: ForwardChat;
+  forward_signature?: string;
 };
 
 type Sender = {
@@ -15,6 +22,39 @@ type Sender = {
   first_name: string;
   last_name?: string;
   username?: string;
+};
+
+type ForwardChat = {
+  id?: number;
+  first_name?: string;
+  last_name?: string;
+  username?: string;
+  title?: string;
+};
+
+type ForwardOrigin =
+  | {
+      type: "user";
+      sender_user: Sender;
+    }
+  | {
+      type: "hidden_user";
+      sender_user_name: string;
+    }
+  | {
+      type: "chat";
+      sender_chat: ForwardChat;
+      author_signature?: string;
+    }
+  | {
+      type: "channel";
+      chat: ForwardChat;
+      author_signature?: string;
+    };
+
+type MessageEntity = {
+  type: string;
+  offset: number;
 };
 
 export type MessageMetadata = {
@@ -206,13 +246,89 @@ function getSenderName(sender: Sender): string {
   return name || (sender.username ? `@${sender.username}` : String(sender.id));
 }
 
+function getForwardChatName(chat: ForwardChat): string {
+  if (chat.title) {
+    return chat.username ? `${chat.title} (@${chat.username})` : chat.title;
+  }
+
+  if (chat.first_name) {
+    return getSenderName({
+      id: chat.id ?? 0,
+      first_name: chat.first_name,
+      last_name: chat.last_name,
+      username: chat.username,
+    });
+  }
+
+  return chat.username ? `@${chat.username}` : String(chat.id ?? "");
+}
+
+function getForwardedFromName(message: TextMessage): string | undefined {
+  const origin = message.forward_origin;
+
+  if (origin?.type === "user") {
+    return getSenderName(origin.sender_user);
+  }
+
+  if (origin?.type === "hidden_user") {
+    return origin.sender_user_name;
+  }
+
+  if (origin?.type === "chat") {
+    return origin.author_signature ?? getForwardChatName(origin.sender_chat);
+  }
+
+  if (origin?.type === "channel") {
+    return origin.author_signature ?? getForwardChatName(origin.chat);
+  }
+
+  if (message.forward_from) {
+    return getSenderName(message.forward_from);
+  }
+
+  if (message.forward_sender_name) {
+    return message.forward_sender_name;
+  }
+
+  if (message.forward_from_chat) {
+    return (
+      message.forward_signature ?? getForwardChatName(message.forward_from_chat)
+    );
+  }
+
+  return undefined;
+}
+
+function getIndexableText(message: TextMessage): string {
+  const forwardedFromName = getForwardedFromName(message);
+
+  if (!forwardedFromName) {
+    return message.text;
+  }
+
+  return `Forwarded from ${JSON.stringify(forwardedFromName)}\n${message.text}`;
+}
+
+function shouldSkipIndexing(message: TextMessage): boolean {
+  if (message.via_bot) {
+    return true;
+  }
+
+  const hasCommandEntity = message.entities?.some(
+    (entity) => entity.type === "bot_command" && entity.offset === 0,
+  );
+
+  return hasCommandEntity === true || message.text.trimStart().startsWith("/");
+}
+
 async function indexMessage(
   message: TextMessage,
   sender: Sender,
   chatId: number,
 ): Promise<void> {
   const senderName = getSenderName(sender);
-  const vectors = await embed([`${senderName}: ${message.text}`]);
+  const text = getIndexableText(message);
+  const vectors = await embed([`${senderName}: ${text}`]);
   const vector = vectors[0];
 
   if (!vector) {
@@ -221,7 +337,7 @@ async function indexMessage(
 
   const date = new Date(message.date * 1000);
   const payload: MessageMetadata = {
-    text: message.text,
+    text,
     date: date.toISOString(),
     date_timestamp: message.date,
     sender_name: senderName,
@@ -240,6 +356,18 @@ async function indexMessage(
           payload,
         },
       ],
+    }),
+  });
+}
+
+async function deleteIndexedMessage(
+  chatId: number,
+  messageId: number,
+): Promise<void> {
+  await qdrantRequest(getCollectionPath("/points/delete"), {
+    method: "POST",
+    body: JSON.stringify({
+      points: [await getPointId(chatId, messageId)],
     }),
   });
 }
@@ -342,6 +470,22 @@ async function handleIndexMessage(
   chatId: number,
   action: "indexed" | "reindexed",
 ): Promise<void> {
+  if (shouldSkipIndexing(message)) {
+    if (action === "reindexed") {
+      try {
+        await deleteIndexedMessage(chatId, message.message_id);
+        logDebug("Text message removed from index", {
+          chatId,
+          messageId: message.message_id,
+        });
+      } catch (error) {
+        logError("Failed to remove skipped text message from index", { error });
+      }
+    }
+
+    return;
+  }
+
   try {
     await indexMessage(message, sender, chatId);
     logDebug(`Text message ${action}`, {
