@@ -15,6 +15,9 @@ type TextMessage = {
   message_id: number;
   text?: string;
   caption?: string;
+  quote?: {
+    text: string;
+  };
   reply_to_message?: TextMessage;
 };
 
@@ -55,6 +58,14 @@ function isAddressed(text: string, ownUsername: string): boolean {
 
 function buildRootRequest(text: string, replyText?: string): string {
   return replyText ? `${replyText}\n\n${text}` : text;
+}
+
+function buildThreadRequest(text: string, quoteText?: string): string {
+  const quote = quoteText?.trim();
+
+  return quote
+    ? `Replying to: ${JSON.stringify(quote)}\nUser: ${JSON.stringify(text)}`
+    : text;
 }
 
 function getLlmToolContext(
@@ -244,7 +255,12 @@ chatComposer.on("message", async (ctx, next) => {
     const toolContext = getLlmToolContext(ctx.chat.id, message);
     const llmResponse = await withTypingAction(ctx, () => {
       return thread?.response_id
-        ? requestLlm(text, LLM_TOOLS, thread.response_id, toolContext)
+        ? requestLlm(
+            buildThreadRequest(text, message.quote?.text),
+            LLM_TOOLS,
+            thread.response_id,
+            toolContext,
+          )
         : requestLlm(
             buildRootRequest(text, reply && getMessageText(reply)),
             LLM_TOOLS,
