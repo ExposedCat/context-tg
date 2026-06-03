@@ -9,6 +9,7 @@ import {
   SEARCH_CHAT_USAGE_LABEL,
   searchChatToolDefinition,
 } from "./llm-tools/chat.ts";
+import * as gdeltTool from "./llm-tools/gdelt.ts";
 import * as marketTool from "./llm-tools/market.ts";
 import type { LlmHtmlReport } from "./llm-tools/reports.ts";
 import * as reportsTool from "./llm-tools/reports.ts";
@@ -29,6 +30,7 @@ export const TOOL_DEFINITIONS = {
   get_markets_state: marketTool.toolDefinition,
   search_chat: searchChatToolDefinition,
   read_last_messages: readLastMessagesToolDefinition,
+  get_recent_news: gdeltTool.toolDefinition,
   send_html_report: reportsTool.toolDefinition,
 } as const;
 
@@ -37,6 +39,7 @@ const FUNCTION_TOOL_RUNNERS = {
   get_markets_state: marketTool.execute,
   search_chat: executeSearchChat,
   read_last_messages: executeReadLastMessages,
+  get_recent_news: gdeltTool.execute,
   send_html_report: reportsTool.execute,
 } satisfies Record<string, FunctionToolRunner>;
 
@@ -49,6 +52,7 @@ const TOOL_USAGE_LABELS: Partial<Record<ToolName, string>> = {
   get_markets_state: marketTool.USAGE_LABEL,
   search_chat: SEARCH_CHAT_USAGE_LABEL,
   read_last_messages: READ_LAST_MESSAGES_USAGE_LABEL,
+  get_recent_news: gdeltTool.USAGE_LABEL,
 };
 
 export const DEFAULT_LLM_TOOLS = Object.keys(TOOL_DEFINITIONS) as ToolName[];
