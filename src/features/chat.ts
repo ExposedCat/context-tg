@@ -22,6 +22,8 @@ type TextMessage = {
   reply_to_message?: TextMessage;
 };
 
+type BotReaction = "🤔" | "👀";
+
 const logError = createDebug("app:chat:error");
 
 export const chatComposer = new Composer<Context>();
@@ -91,11 +93,14 @@ async function submitTypingAction(ctx: Context): Promise<void> {
   }
 }
 
-async function submitThinkingReaction(ctx: Context): Promise<void> {
+async function submitReaction(
+  ctx: Context,
+  reaction: BotReaction,
+): Promise<void> {
   try {
-    await ctx.react("🤔");
+    await ctx.react(reaction);
   } catch (error) {
-    logError("Failed to submit thinking reaction:", error);
+    logError("Failed to submit reaction:", { reaction, error });
   }
 }
 
@@ -129,7 +134,7 @@ function createSlowResponseReactionTracker(ctx: Context): {
     }
 
     reacted = true;
-    void submitThinkingReaction(ctx);
+    void submitReaction(ctx, "🤔");
   }, SLOW_RESPONSE_REACTION_DELAY_MS);
 
   return {
@@ -464,6 +469,11 @@ chatComposer.on("message", async (ctx, next) => {
         slowResponseReaction.stop();
       }
     })();
+
+    if (llmResponse.tools.includes("web_search")) {
+      void submitReaction(ctx, "👀");
+    }
+
     const formattedResponse = formatLlmResponse(llmResponse);
     const sentMessages = [];
 
