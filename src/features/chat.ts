@@ -3,13 +3,13 @@ import { Composer, InputFile } from "grammy";
 import type { Context } from "../bot.ts";
 import { APP_ENV } from "./env.ts";
 import {
+  DEFAULT_LLM_TOOLS,
   type LlmCitation,
   type LlmHtmlReport,
   LlmRequestError,
   type LlmResponse,
   type LlmToolContext,
   requestLlm,
-  type ToolName,
 } from "./llm.ts";
 import { createThread, getThread } from "./threads.ts";
 
@@ -33,15 +33,6 @@ const TYPING_ACTION_INTERVAL_MS = 3000;
 const TELEGRAM_MESSAGE_CHUNK_SIZE = 3000;
 const TELEGRAM_CAPTION_CHUNK_SIZE = 1000;
 const SLOW_RESPONSE_REACTION_DELAY_MS = 15_000;
-
-const LLM_TOOLS: ToolName[] = [
-  "web_search",
-  "fetch_ticker_price",
-  "get_markets_state",
-  "search_chat",
-  "read_last_messages",
-  "send_html_report",
-];
 
 const linkPreviewOptions = {
   link_preview_options: {
@@ -542,13 +533,13 @@ chatComposer.on("message", async (ctx, next) => {
           return thread?.response_id
             ? requestLlm(
                 buildThreadRequest(text, message.quote?.text),
-                LLM_TOOLS,
+                DEFAULT_LLM_TOOLS,
                 thread.response_id,
                 requestOptions,
               )
             : requestLlm(
                 buildRootRequest(text, reply && getMessageText(reply)),
-                LLM_TOOLS,
+                DEFAULT_LLM_TOOLS,
                 undefined,
                 requestOptions,
               );

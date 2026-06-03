@@ -1,143 +1,47 @@
 import { createDebug } from "@grammyjs/debug";
 import OpenAI from "@openai/openai";
 import { APP_ENV } from "./env.ts";
-import { MAX_LAST_MESSAGES_COUNT, readLastMessages } from "./last-messages.ts";
-import { search as searchMessages } from "./messages.ts";
-import { fetchTickerPrice, getMarketsState } from "./stocks.ts";
+import {
+  executeReadLastMessages,
+  executeSearchChat,
+  readLastMessagesToolDefinition,
+  searchChatToolDefinition,
+} from "./llm-tools/chat.ts";
+import * as marketTool from "./llm-tools/market.ts";
+import type { LlmHtmlReport } from "./llm-tools/reports.ts";
+import * as reportsTool from "./llm-tools/reports.ts";
+import * as tickerPriceTool from "./llm-tools/ticker-price.ts";
+import type {
+  FunctionToolResult,
+  FunctionToolRunner,
+  LlmToolContext,
+} from "./llm-tools/types.ts";
+import * as webSearchTool from "./llm-tools/web-search.ts";
+
+export type { LlmHtmlReport } from "./llm-tools/reports.ts";
+export type { LlmToolContext } from "./llm-tools/types.ts";
 
 export const TOOL_DEFINITIONS = {
-  web_search: {
-    type: "web_search",
-    search_context_size: "high",
-  },
-  fetch_ticker_price: {
-    type: "function",
-    name: "fetch_ticker_price",
-    description:
-      "Fetch the latest available price details for a Stooq ticker, including open, high, low, close, and volume. For example AAPL.US or VUAA.UK.",
-    parameters: {
-      type: "object",
-      properties: {
-        ticker: {
-          type: "string",
-          description: "Stooq ticker symbol, for example AAPL.US or VUAA.UK.",
-        },
-      },
-      required: ["ticker"],
-      additionalProperties: false,
-    },
-    strict: true,
-  },
-  get_markets_state: {
-    type: "function",
-    name: "get_markets_state",
-    description:
-      "Get precomputed UK and US market session state. Returns current Europe/Prague and Europe/Kyiv times, each exchange's current state, next state, time until next state, next-state time in Prague/Kyiv, and the full regular weekday schedule localized to both Prague and Kyiv.",
-    parameters: {
-      type: "object",
-      properties: {},
-      required: [],
-      additionalProperties: false,
-    },
-    strict: true,
-  },
-  search_chat: {
-    type: "function",
-    name: "search_chat",
-    description:
-      "Search remembered text messages in the current Telegram chat. The sender_id and date filters are optional; only use them when the user explicitly needs a sender or date range filter. Prefer using only queries.",
-    parameters: {
-      type: "object",
-      properties: {
-        queries: {
-          type: "array",
-          description:
-            "One or more semantic search queries. Prefer concise natural-language queries, and include a sender name in the query when searching by name.",
-          items: {
-            type: "string",
-          },
-        },
-        from: {
-          type: "string",
-          description:
-            "Optional inclusive ISO 8601 start date. Only use when the user explicitly asks for a date or time range.",
-        },
-        to: {
-          type: "string",
-          description:
-            "Optional inclusive ISO 8601 end date. Only use when the user explicitly asks for a date or time range.",
-        },
-        sender_id: {
-          type: "number",
-          description:
-            "Optional Telegram sender id. Only use when the user explicitly gives or requires a sender id filter.",
-        },
-      },
-      required: ["queries"],
-      additionalProperties: false,
-    },
-    strict: false,
-  },
-  read_last_messages: {
-    type: "function",
-    name: "read_last_messages",
-    description:
-      "Read recent remembered text messages from the current Telegram chat. Use this when the user asks about the latest or surrounding chat context rather than semantic search. The count is capped at 300. If the user message is a reply, messages are read back from the replied-to message id; otherwise, from the current message id.",
-    parameters: {
-      type: "object",
-      properties: {
-        count: {
-          type: "number",
-          description:
-            "How many message ids to look back from the anchor message. Maximum is 300.",
-          minimum: 1,
-          maximum: MAX_LAST_MESSAGES_COUNT,
-        },
-      },
-      required: ["count"],
-      additionalProperties: false,
-    },
-    strict: true,
-  },
-  send_html_report: {
-    type: "function",
-    name: "send_html_report",
-    description:
-      "Attach a long research report as an HTML file. Use this only for long research purposes when the report is too large or rich for a normal chat reply. Put the full report in html_string and provide a short, descriptive filename. After using this tool, the normal assistant response must be only a very short caption for the attached report.",
-    parameters: {
-      type: "object",
-      properties: {
-        html_string: {
-          type: "string",
-          description:
-            "The complete HTML report content to attach as a document. Should contain nice <style> tag.",
-        },
-        filename: {
-          type: "string",
-          description:
-            "A short filename for the report. The bot will normalize it and ensure it uses the .html extension.",
-        },
-      },
-      required: ["html_string", "filename"],
-      additionalProperties: false,
-    },
-    strict: true,
-  },
+  web_search: webSearchTool.toolDefinition,
+  fetch_ticker_price: tickerPriceTool.toolDefinition,
+  get_markets_state: marketTool.toolDefinition,
+  search_chat: searchChatToolDefinition,
+  read_last_messages: readLastMessagesToolDefinition,
+  send_html_report: reportsTool.toolDefinition,
 } as const;
 
-export type ToolName = keyof typeof TOOL_DEFINITIONS;
-type FunctionToolName =
-  | "fetch_ticker_price"
-  | "get_markets_state"
-  | "search_chat"
-  | "read_last_messages"
-  | "send_html_report";
+const FUNCTION_TOOL_RUNNERS = {
+  fetch_ticker_price: tickerPriceTool.execute,
+  get_markets_state: marketTool.execute,
+  search_chat: executeSearchChat,
+  read_last_messages: executeReadLastMessages,
+  send_html_report: reportsTool.execute,
+} satisfies Record<string, FunctionToolRunner>;
 
-export type LlmToolContext = {
-  chatId: number;
-  messageId: number;
-  replyMessageId?: number;
-};
+export type ToolName = keyof typeof TOOL_DEFINITIONS;
+type FunctionToolName = keyof typeof FUNCTION_TOOL_RUNNERS;
+
+export const DEFAULT_LLM_TOOLS = Object.keys(TOOL_DEFINITIONS) as ToolName[];
 
 export type LlmProgress = {
   toolCallCount: number;
@@ -157,11 +61,6 @@ export type LlmCitation = {
 
 export type LlmSource = {
   link: string;
-};
-
-export type LlmHtmlReport = {
-  htmlString: string;
-  filename: string;
 };
 
 export type LlmResponse = {
@@ -315,13 +214,7 @@ function isWebSearchCall(
 }
 
 function isFunctionToolName(tool: string): tool is FunctionToolName {
-  return (
-    tool === "fetch_ticker_price" ||
-    tool === "get_markets_state" ||
-    tool === "search_chat" ||
-    tool === "read_last_messages" ||
-    tool === "send_html_report"
-  );
+  return tool in FUNCTION_TOOL_RUNNERS;
 }
 
 function isFunctionToolCall(
@@ -431,52 +324,6 @@ function parseJsonObject(data: string): Record<string, unknown> | null {
   } catch {
     return null;
   }
-}
-
-function parseOptionalDate(value: unknown): Date | undefined {
-  if (typeof value !== "string" || !value.trim()) {
-    return undefined;
-  }
-
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? undefined : date;
-}
-
-function parseOptionalNumber(value: unknown): number | undefined {
-  if (typeof value !== "number" || !Number.isFinite(value)) {
-    return undefined;
-  }
-
-  return value;
-}
-
-function parseCount(value: unknown): number {
-  if (typeof value !== "number" || !Number.isFinite(value)) {
-    return 1;
-  }
-
-  return Math.max(1, Math.min(MAX_LAST_MESSAGES_COUNT, Math.floor(value)));
-}
-
-function normalizeReportFilename(value: unknown): string {
-  const rawFilename = typeof value === "string" ? value.trim() : "";
-  const safeFilename = rawFilename
-    .replaceAll(/[\\/]/g, "-")
-    .replaceAll(/[^a-z0-9._ -]/gi, "")
-    .replaceAll(/\s+/g, " ")
-    .trim();
-  const filename = safeFilename || "research-report.html";
-
-  return /\.html?$/i.test(filename) ? filename : `${filename}.html`;
-}
-
-function formatMessageLine(message: {
-  date: string;
-  sender_name: string;
-  text: string;
-}): string {
-  const content = message.text.replaceAll(/\s+/g, " ").trim();
-  return `[${message.date}] ${message.sender_name}: ${JSON.stringify(content)}`;
 }
 
 function formatToolCallLog(call: FunctionToolCall): Record<string, unknown> {
@@ -608,6 +455,12 @@ function createToolOutput(
   };
 }
 
+function normalizeFunctionToolResult(
+  result: FunctionToolResult | string,
+): FunctionToolResult {
+  return typeof result === "string" ? { output: result } : result;
+}
+
 async function runFunctionToolCall(
   call: FunctionToolCall,
   state: LlmRequestState,
@@ -615,97 +468,14 @@ async function runFunctionToolCall(
 ): Promise<FunctionCallOutput> {
   const args = parseJsonObject(call.arguments);
   logDebug("Running tool call", formatToolCallLog(call));
+  const runner = FUNCTION_TOOL_RUNNERS[call.name];
+  const result = normalizeFunctionToolResult(await runner(args, context));
 
-  if (call.name === "fetch_ticker_price") {
-    const ticker = typeof args?.ticker === "string" ? args.ticker.trim() : "";
-    const priceDetails = ticker ? await fetchTickerPrice(ticker) : null;
-
-    return createToolOutput(call, JSON.stringify({ ticker, priceDetails }));
+  if (result.htmlReport) {
+    state.htmlReport = result.htmlReport;
   }
 
-  if (call.name === "get_markets_state") {
-    return createToolOutput(call, JSON.stringify(getMarketsState()));
-  }
-
-  if (call.name === "search_chat") {
-    if (!context) {
-      return createToolOutput(
-        call,
-        "Cannot search chat: current chat context is unavailable.",
-      );
-    }
-
-    const queries = Array.isArray(args?.queries)
-      ? args.queries.filter(
-          (query): query is string => typeof query === "string",
-        )
-      : [];
-    const results = await searchMessages({
-      queries,
-      from: parseOptionalDate(args?.from),
-      to: parseOptionalDate(args?.to),
-      chatId: context.chatId,
-      senderId: parseOptionalNumber(args?.sender_id),
-      limit: 20,
-    });
-
-    return createToolOutput(
-      call,
-      results.length > 0
-        ? results.map(formatMessageLine).join("\n")
-        : "No matching chat messages found.",
-    );
-  }
-
-  if (call.name === "read_last_messages") {
-    if (!context) {
-      return createToolOutput(
-        call,
-        "Cannot read last messages: current chat context is unavailable.",
-      );
-    }
-
-    const anchorMessageId = context.replyMessageId ?? context.messageId;
-    const messages = await readLastMessages(parseCount(args?.count), {
-      chatId: context.chatId,
-      messageId: anchorMessageId,
-    });
-
-    return createToolOutput(
-      call,
-      messages.length > 0
-        ? messages.map(formatMessageLine).join("\n")
-        : "No remembered text messages found in that message range.",
-    );
-  }
-
-  if (call.name === "send_html_report") {
-    const htmlString =
-      typeof args?.html_string === "string" ? args.html_string : "";
-    const filename = normalizeReportFilename(args?.filename);
-
-    if (!htmlString.trim()) {
-      return createToolOutput(
-        call,
-        JSON.stringify({ error: "html_string must not be empty." }),
-      );
-    }
-
-    state.htmlReport = {
-      htmlString,
-      filename,
-    };
-
-    return createToolOutput(
-      call,
-      "HTML report accepted. Final response must be only a very short caption for the attached report.",
-    );
-  }
-
-  return createToolOutput(
-    call,
-    JSON.stringify({ error: `Unknown tool: ${call.name}` }),
-  );
+  return createToolOutput(call, result.output);
 }
 
 async function createLlmResponse(
