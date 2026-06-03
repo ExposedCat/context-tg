@@ -7,7 +7,7 @@ import {
 import type { AgentDefinition } from "./types.ts";
 
 export const id = "researcher";
-export const name = ["researcher", "research"];
+export const name = ["researcher laylo", "ресерчер лейло"];
 export const tools = [
   "web_search",
   "generate_deep_research",

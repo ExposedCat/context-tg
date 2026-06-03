@@ -8,7 +8,7 @@ import {
 import type { AgentDefinition } from "./types.ts";
 
 export const id = "trader";
-export const name = ["trader", "trade", "trading"];
+export const name = ["трейдер лейло", "трейдейло", "trader laylo"];
 export const tools = [
   "web_search",
   "fetch_ticker_price",

@@ -7,7 +7,7 @@ import {
 import type { AgentDefinition } from "./types.ts";
 
 export const id = "ultimate";
-export const name = ["ultimate"];
+export const name = ["дикий лейло", "ultimate laylo"];
 export const tools = [
   "web_search",
   "fetch_ticker_price",
