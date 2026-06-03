@@ -104,10 +104,10 @@ let setupVectorSize: number | undefined;
 
 export const messagesComposer = new Composer<Context>();
 
-function getClient(): OpenAI {
+function getEmbedderClient(): OpenAI {
   return new OpenAI({
-    apiKey: APP_ENV.LLM_API_KEY,
-    baseURL: APP_ENV.LLM_BASE_URL,
+    apiKey: APP_ENV.EMBEDDER_API_KEY,
+    baseURL: APP_ENV.EMBEDDER_BASE_URL,
   });
 }
 
@@ -202,7 +202,7 @@ async function embed(texts: string[]): Promise<number[][]> {
     return [];
   }
 
-  const response = await getClient().embeddings.create({
+  const response = await getEmbedderClient().embeddings.create({
     model: APP_ENV.EMBEDDING_MODEL,
     input,
   });

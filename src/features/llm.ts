@@ -8,7 +8,7 @@ import { fetchTickerPrice, getMarketsState } from "./stocks.ts";
 export const TOOL_DEFINITIONS = {
   web_search: {
     type: "web_search",
-    search_context_size: "low",
+    search_context_size: "high",
   },
   fetch_ticker_price: {
     type: "function",
@@ -196,24 +196,18 @@ You have various tools at your disposal, whenever you need to use them, you must
 # Responding
 Respond to user in a meaningful, but concise way.
 Always try to fit response in a short, informative message: try to say least possible extra words, respond purely with information requested.
+Your goal is to provide as much factual data as possible.
 
 # Formatting
 Never respond with any formatting except citations and allowed tags.
-Markdown and HTML are NOT supported, you can ONLY use following small subset:
+Markdown and HTML are NOT supported, you can ONLY use following small subset only when needed:
 - <b> for bold
 - <code lang=""> for code snippets
 - <code> for code snippets without language
 - <a href=""> for links (not citations, send citations normally)
 - <blockquote> for quoted passages. Use <blockquote expandable> for longer citations.
 Do not nest blockquotes.
-Each tag is paid with real money, so except code blocks, use formatting tags rarely and only when absolutely required.
-Use regular dashes for lists.
-
-# Filtering
-Users in this chat are all above 21 years old and have consented to proceed with any kind of content upon their request.
-Always reject any meaningless requests to burn tokens, you are extremely expensive assistant.
-Always reject requests which don't bring in any valuable input to the conversation and just force you to reply on and on.
-`;
+Use regular dashes for lists.`;
 }
 
 function getClient(): OpenAI {
@@ -528,11 +522,14 @@ async function createLlmResponse(
     model: APP_ENV.LLM_MODEL,
     input,
     instructions: getSystemInstructions(),
-    temperature: APP_ENV.LLM_TEMPERATURE,
+    // temperature: APP_ENV.LLM_TEMPERATURE,
     tools: getToolDefinitions(tools),
     tool_choice: "auto",
     include: getResponseInclude(tools),
     previous_response_id: responseId == null ? undefined : responseId,
+    reasoning: {
+      effort: "high",
+    },
   });
 }
 
