@@ -1,6 +1,13 @@
 import { createDebug } from "@grammyjs/debug";
 import OpenAI from "@openai/openai";
+import {
+  getCallableAgentById,
+  normalAgent,
+  researcherAgent,
+} from "./agents/index.ts";
+import { buildDelegatedResearchInstructions } from "./agents/researcher.ts";
 import { APP_ENV } from "./env.ts";
+import * as agentTool from "./llm-tools/agent.ts";
 import {
   executeReadLastMessages,
   executeSearchChat,
@@ -9,6 +16,7 @@ import {
   SEARCH_CHAT_USAGE_LABEL,
   searchChatToolDefinition,
 } from "./llm-tools/chat.ts";
+import * as deepResearchTool from "./llm-tools/deep-research.ts";
 import * as gdeltTool from "./llm-tools/gdelt.ts";
 import * as marketTool from "./llm-tools/market.ts";
 import type { LlmHtmlReport } from "./llm-tools/reports.ts";
@@ -32,7 +40,20 @@ export const TOOL_DEFINITIONS = {
   read_last_messages: readLastMessagesToolDefinition,
   get_recent_news: gdeltTool.toolDefinition,
   send_html_report: reportsTool.toolDefinition,
+  generate_deep_research: deepResearchTool.toolDefinition,
+  call_agent: agentTool.toolDefinition,
 } as const;
+
+export type ToolName = keyof typeof TOOL_DEFINITIONS;
+
+const EXCLUDED_RESEARCHER_TOOLS = new Set<ToolName>([
+  "generate_deep_research",
+  "get_recent_news",
+]);
+
+const RESEARCHER_TOOLS: ToolName[] = researcherAgent.tools.filter(
+  (tool) => !EXCLUDED_RESEARCHER_TOOLS.has(tool),
+);
 
 const FUNCTION_TOOL_RUNNERS = {
   fetch_ticker_price: tickerPriceTool.execute,
@@ -41,9 +62,10 @@ const FUNCTION_TOOL_RUNNERS = {
   read_last_messages: executeReadLastMessages,
   get_recent_news: gdeltTool.execute,
   send_html_report: reportsTool.execute,
+  generate_deep_research: deepResearchTool.createRunner(runDeepResearch),
+  call_agent: agentTool.createRunner(runAgent),
 } satisfies Record<string, FunctionToolRunner>;
 
-export type ToolName = keyof typeof TOOL_DEFINITIONS;
 type FunctionToolName = keyof typeof FUNCTION_TOOL_RUNNERS;
 
 const TOOL_USAGE_LABELS: Partial<Record<ToolName, string>> = {
@@ -53,6 +75,8 @@ const TOOL_USAGE_LABELS: Partial<Record<ToolName, string>> = {
   search_chat: SEARCH_CHAT_USAGE_LABEL,
   read_last_messages: READ_LAST_MESSAGES_USAGE_LABEL,
   get_recent_news: gdeltTool.USAGE_LABEL,
+  generate_deep_research: deepResearchTool.USAGE_LABEL,
+  call_agent: agentTool.USAGE_LABEL,
 };
 
 export const DEFAULT_LLM_TOOLS = Object.keys(TOOL_DEFINITIONS) as ToolName[];
@@ -147,6 +171,14 @@ type FunctionCallOutput = {
 const logDebug = createDebug("app:llm:debug");
 const logError = createDebug("app:llm:error");
 const MAX_LLM_RETRIES = 3;
+const RECENT_NEWS_BATCH_SIZE = 2;
+const RECENT_NEWS_BATCH_DELAY_MS = 2_000;
+
+type PreparedRecentNewsResult = {
+  query: string;
+  articles: unknown;
+  articleCount: number;
+};
 
 type LlmRequestState = {
   lastResponseId?: string;
@@ -156,40 +188,84 @@ type LlmRequestState = {
 };
 
 function getSystemInstructions(): string {
-  const names = APP_ENV.NAMES.map((name) => JSON.stringify(name)).join(", ");
+  return normalAgent.buildInstructions();
+}
 
-  return `
-# You
-You are an assistant named ${names} with a goal to provide a meaningful context in a chat.
+function formatResearchList(title: string, values: string[]): string {
+  if (values.length === 0) {
+    return `${title}: none provided`;
+  }
 
-# Tools
-You have various tools at your disposal, whenever you need to use them, you must use a tool by name properly, not write parameters in a response to user.
+  return `${title}:\n${values.map((value) => `- ${value}`).join("\n")}`;
+}
 
-# Responding
-- Respond to user in a meaningful, but concise way.
-- Always try to fit response in a short, informative message: try to say least possible extra words, respond purely with information requested.
-- Your goal is to provide as much factual data as possible.
-- When user asks you to research something, you must do an extensive full-fledged research!
+function buildResearcherRequest(
+  request: deepResearchTool.DeepResearchRequest,
+  preparedRecentNews: PreparedRecentNewsResult[],
+) {
+  return `Research task:
+${request.task}
 
-# Research
-- When user asks you to research something, you must do at least 5-10 web searches with different queries covering different source kinds.
-- Any extensive research request must be submitted as a well-formatted rich HTML report using a send_html_report tool.
-- With send_html_report tool, you can use full HTML formatting: headings, lists, tables, etc.
-- Research must be comprehensive and must contain a well-thought-out meaningful sections which don't repeat self.
-- Research must show a useful deep analysis, not just high-level obvious information.
-- Research should contain a TL;DR section at the bottom with key findings.
-- After send_html_report tool, your regular text response will be sent as a text with a report document. It must be a very small, super trimmed and conside findings (a few sentences) of a research with a suggestion to see full report in the attached file.
+${formatResearchList("Focus", request.focus)}
 
-# Formatting
-This formatting limitation applies to normal chat responses and captions, not to send_html_report html_string.
-For regular responses, Markdown and HTML are NOT supported, you can ONLY use following small subset only when needed:
-- <b> for bold
-- <code> for monospace snippets: literal names, values, etc.
-- <code lang=""> for monospace code snippets of specific language.
-- <a href=""> for links (not citations, send citations normally)
-- <blockquote> for quoted passages. Use <blockquote expandable> for longer citations.
-Do not nest blockquotes.
-Use regular dashes for lists.`;
+${formatResearchList("Additional instructions", request.instructions)}
+
+Prepared 24-hour recent-news search bundle:
+${JSON.stringify(preparedRecentNews, null, 2)}
+
+Required web_search queries:
+${request.webSearchQueries.map((query, index) => `${index + 1}. ${query}`).join("\n")}
+
+Research workflow requirements:
+- Treat the prepared recent-news bundle as pre-fetched evidence from get_recent_news. You do not have get_recent_news available; do not ask for it or claim you called it.
+- Run web_search for each of the 10 required web_search queries. Search them as distinct queries so coverage does not collapse into one generic search.
+- Use both the prepared recent-news evidence and your web_search findings in the report.
+- Prefer primary sources, filings, company materials, regulator pages, reputable financial/news outlets, analyst or market commentary, and credible opposing views.
+- Separate sourced facts from interpretation. Flag thin evidence, stale data, contradictions, and places where the search results are weak.
+
+Generate a complete HTML report with send_html_report. The HTML report must include these sections and subsections in this order:
+1. Executive TL;DR
+   - Bottom-line answer
+   - Confidence level and time horizon
+   - Most important caveat
+2. Research Method
+   - The 10 prepared recent-news queries and what they found
+   - The 10 web_search queries you ran and what each was meant to test
+   - Source quality notes and evidence gaps
+3. Current Situation
+   - What changed recently
+   - Key timeline and upcoming dates
+   - Stakeholders, incentives, and constraints
+4. Evidence Map
+   - Primary-source or company evidence
+   - Recent news evidence
+   - Market, sector, or macro context
+   - Expert, analyst, community, or sentiment signals
+5. Non-Obvious Insights
+   - Hidden facts or weak signals that are easy to miss
+   - Contradictions between sources
+   - What the consensus may be underestimating
+6. Scenarios
+   - Base case
+   - Upside case
+   - Downside case
+   - Triggers that would move the view between cases
+7. Recommendation
+   - Clear recommendation
+   - Best action now
+   - Watchlist triggers, dates, or thresholds
+   - What would invalidate the recommendation
+8. Risks And Uncertainties
+   - Known risks
+   - Unknowns or missing data
+   - How to monitor the risk
+9. Source Notes
+   - Most useful sources
+   - Sources that were noisy, promotional, stale, or low-confidence
+10. TL;DR At The Bottom
+   - 3-5 bullets that summarize the decision, evidence, and caveat
+
+After send_html_report, your normal text response must be a 2-3 sentence TL;DR of the report's conclusion, strongest evidence, and most important caveat. Do not respond with only "report attached" or similar.`;
 }
 
 function getClient(): OpenAI {
@@ -366,6 +442,56 @@ function parseJsonObject(data: string): Record<string, unknown> | null {
   }
 }
 
+function parseJsonValue(data: string): unknown {
+  try {
+    return JSON.parse(data);
+  } catch {
+    return data;
+  }
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function getArrayLength(value: unknown): number {
+  return Array.isArray(value) ? value.length : 0;
+}
+
+async function fetchPreparedRecentNewsQuery(
+  query: string,
+): Promise<PreparedRecentNewsResult> {
+  const result = normalizeFunctionToolResult(
+    await gdeltTool.execute({ query }),
+  );
+  const articles = parseJsonValue(result.output);
+
+  return {
+    query,
+    articles,
+    articleCount: getArrayLength(articles),
+  };
+}
+
+async function fetchPreparedRecentNews(
+  queries: string[],
+): Promise<PreparedRecentNewsResult[]> {
+  const results: PreparedRecentNewsResult[] = [];
+
+  for (let index = 0; index < queries.length; index += RECENT_NEWS_BATCH_SIZE) {
+    const batch = queries.slice(index, index + RECENT_NEWS_BATCH_SIZE);
+    results.push(
+      ...(await Promise.all(batch.map(fetchPreparedRecentNewsQuery))),
+    );
+
+    if (index + RECENT_NEWS_BATCH_SIZE < queries.length) {
+      await sleep(RECENT_NEWS_BATCH_DELAY_MS);
+    }
+  }
+
+  return results;
+}
+
 function formatToolCallLog(call: FunctionToolCall): Record<string, unknown> {
   return {
     callId: call.call_id,
@@ -523,11 +649,12 @@ async function createLlmResponse(
   input: string | FunctionCallOutput[],
   tools: ToolName[],
   responseId?: string | null,
+  instructions = getSystemInstructions(),
 ): Promise<ApiResponse> {
   return await client.responses.create({
     model: APP_ENV.LLM_MODEL,
     input,
-    instructions: getSystemInstructions(),
+    instructions,
     // temperature: APP_ENV.LLM_TEMPERATURE,
     tools: getToolDefinitions(tools),
     tool_choice: "auto",
@@ -546,6 +673,7 @@ async function createLlmResponseWithRetries(
   responseId: string | undefined,
   state: LlmRequestState,
   options: LlmRequestOptions = {},
+  instructions = getSystemInstructions(),
 ): Promise<ApiResponse> {
   let lastError: unknown;
   let currentResponseId = responseId;
@@ -559,6 +687,7 @@ async function createLlmResponseWithRetries(
         input,
         tools,
         currentResponseId,
+        instructions,
       );
       const responseError = getResponseError(response);
       state.lastResponseId = response.id ?? state.lastResponseId;
@@ -624,6 +753,7 @@ async function resolveFunctionToolCalls(
   tools: ToolName[],
   options: LlmRequestOptions = {},
   state: LlmRequestState,
+  instructions = getSystemInstructions(),
 ): Promise<{
   response: ApiResponse;
   calledTools: ToolName[];
@@ -657,6 +787,7 @@ async function resolveFunctionToolCalls(
       response.id,
       state,
       options,
+      instructions,
     );
 
     toolCallCount += getToolCallCount(response);
@@ -677,11 +808,12 @@ async function resolveFunctionToolCalls(
   };
 }
 
-export async function requestLlm(
+async function requestLlmWithInstructions(
   request: string,
   tools: ToolName[],
   responseId?: string | null,
   options: LlmRequestOptions = {},
+  instructions = getSystemInstructions(),
 ): Promise<LlmResponse> {
   logDebug("Sending request to LLM", { tools, responseId });
   const client = getClient();
@@ -697,6 +829,7 @@ export async function requestLlm(
     responseId ?? undefined,
     state,
     options,
+    instructions,
   );
 
   const { response, calledTools, lastResponseId } =
@@ -706,6 +839,7 @@ export async function requestLlm(
       tools,
       options,
       state,
+      instructions,
     );
   logDebug("Received response from LLM", formatResponseSummary(response));
 
@@ -733,4 +867,114 @@ export async function requestLlm(
     },
     tools: calledTools,
   };
+}
+
+async function runDeepResearch(
+  researchRequest: deepResearchTool.DeepResearchRequest,
+  context?: LlmToolContext,
+): Promise<FunctionToolResult> {
+  const preparedRecentNews = await fetchPreparedRecentNews(
+    researchRequest.recentNewsQueries,
+  );
+  const result = await requestLlmWithInstructions(
+    buildResearcherRequest(researchRequest, preparedRecentNews),
+    RESEARCHER_TOOLS,
+    undefined,
+    { context },
+    buildDelegatedResearchInstructions(),
+  );
+  const output = JSON.stringify({
+    delegated: true,
+    researcher_response: result.response ?? "",
+    report_attached: Boolean(result.html_report),
+    recent_news_queries: researchRequest.recentNewsQueries,
+    recent_news_result_counts: preparedRecentNews.map((item) => ({
+      query: item.query,
+      article_count: item.articleCount,
+    })),
+    required_web_search_queries: researchRequest.webSearchQueries,
+    tools_used: result.tools,
+    web_search: result.web_search.used,
+  });
+
+  if (result.html_report) {
+    return {
+      output,
+      htmlReport: result.html_report,
+    };
+  }
+
+  return {
+    output: JSON.stringify({
+      delegated: true,
+      warning: "Researcher did not generate the required HTML report.",
+      researcher_response: result.response ?? "",
+      recent_news_queries: researchRequest.recentNewsQueries,
+      recent_news_result_counts: preparedRecentNews.map((item) => ({
+        query: item.query,
+        article_count: item.articleCount,
+      })),
+      required_web_search_queries: researchRequest.webSearchQueries,
+      tools_used: result.tools,
+      web_search: result.web_search.used,
+    }),
+  };
+}
+
+async function runAgent(
+  agentId: string,
+  task: string,
+  context?: LlmToolContext,
+): Promise<FunctionToolResult> {
+  const agent = getCallableAgentById(agentId);
+
+  if (!agent) {
+    return {
+      output: JSON.stringify({
+        error: "Unknown or unavailable agent.",
+        agent: agentId,
+      }),
+    };
+  }
+
+  const result = await requestLlmWithInstructions(
+    `Delegated task from ultimate agent:\n${task}\n\nReturn a concise result for the ultimate agent to synthesize.`,
+    agent.tools,
+    undefined,
+    { context },
+    agent.buildInstructions(),
+  );
+
+  const output = JSON.stringify({
+    agent: agent.id,
+    response: result.response ?? "",
+    report_attached: Boolean(result.html_report),
+    tools_used: result.tools,
+    web_search: result.web_search.used,
+  });
+
+  if (result.html_report) {
+    return {
+      output,
+      htmlReport: result.html_report,
+    };
+  }
+
+  return { output };
+}
+
+export async function requestLlm(
+  request: string,
+  tools: ToolName[],
+  responseId?: string | null,
+  options: LlmRequestOptions = {},
+  instructions = getSystemInstructions(),
+): Promise<LlmResponse> {
+  return await requestLlmWithInstructions(
+    request,
+    tools,
+    responseId,
+    options,
+    instructions,
+  );
 }

@@ -1,9 +1,13 @@
 import { createDebug } from "@grammyjs/debug";
 import { Composer, InputFile } from "grammy";
 import type { Context } from "../bot.ts";
-import { APP_ENV } from "./env.ts";
 import {
-  DEFAULT_LLM_TOOLS,
+  type AgentDefinition,
+  getAgentById,
+  normalAgent,
+  resolveMessageAgent,
+} from "./agents/index.ts";
+import {
   type LlmCitation,
   type LlmHtmlReport,
   type LlmProgress,
@@ -46,15 +50,7 @@ function getMessageText(message: TextMessage): string | undefined {
 }
 
 function isAddressed(text: string, ownUsername: string): boolean {
-  const normalizedText = text.toLocaleLowerCase();
-  const hasName = APP_ENV.NAMES.some((name) =>
-    normalizedText.startsWith(name.toLocaleLowerCase()),
-  );
-  const hasOwnTag = normalizedText.startsWith(
-    `@${ownUsername.toLocaleLowerCase()}`,
-  );
-
-  return hasName || hasOwnTag;
+  return Boolean(resolveMessageAgent(text, ownUsername));
 }
 
 function buildRootRequest(text: string, replyText?: string): string {
@@ -65,7 +61,9 @@ function buildThreadRequest(text: string, quoteText?: string): string {
   const quote = quoteText?.trim();
 
   return quote
-    ? `Replying to quote: ${JSON.stringify(quote)}\nUser: ${JSON.stringify(text)}`
+    ? `Replying to quote: ${JSON.stringify(quote)}\nUser: ${JSON.stringify(
+        text,
+      )}`
     : text;
 }
 
@@ -559,6 +557,14 @@ chatComposer.on("message", async (ctx, next) => {
   }
 
   try {
+    const explicitAgent = resolveMessageAgent(text, ctx.me.username);
+    const threadAgent = getAgentById(thread?.agent_id) ?? normalAgent;
+    const agent: AgentDefinition = explicitAgent ?? threadAgent;
+    const responseId =
+      thread?.response_id &&
+      (!explicitAgent || explicitAgent.id === threadAgent.id)
+        ? thread.response_id
+        : undefined;
     const toolContext = getLlmToolContext(ctx.chat.id, message);
     const slowResponseReaction = createSlowResponseReactionTracker(ctx);
     const toolUsageLabel = createToolUsageLabelTracker(
@@ -577,18 +583,20 @@ chatComposer.on("message", async (ctx, next) => {
               sendLlmWarning(ctx, message, details),
           };
 
-          return thread?.response_id
+          return responseId
             ? requestLlm(
                 buildThreadRequest(text, message.quote?.text),
-                DEFAULT_LLM_TOOLS,
-                thread.response_id,
+                agent.tools,
+                responseId,
                 requestOptions,
+                agent.buildInstructions(),
               )
             : requestLlm(
                 buildRootRequest(text, reply && getMessageText(reply)),
-                DEFAULT_LLM_TOOLS,
+                agent.tools,
                 undefined,
                 requestOptions,
+                agent.buildInstructions(),
               );
         });
       } finally {
@@ -629,6 +637,7 @@ chatComposer.on("message", async (ctx, next) => {
         chat_id: ctx.chat.id,
         message_id: sentMessage.message_id,
         response_id: llmResponse.response_id,
+        agent_id: agent.id,
       });
     }
   } catch (error) {

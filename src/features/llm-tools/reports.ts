@@ -9,7 +9,7 @@ export const toolDefinition = {
   type: "function",
   name: "send_html_report",
   description:
-    "Attach a long research report as an HTML file. Use this only for long research purposes when the report is too large or rich for a normal chat reply. Put the full report in html_string and provide a short, descriptive filename. After using this tool, the normal assistant response must be only a very short caption for the attached report.",
+    "Attach a long research report as an HTML file. Use this only for long research purposes when the report is too large or rich for a normal chat reply. Put the full report in html_string and provide a short, descriptive filename. After using this tool, the normal assistant response must be a 2-3 sentence TL;DR of the report's conclusion, strongest evidence, and most important caveat; do not respond with only a generic attachment notice.",
   parameters: {
     type: "object",
     properties: {
@@ -53,7 +53,7 @@ export const execute: FunctionToolRunner = (args) => {
 
   return {
     output:
-      "HTML report accepted. Final response must be only a very short caption for the attached report.",
+      "HTML report accepted. Final response must be a 2-3 sentence TL;DR of the report's conclusion, strongest evidence, and most important caveat; do not respond with only a generic attachment notice.",
     htmlReport: {
       htmlString,
       filename,
