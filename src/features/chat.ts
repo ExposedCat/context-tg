@@ -4,7 +4,6 @@ import type { Context } from "../bot.ts";
 import { APP_ENV } from "./env.ts";
 import {
   type LlmCitation,
-  type LlmProgress,
   LlmRequestError,
   type LlmResponse,
   type LlmToolContext,
@@ -29,8 +28,7 @@ export const chatComposer = new Composer<Context>();
 
 const TYPING_ACTION_INTERVAL_MS = 3000;
 const TELEGRAM_MESSAGE_CHUNK_SIZE = 3000;
-const RESEARCH_REACTION_DELAY_MS = 10_000;
-const RESEARCH_REACTION_TOOL_CALLS = 3;
+const SLOW_RESPONSE_REACTION_DELAY_MS = 15_000;
 
 const LLM_TOOLS: ToolName[] = [
   "web_search",
@@ -119,38 +117,22 @@ async function sendLlmWarning(
   }
 }
 
-function createResearchReactionTracker(ctx: Context): {
-  onProgress: (progress: LlmProgress) => Promise<void>;
+function createSlowResponseReactionTracker(ctx: Context): {
   stop: () => void;
 } {
-  const startedAt = Date.now();
-  let toolCallCount = 0;
   let reacted = false;
   let stopped = false;
 
-  const maybeReact = async () => {
-    if (
-      stopped ||
-      reacted ||
-      toolCallCount < RESEARCH_REACTION_TOOL_CALLS ||
-      Date.now() - startedAt < RESEARCH_REACTION_DELAY_MS
-    ) {
+  const timeoutId = setTimeout(() => {
+    if (stopped || reacted) {
       return;
     }
 
     reacted = true;
-    await submitThinkingReaction(ctx);
-  };
-
-  const timeoutId = setTimeout(() => {
-    void maybeReact();
-  }, RESEARCH_REACTION_DELAY_MS);
+    void submitThinkingReaction(ctx);
+  }, SLOW_RESPONSE_REACTION_DELAY_MS);
 
   return {
-    async onProgress(progress) {
-      toolCallCount = progress.toolCallCount;
-      await maybeReact();
-    },
     stop() {
       stopped = true;
       clearTimeout(timeoutId);
@@ -454,13 +436,12 @@ chatComposer.on("message", async (ctx, next) => {
 
   try {
     const toolContext = getLlmToolContext(ctx.chat.id, message);
-    const researchReaction = createResearchReactionTracker(ctx);
+    const slowResponseReaction = createSlowResponseReactionTracker(ctx);
     const llmResponse = await (async () => {
       try {
         return await withTypingAction(ctx, () => {
           const requestOptions = {
             context: toolContext,
-            onProgress: researchReaction.onProgress,
             onWarning: (details: string) =>
               sendLlmWarning(ctx, message, details),
           };
@@ -480,7 +461,7 @@ chatComposer.on("message", async (ctx, next) => {
               );
         });
       } finally {
-        researchReaction.stop();
+        slowResponseReaction.stop();
       }
     })();
     const formattedResponse = formatLlmResponse(llmResponse);
