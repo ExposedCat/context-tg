@@ -1,9 +1,10 @@
 import { createDebug } from "@grammyjs/debug";
-import { Composer } from "grammy";
+import { Composer, InputFile } from "grammy";
 import type { Context } from "../bot.ts";
 import { APP_ENV } from "./env.ts";
 import {
   type LlmCitation,
+  type LlmHtmlReport,
   LlmRequestError,
   type LlmResponse,
   type LlmToolContext,
@@ -30,6 +31,7 @@ export const chatComposer = new Composer<Context>();
 
 const TYPING_ACTION_INTERVAL_MS = 3000;
 const TELEGRAM_MESSAGE_CHUNK_SIZE = 3000;
+const TELEGRAM_CAPTION_CHUNK_SIZE = 1000;
 const SLOW_RESPONSE_REACTION_DELAY_MS = 15_000;
 
 const LLM_TOOLS: ToolName[] = [
@@ -38,6 +40,7 @@ const LLM_TOOLS: ToolName[] = [
   "get_markets_state",
   "search_chat",
   "read_last_messages",
+  "send_html_report",
 ];
 
 const linkPreviewOptions = {
@@ -264,7 +267,10 @@ function isClosingHtmlTag(tag: string): boolean {
   return tag.slice(1, -1).trim().startsWith("/");
 }
 
-function splitHtmlMessage(text: string): string[] {
+function splitHtmlMessage(
+  text: string,
+  maxVisibleLength = TELEGRAM_MESSAGE_CHUNK_SIZE,
+): string[] {
   const chunks: string[] = [];
   const openTags: Array<{ name: string; tag: string }> = [];
   let chunk = "";
@@ -289,7 +295,7 @@ function splitHtmlMessage(text: string): string[] {
 
   const appendVisibleText = (visibleText: string) => {
     for (const character of visibleText) {
-      if (chunkLength >= TELEGRAM_MESSAGE_CHUNK_SIZE) {
+      if (chunkLength >= maxVisibleLength) {
         flushChunk();
       }
 
@@ -299,7 +305,7 @@ function splitHtmlMessage(text: string): string[] {
   };
 
   const appendEntity = (entity: string) => {
-    if (chunkLength >= TELEGRAM_MESSAGE_CHUNK_SIZE) {
+    if (chunkLength >= maxVisibleLength) {
       flushChunk();
     }
 
@@ -315,7 +321,7 @@ function splitHtmlMessage(text: string): string[] {
     }
 
     const isClosingTag = isClosingHtmlTag(tag);
-    if (!isClosingTag && chunkLength >= TELEGRAM_MESSAGE_CHUNK_SIZE) {
+    if (!isClosingTag && chunkLength >= maxVisibleLength) {
       flushChunk();
     }
 
@@ -423,6 +429,88 @@ function getErrorResponseText(error: unknown): string {
   return `Error: ${sanitizeLlmHtml(details)}`;
 }
 
+function normalizeReportFilename(filename: string): string {
+  const safeFilename = filename
+    .replaceAll(/[\\/]/g, "-")
+    .replaceAll(/[^a-z0-9._ -]/gi, "")
+    .replaceAll(/\s+/g, " ")
+    .trim();
+  const normalized = safeFilename || "research-report.html";
+
+  return /\.html?$/i.test(normalized) ? normalized : `${normalized}.html`;
+}
+
+function createHtmlDocument(report: LlmHtmlReport): string {
+  const html = report.htmlString.trim();
+
+  if (/^\s*(?:<!doctype\s+html\b|<html[\s>])/i.test(html)) {
+    return html;
+  }
+
+  return `<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>${escapeHtml(report.filename)}</title>
+</head>
+<body>
+${report.htmlString}
+</body>
+</html>`;
+}
+
+async function sendHtmlReportResponse(
+  ctx: Context,
+  message: TextMessage,
+  report: LlmHtmlReport,
+  formattedResponse: ReturnType<typeof formatLlmResponse>,
+): Promise<Array<{ message_id: number }>> {
+  const filename = normalizeReportFilename(report.filename);
+  const tmpPath = await Deno.makeTempFile({
+    prefix: "context-tg-report-",
+    suffix: ".html",
+  });
+  const captionChunks = splitHtmlMessage(
+    formattedResponse.text || "Report attached.",
+    TELEGRAM_CAPTION_CHUNK_SIZE,
+  );
+  const sentMessages = [];
+
+  try {
+    await Deno.writeTextFile(tmpPath, createHtmlDocument(report));
+
+    const sentDocument = await ctx.replyWithDocument(
+      new InputFile(tmpPath, filename),
+      {
+        caption: captionChunks[0],
+        parse_mode: formattedResponse.parse_mode,
+        reply_parameters: {
+          message_id: message.message_id,
+        },
+      },
+    );
+    sentMessages.push(sentDocument);
+  } finally {
+    await Deno.remove(tmpPath).catch((error) =>
+      logError("Failed to delete temporary HTML report:", { tmpPath, error }),
+    );
+  }
+
+  for (const chunk of captionChunks.slice(1)) {
+    const sentMessage = await ctx.reply(chunk, {
+      ...linkPreviewOptions,
+      parse_mode: formattedResponse.parse_mode,
+      reply_parameters: {
+        message_id: message.message_id,
+      },
+    });
+
+    sentMessages.push(sentMessage);
+  }
+
+  return sentMessages;
+}
+
 chatComposer.on("message", async (ctx, next) => {
   const message = ctx.message as TextMessage;
   const text = getMessageText(message);
@@ -475,18 +563,27 @@ chatComposer.on("message", async (ctx, next) => {
     }
 
     const formattedResponse = formatLlmResponse(llmResponse);
-    const sentMessages = [];
+    const sentMessages = llmResponse.html_report
+      ? await sendHtmlReportResponse(
+          ctx,
+          message,
+          llmResponse.html_report,
+          formattedResponse,
+        )
+      : [];
 
-    for (const chunk of splitHtmlMessage(formattedResponse.text)) {
-      const sentMessage = await ctx.reply(chunk, {
-        ...linkPreviewOptions,
-        parse_mode: formattedResponse.parse_mode,
-        reply_parameters: {
-          message_id: message.message_id,
-        },
-      });
+    if (!llmResponse.html_report) {
+      for (const chunk of splitHtmlMessage(formattedResponse.text)) {
+        const sentMessage = await ctx.reply(chunk, {
+          ...linkPreviewOptions,
+          parse_mode: formattedResponse.parse_mode,
+          reply_parameters: {
+            message_id: message.message_id,
+          },
+        });
 
-      sentMessages.push(sentMessage);
+        sentMessages.push(sentMessage);
+      }
     }
 
     if (!llmResponse.response_id) {

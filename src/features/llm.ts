@@ -99,6 +99,30 @@ export const TOOL_DEFINITIONS = {
     },
     strict: true,
   },
+  send_html_report: {
+    type: "function",
+    name: "send_html_report",
+    description:
+      "Attach a long research report as an HTML file. Use this only for long research purposes when the report is too large or rich for a normal chat reply. Put the full report in html_string and provide a short, descriptive filename. After using this tool, the normal assistant response must be only a very short caption for the attached report.",
+    parameters: {
+      type: "object",
+      properties: {
+        html_string: {
+          type: "string",
+          description:
+            "The complete HTML report content to attach as a document. Should contain nice <style> tag.",
+        },
+        filename: {
+          type: "string",
+          description:
+            "A short filename for the report. The bot will normalize it and ensure it uses the .html extension.",
+        },
+      },
+      required: ["html_string", "filename"],
+      additionalProperties: false,
+    },
+    strict: true,
+  },
 } as const;
 
 export type ToolName = keyof typeof TOOL_DEFINITIONS;
@@ -106,7 +130,8 @@ type FunctionToolName =
   | "fetch_ticker_price"
   | "get_markets_state"
   | "search_chat"
-  | "read_last_messages";
+  | "read_last_messages"
+  | "send_html_report";
 
 export type LlmToolContext = {
   chatId: number;
@@ -134,9 +159,15 @@ export type LlmSource = {
   link: string;
 };
 
+export type LlmHtmlReport = {
+  htmlString: string;
+  filename: string;
+};
+
 export type LlmResponse = {
   response_id?: string;
   response?: string;
+  html_report?: LlmHtmlReport;
   web_search: {
     used: boolean;
     citations: LlmCitation[];
@@ -207,6 +238,7 @@ type LlmRequestState = {
   lastResponseId?: string;
   receivedResponse: boolean;
   sentImmediateContentFilterWarning: boolean;
+  htmlReport?: LlmHtmlReport;
 };
 
 function getSystemInstructions(): string {
@@ -223,10 +255,11 @@ You have various tools at your disposal, whenever you need to use them, you must
 Respond to user in a meaningful, but concise way.
 Always try to fit response in a short, informative message: try to say least possible extra words, respond purely with information requested.
 Your goal is to provide as much factual data as possible.
+For long research reports, use send_html_report. Put the report itself in html_string, and make your normal response only a very short caption for the attached report.
 
 # Formatting
-Never respond with any formatting except citations and allowed tags.
-Markdown and HTML are NOT supported, you can ONLY use following small subset only when needed:
+Full Markdown and HTML are NOT supported, you can ONLY use following small subset only when needed:
+This formatting limitation applies to normal chat responses and captions, not to send_html_report html_string.
 - <b> for bold
 - <code lang=""> for code snippets
 - <code> for code snippets without language
@@ -286,7 +319,8 @@ function isFunctionToolName(tool: string): tool is FunctionToolName {
     tool === "fetch_ticker_price" ||
     tool === "get_markets_state" ||
     tool === "search_chat" ||
-    tool === "read_last_messages"
+    tool === "read_last_messages" ||
+    tool === "send_html_report"
   );
 }
 
@@ -422,6 +456,18 @@ function parseCount(value: unknown): number {
   }
 
   return Math.max(1, Math.min(MAX_LAST_MESSAGES_COUNT, Math.floor(value)));
+}
+
+function normalizeReportFilename(value: unknown): string {
+  const rawFilename = typeof value === "string" ? value.trim() : "";
+  const safeFilename = rawFilename
+    .replaceAll(/[\\/]/g, "-")
+    .replaceAll(/[^a-z0-9._ -]/gi, "")
+    .replaceAll(/\s+/g, " ")
+    .trim();
+  const filename = safeFilename || "research-report.html";
+
+  return /\.html?$/i.test(filename) ? filename : `${filename}.html`;
 }
 
 function formatMessageLine(message: {
@@ -564,6 +610,7 @@ function createToolOutput(
 
 async function runFunctionToolCall(
   call: FunctionToolCall,
+  state: LlmRequestState,
   context?: LlmToolContext,
 ): Promise<FunctionCallOutput> {
   const args = parseJsonObject(call.arguments);
@@ -629,6 +676,29 @@ async function runFunctionToolCall(
       messages.length > 0
         ? messages.map(formatMessageLine).join("\n")
         : "No remembered text messages found in that message range.",
+    );
+  }
+
+  if (call.name === "send_html_report") {
+    const htmlString =
+      typeof args?.html_string === "string" ? args.html_string : "";
+    const filename = normalizeReportFilename(args?.filename);
+
+    if (!htmlString.trim()) {
+      return createToolOutput(
+        call,
+        JSON.stringify({ error: "html_string must not be empty." }),
+      );
+    }
+
+    state.htmlReport = {
+      htmlString,
+      filename,
+    };
+
+    return createToolOutput(
+      call,
+      "HTML report accepted. Final response must be only a very short caption for the attached report.",
     );
   }
 
@@ -762,7 +832,9 @@ async function resolveFunctionToolCalls(
     }
 
     const toolOutputs = await Promise.all(
-      functionCalls.map((call) => runFunctionToolCall(call, options.context)),
+      functionCalls.map((call) =>
+        runFunctionToolCall(call, state, options.context),
+      ),
     );
 
     response = await createLlmResponseWithRetries(
@@ -837,6 +909,7 @@ export async function requestLlm(
   return {
     response_id: response.id ?? lastResponseId,
     response: responseText,
+    html_report: state.htmlReport,
     web_search: {
       used: calledTools.includes("web_search"),
       citations,
