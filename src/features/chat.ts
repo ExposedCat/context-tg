@@ -24,7 +24,7 @@ type TextMessage = {
   reply_to_message?: TextMessage;
 };
 
-type BotReaction = "🤔" | "👀";
+type BotReaction = "🤔";
 
 const logError = createDebug("app:chat:error");
 
@@ -595,10 +595,6 @@ chatComposer.on("message", async (ctx, next) => {
         slowResponseReaction.stop();
       }
     })();
-
-    if (llmResponse.tools.includes("web_search")) {
-      void submitReaction(ctx, "👀");
-    }
 
     const formattedResponse = formatLlmResponse(llmResponse);
     const sentMessages = llmResponse.html_report
