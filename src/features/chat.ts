@@ -6,6 +6,7 @@ import {
   DEFAULT_LLM_TOOLS,
   type LlmCitation,
   type LlmHtmlReport,
+  type LlmProgress,
   LlmRequestError,
   type LlmResponse,
   type LlmToolContext,
@@ -135,6 +136,45 @@ function createSlowResponseReactionTracker(ctx: Context): {
     stop() {
       stopped = true;
       clearTimeout(timeoutId);
+    },
+  };
+}
+
+function createToolUsageLabelTracker(
+  ctx: Context,
+  chatId: number,
+  message: TextMessage,
+): {
+  show: (progress: LlmProgress) => Promise<void>;
+} {
+  let lastLabel: string | undefined;
+  let sentMessageId: number | undefined;
+
+  return {
+    async show(progress) {
+      const label = progress.usageLabel;
+
+      if (!label || label === lastLabel) {
+        return;
+      }
+
+      try {
+        if (sentMessageId) {
+          await ctx.api.editMessageText(chatId, sentMessageId, label);
+          lastLabel = label;
+          return;
+        }
+
+        const sentMessage = await ctx.reply(label, {
+          reply_parameters: {
+            message_id: message.message_id,
+          },
+        });
+        sentMessageId = sentMessage.message_id;
+        lastLabel = label;
+      } catch (error) {
+        logError("Failed to send tool usage label:", { label, error });
+      }
     },
   };
 }
@@ -521,11 +561,18 @@ chatComposer.on("message", async (ctx, next) => {
   try {
     const toolContext = getLlmToolContext(ctx.chat.id, message);
     const slowResponseReaction = createSlowResponseReactionTracker(ctx);
+    const toolUsageLabel = createToolUsageLabelTracker(
+      ctx,
+      ctx.chat.id,
+      message,
+    );
     const llmResponse = await (async () => {
       try {
         return await withTypingAction(ctx, () => {
           const requestOptions = {
             context: toolContext,
+            onProgress: (progress: LlmProgress) =>
+              toolUsageLabel.show(progress),
             onWarning: (details: string) =>
               sendLlmWarning(ctx, message, details),
           };

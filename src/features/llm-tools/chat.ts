@@ -2,6 +2,9 @@ import { MAX_LAST_MESSAGES_COUNT, readLastMessages } from "../last-messages.ts";
 import { search as searchMessages } from "../messages.ts";
 import type { FunctionToolRunner, LlmToolContext } from "./types.ts";
 
+export const SEARCH_CHAT_USAGE_LABEL = "Searching chat...";
+export const READ_LAST_MESSAGES_USAGE_LABEL = "Reading recent messages...";
+
 export const searchChatToolDefinition = {
   type: "function",
   name: "search_chat",

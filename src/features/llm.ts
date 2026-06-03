@@ -4,7 +4,9 @@ import { APP_ENV } from "./env.ts";
 import {
   executeReadLastMessages,
   executeSearchChat,
+  READ_LAST_MESSAGES_USAGE_LABEL,
   readLastMessagesToolDefinition,
+  SEARCH_CHAT_USAGE_LABEL,
   searchChatToolDefinition,
 } from "./llm-tools/chat.ts";
 import * as marketTool from "./llm-tools/market.ts";
@@ -41,10 +43,19 @@ const FUNCTION_TOOL_RUNNERS = {
 export type ToolName = keyof typeof TOOL_DEFINITIONS;
 type FunctionToolName = keyof typeof FUNCTION_TOOL_RUNNERS;
 
+const TOOL_USAGE_LABELS: Partial<Record<ToolName, string>> = {
+  web_search: webSearchTool.USAGE_LABEL,
+  fetch_ticker_price: tickerPriceTool.USAGE_LABEL,
+  get_markets_state: marketTool.USAGE_LABEL,
+  search_chat: SEARCH_CHAT_USAGE_LABEL,
+  read_last_messages: READ_LAST_MESSAGES_USAGE_LABEL,
+};
+
 export const DEFAULT_LLM_TOOLS = Object.keys(TOOL_DEFINITIONS) as ToolName[];
 
 export type LlmProgress = {
   toolCallCount: number;
+  usageLabel?: string;
 };
 
 export type LlmRequestOptions = {
@@ -151,17 +162,26 @@ You are an assistant named ${names} with a goal to provide a meaningful context 
 You have various tools at your disposal, whenever you need to use them, you must use a tool by name properly, not write parameters in a response to user.
 
 # Responding
-Respond to user in a meaningful, but concise way.
-Always try to fit response in a short, informative message: try to say least possible extra words, respond purely with information requested.
-Your goal is to provide as much factual data as possible.
-For long research reports, use send_html_report. Put the report itself in html_string, and make your normal response only a very short caption for the attached report.
+- Respond to user in a meaningful, but concise way.
+- Always try to fit response in a short, informative message: try to say least possible extra words, respond purely with information requested.
+- Your goal is to provide as much factual data as possible.
+- When user asks you to research something, you must do an extensive full-fledged research!
+
+# Research
+- When user asks you to research something, you must do at least 5-10 web searches with different queries covering different source kinds.
+- Any extensive research request must be submitted as a well-formatted rich HTML report using a send_html_report tool.
+- With send_html_report tool, you can use full HTML formatting: headings, lists, tables, etc.
+- Research must be comprehensive and must contain a well-thought-out meaningful sections which don't repeat self.
+- Research must show a useful deep analysis, not just high-level obvious information.
+- Research should contain a TL;DR section at the bottom with key findings.
+- After send_html_report tool, your regular text response will be sent as a text with a report document. It must be a very small, super trimmed and conside findings (a few sentences) of a research with a suggestion to see full report in the attached file.
 
 # Formatting
-Full Markdown and HTML are NOT supported, you can ONLY use following small subset only when needed:
 This formatting limitation applies to normal chat responses and captions, not to send_html_report html_string.
+For regular responses, Markdown and HTML are NOT supported, you can ONLY use following small subset only when needed:
 - <b> for bold
-- <code lang=""> for code snippets
-- <code> for code snippets without language
+- <code> for monospace snippets: literal names, values, etc.
+- <code lang=""> for monospace code snippets of specific language.
 - <a href=""> for links (not citations, send citations normally)
 - <blockquote> for quoted passages. Use <blockquote expandable> for longer citations.
 Do not nest blockquotes.
@@ -307,6 +327,22 @@ function getToolCallCount(response: ApiResponse): number {
   return response.output.filter(
     (item) => item.type === "web_search_call" || isFunctionToolCall(item),
   ).length;
+}
+
+function getIntermediateUsageLabel(response: ApiResponse): string | undefined {
+  if (response.output_text || getToolCallCount(response) === 0) {
+    return undefined;
+  }
+
+  for (const tool of getCalledTools(response)) {
+    const label = TOOL_USAGE_LABELS[tool];
+
+    if (label) {
+      return label;
+    }
+  }
+
+  return undefined;
 }
 
 function getFunctionToolCalls(response: ApiResponse): FunctionToolCall[] {
@@ -592,7 +628,10 @@ async function resolveFunctionToolCalls(
   const calledTools = new Set(getCalledTools(initialResponse));
   let toolCallCount = getToolCallCount(initialResponse);
   let response = initialResponse;
-  await options.onProgress?.({ toolCallCount });
+  await options.onProgress?.({
+    toolCallCount,
+    usageLabel: getIntermediateUsageLabel(response),
+  });
 
   for (let index = 0; index < 4; index += 1) {
     const functionCalls = getFunctionToolCalls(response);
@@ -617,7 +656,10 @@ async function resolveFunctionToolCalls(
     );
 
     toolCallCount += getToolCallCount(response);
-    await options.onProgress?.({ toolCallCount });
+    await options.onProgress?.({
+      toolCallCount,
+      usageLabel: getIntermediateUsageLabel(response),
+    });
 
     for (const tool of getCalledTools(response)) {
       calledTools.add(tool);
