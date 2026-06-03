@@ -114,6 +114,16 @@ export type LlmToolContext = {
   replyMessageId?: number;
 };
 
+export type LlmProgress = {
+  toolCallCount: number;
+};
+
+export type LlmRequestOptions = {
+  context?: LlmToolContext;
+  onProgress?: (progress: LlmProgress) => void | Promise<void>;
+  onWarning?: (details: string) => void | Promise<void>;
+};
+
 export type LlmCitation = {
   start_index: number;
   end_index: number;
@@ -141,6 +151,14 @@ type ApiResponse = {
   id?: string;
   output: ApiResponseOutputItem[];
   output_text?: string;
+  status?: string;
+  error?: {
+    code?: string | null;
+    message?: string | null;
+  } | null;
+  incomplete_details?: {
+    reason?: string | null;
+  } | null;
 };
 
 type ApiResponseOutputItem = {
@@ -182,6 +200,14 @@ type FunctionCallOutput = {
 };
 
 const logDebug = createDebug("app:llm:debug");
+const logError = createDebug("app:llm:error");
+const MAX_LLM_RETRIES = 3;
+
+type LlmRequestState = {
+  lastResponseId?: string;
+  receivedResponse: boolean;
+  sentImmediateContentFilterWarning: boolean;
+};
 
 function getSystemInstructions(): string {
   const names = APP_ENV.NAMES.map((name) => JSON.stringify(name)).join(", ");
@@ -350,6 +376,12 @@ function getCalledTools(response: ApiResponse): ToolName[] {
   return [...calledTools];
 }
 
+function getToolCallCount(response: ApiResponse): number {
+  return response.output.filter(
+    (item) => item.type === "web_search_call" || isFunctionToolCall(item),
+  ).length;
+}
+
 function getFunctionToolCalls(response: ApiResponse): FunctionToolCall[] {
   return response.output.filter(isFunctionToolCall);
 }
@@ -412,11 +444,105 @@ function formatToolCallLog(call: FunctionToolCall): Record<string, unknown> {
 function formatResponseSummary(response: ApiResponse): Record<string, unknown> {
   return {
     id: response.id,
+    status: response.status,
     outputTextLength: response.output_text?.length ?? 0,
     outputTypes: response.output.map((item) => item.type),
     functionCalls: getFunctionToolCalls(response).map(formatToolCallLog),
     tools: getCalledTools(response),
+    error: response.error,
+    incompleteDetails: response.incomplete_details,
   };
+}
+
+export class LlmRequestError extends Error {
+  constructor(
+    message: string,
+    readonly details: string,
+    readonly kind: "content_filter" | "error" = "error",
+    readonly lastResponseId?: string,
+  ) {
+    super(message);
+    this.name = "LlmRequestError";
+  }
+}
+
+function getErrorObject(error: unknown): Record<string, unknown> | undefined {
+  if (typeof error !== "object" || error === null) {
+    return undefined;
+  }
+
+  return error as Record<string, unknown>;
+}
+
+function getErrorDetail(error: unknown): string {
+  if (error instanceof LlmRequestError) {
+    return error.details;
+  }
+
+  const errorObject = getErrorObject(error);
+  const apiError = getErrorObject(errorObject?.error);
+  const parts = [
+    typeof errorObject?.status === "number"
+      ? `status ${errorObject.status}`
+      : undefined,
+    typeof errorObject?.code === "string" ? errorObject.code : undefined,
+    typeof errorObject?.type === "string" ? errorObject.type : undefined,
+    typeof apiError?.code === "string" ? apiError.code : undefined,
+    typeof apiError?.message === "string" ? apiError.message : undefined,
+    error instanceof Error ? error.message : undefined,
+  ].filter((part): part is string => Boolean(part));
+
+  return [...new Set(parts)].join(": ") || String(error);
+}
+
+function isContentFilterError(error: unknown): boolean {
+  if (error instanceof LlmRequestError) {
+    return error.kind === "content_filter";
+  }
+
+  const errorObject = getErrorObject(error);
+  const apiError = getErrorObject(errorObject?.error);
+  const values = [
+    error instanceof Error ? error.name : undefined,
+    error instanceof Error ? error.message : undefined,
+    errorObject?.code,
+    errorObject?.type,
+    apiError?.code,
+    apiError?.type,
+    apiError?.message,
+  ];
+
+  return values.some(
+    (value) =>
+      typeof value === "string" &&
+      /content[_ -]?filter|content_filter|policy_violation/i.test(value),
+  );
+}
+
+function getResponseError(response: ApiResponse): LlmRequestError | undefined {
+  if (response.incomplete_details?.reason === "content_filter") {
+    return new LlmRequestError(
+      "LLM response was blocked by content filtering",
+      "content_filter",
+      "content_filter",
+    );
+  }
+
+  if (response.status === "failed" && response.error) {
+    const detail = [response.error.code, response.error.message]
+      .filter(Boolean)
+      .join(": ");
+    return new LlmRequestError(
+      "LLM response failed",
+      detail || "response failed",
+    );
+  }
+
+  if (!response.output_text && getFunctionToolCalls(response).length === 0) {
+    return new LlmRequestError("LLM response was empty", "empty response");
+  }
+
+  return undefined;
 }
 
 function createToolOutput(
@@ -533,14 +659,100 @@ async function createLlmResponse(
   });
 }
 
+async function createLlmResponseWithRetries(
+  client: OpenAI,
+  input: string | FunctionCallOutput[],
+  tools: ToolName[],
+  responseId: string | undefined,
+  state: LlmRequestState,
+  options: LlmRequestOptions = {},
+): Promise<ApiResponse> {
+  let lastError: unknown;
+  let currentResponseId = responseId;
+
+  for (let attempt = 0; attempt <= MAX_LLM_RETRIES; attempt += 1) {
+    const immediate = !state.receivedResponse;
+
+    try {
+      const response = await createLlmResponse(
+        client,
+        input,
+        tools,
+        currentResponseId,
+      );
+      const responseError = getResponseError(response);
+      state.lastResponseId = response.id ?? state.lastResponseId;
+      state.receivedResponse = true;
+      currentResponseId = response.id ?? currentResponseId;
+
+      if (responseError) {
+        throw responseError;
+      }
+
+      return response;
+    } catch (error) {
+      lastError = error;
+      const contentFiltered = isContentFilterError(error);
+      logError("LLM response step failed", {
+        attempt,
+        immediate,
+        retrying: attempt < MAX_LLM_RETRIES && (!immediate || contentFiltered),
+        responseId: currentResponseId,
+        lastResponseId: state.lastResponseId,
+        error,
+      });
+
+      if (immediate && contentFiltered) {
+        if (!state.sentImmediateContentFilterWarning) {
+          state.sentImmediateContentFilterWarning = true;
+          await options.onWarning?.(getErrorDetail(error));
+        }
+
+        if (attempt >= MAX_LLM_RETRIES) {
+          break;
+        }
+
+        continue;
+      }
+
+      if (immediate) {
+        throw new LlmRequestError(
+          "LLM request failed immediately",
+          getErrorDetail(error),
+          "error",
+          state.lastResponseId,
+        );
+      }
+
+      if (attempt >= MAX_LLM_RETRIES) {
+        break;
+      }
+    }
+  }
+
+  throw new LlmRequestError(
+    "LLM request failed after retries",
+    getErrorDetail(lastError),
+    "error",
+    state.lastResponseId,
+  );
+}
+
 async function resolveFunctionToolCalls(
   client: OpenAI,
   initialResponse: ApiResponse,
   tools: ToolName[],
-  context?: LlmToolContext,
-): Promise<{ response: ApiResponse; calledTools: ToolName[] }> {
+  options: LlmRequestOptions = {},
+  state: LlmRequestState,
+): Promise<{
+  response: ApiResponse;
+  calledTools: ToolName[];
+  lastResponseId?: string;
+}> {
   const calledTools = new Set(getCalledTools(initialResponse));
+  let toolCallCount = getToolCallCount(initialResponse);
   let response = initialResponse;
+  await options.onProgress?.({ toolCallCount });
 
   for (let index = 0; index < 4; index += 1) {
     const functionCalls = getFunctionToolCalls(response);
@@ -550,39 +762,63 @@ async function resolveFunctionToolCalls(
     }
 
     const toolOutputs = await Promise.all(
-      functionCalls.map((call) => runFunctionToolCall(call, context)),
+      functionCalls.map((call) => runFunctionToolCall(call, options.context)),
     );
 
-    response = await createLlmResponse(client, toolOutputs, tools, response.id);
+    response = await createLlmResponseWithRetries(
+      client,
+      toolOutputs,
+      tools,
+      response.id,
+      state,
+      options,
+    );
+
+    toolCallCount += getToolCallCount(response);
+    await options.onProgress?.({ toolCallCount });
 
     for (const tool of getCalledTools(response)) {
       calledTools.add(tool);
     }
   }
 
-  return { response, calledTools: [...calledTools] };
+  return {
+    response,
+    calledTools: [...calledTools],
+    lastResponseId: state.lastResponseId,
+  };
 }
 
 export async function requestLlm(
   request: string,
   tools: ToolName[],
   responseId?: string | null,
-  context?: LlmToolContext,
+  options: LlmRequestOptions = {},
 ): Promise<LlmResponse> {
   logDebug("Sending request to LLM", { tools, responseId });
   const client = getClient();
-  const initialResponse = await createLlmResponse(
+  const state: LlmRequestState = {
+    lastResponseId: responseId ?? undefined,
+    receivedResponse: false,
+    sentImmediateContentFilterWarning: false,
+  };
+  const initialResponse = await createLlmResponseWithRetries(
     client,
     request,
     tools,
-    responseId,
+    responseId ?? undefined,
+    state,
+    options,
   );
-  const { response, calledTools } = await resolveFunctionToolCalls(
-    client,
-    initialResponse,
-    tools,
-    context,
-  );
+
+  const { response, calledTools, lastResponseId } =
+    await resolveFunctionToolCalls(
+      client,
+      initialResponse,
+      tools,
+      options,
+      state,
+    );
   logDebug("Received response from LLM", formatResponseSummary(response));
 
   if (!response.output_text && getFunctionToolCalls(response).length > 0) {
@@ -599,7 +835,7 @@ export async function requestLlm(
   const responseText = response.output_text || undefined;
 
   return {
-    response_id: response.id,
+    response_id: response.id ?? lastResponseId,
     response: responseText,
     web_search: {
       used: calledTools.includes("web_search"),

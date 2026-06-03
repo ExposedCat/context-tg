@@ -4,6 +4,8 @@ import type { Context } from "../bot.ts";
 import { APP_ENV } from "./env.ts";
 import {
   type LlmCitation,
+  type LlmProgress,
+  LlmRequestError,
   type LlmResponse,
   type LlmToolContext,
   requestLlm,
@@ -26,6 +28,9 @@ const logError = createDebug("app:chat:error");
 export const chatComposer = new Composer<Context>();
 
 const TYPING_ACTION_INTERVAL_MS = 3000;
+const TELEGRAM_MESSAGE_CHUNK_SIZE = 3000;
+const RESEARCH_REACTION_DELAY_MS = 10_000;
+const RESEARCH_REACTION_TOOL_CALLS = 3;
 
 const LLM_TOOLS: ToolName[] = [
   "web_search",
@@ -86,6 +91,71 @@ async function submitTypingAction(ctx: Context): Promise<void> {
   } catch (error) {
     logError("Failed to submit typing action:", error);
   }
+}
+
+async function submitThinkingReaction(ctx: Context): Promise<void> {
+  try {
+    await ctx.react("🤔");
+  } catch (error) {
+    logError("Failed to submit thinking reaction:", error);
+  }
+}
+
+async function sendLlmWarning(
+  ctx: Context,
+  message: TextMessage,
+  details: string,
+): Promise<void> {
+  try {
+    await ctx.reply(`Warn: ${sanitizeLlmHtml(details)}`, {
+      ...linkPreviewOptions,
+      parse_mode: "HTML",
+      reply_parameters: {
+        message_id: message.message_id,
+      },
+    });
+  } catch (error) {
+    logError("Failed to send LLM warning:", error);
+  }
+}
+
+function createResearchReactionTracker(ctx: Context): {
+  onProgress: (progress: LlmProgress) => Promise<void>;
+  stop: () => void;
+} {
+  const startedAt = Date.now();
+  let toolCallCount = 0;
+  let reacted = false;
+  let stopped = false;
+
+  const maybeReact = async () => {
+    if (
+      stopped ||
+      reacted ||
+      toolCallCount < RESEARCH_REACTION_TOOL_CALLS ||
+      Date.now() - startedAt < RESEARCH_REACTION_DELAY_MS
+    ) {
+      return;
+    }
+
+    reacted = true;
+    await submitThinkingReaction(ctx);
+  };
+
+  const timeoutId = setTimeout(() => {
+    void maybeReact();
+  }, RESEARCH_REACTION_DELAY_MS);
+
+  return {
+    async onProgress(progress) {
+      toolCallCount = progress.toolCallCount;
+      await maybeReact();
+    },
+    stop() {
+      stopped = true;
+      clearTimeout(timeoutId);
+    },
+  };
 }
 
 async function withTypingAction<T>(
@@ -194,6 +264,110 @@ function sanitizeLlmHtml(text: string): string {
   return sanitized + escapeHtml(text.slice(cursor));
 }
 
+function getHtmlTagName(tag: string): string | undefined {
+  const tagBody = tag.slice(1, -1).trim();
+  const name = tagBody.startsWith("/")
+    ? tagBody.slice(1).trim()
+    : tagBody.split(/\s+/, 1)[0];
+
+  return name?.toLocaleLowerCase() || undefined;
+}
+
+function isClosingHtmlTag(tag: string): boolean {
+  return tag.slice(1, -1).trim().startsWith("/");
+}
+
+function splitHtmlMessage(text: string): string[] {
+  const chunks: string[] = [];
+  const openTags: Array<{ name: string; tag: string }> = [];
+  let chunk = "";
+  let chunkLength = 0;
+
+  const getOpeningTags = () => openTags.map(({ tag }) => tag).join("");
+  const getClosingTags = () =>
+    openTags
+      .toReversed()
+      .map(({ name }) => `</${name}>`)
+      .join("");
+
+  const flushChunk = () => {
+    if (chunkLength === 0) {
+      return;
+    }
+
+    chunks.push(chunk + getClosingTags());
+    chunk = getOpeningTags();
+    chunkLength = 0;
+  };
+
+  const appendVisibleText = (visibleText: string) => {
+    for (const character of visibleText) {
+      if (chunkLength >= TELEGRAM_MESSAGE_CHUNK_SIZE) {
+        flushChunk();
+      }
+
+      chunk += character;
+      chunkLength += 1;
+    }
+  };
+
+  const appendEntity = (entity: string) => {
+    if (chunkLength >= TELEGRAM_MESSAGE_CHUNK_SIZE) {
+      flushChunk();
+    }
+
+    chunk += entity;
+    chunkLength += 1;
+  };
+
+  const appendTag = (tag: string) => {
+    const tagName = getHtmlTagName(tag);
+    if (!tagName) {
+      chunk += tag;
+      return;
+    }
+
+    const isClosingTag = isClosingHtmlTag(tag);
+    if (!isClosingTag && chunkLength >= TELEGRAM_MESSAGE_CHUNK_SIZE) {
+      flushChunk();
+    }
+
+    chunk += tag;
+
+    if (isClosingTag) {
+      const lastOpenTag = openTags.at(-1);
+      if (lastOpenTag?.name === tagName) {
+        openTags.pop();
+      }
+      return;
+    }
+
+    openTags.push({ name: tagName, tag });
+  };
+
+  let cursor = 0;
+  for (const match of text.matchAll(
+    /<[^>]*>|&(?:[a-z]+|#[0-9]+|#x[0-9a-f]+);/gi,
+  )) {
+    const token = match[0];
+    const index = match.index ?? 0;
+    appendVisibleText(text.slice(cursor, index));
+
+    if (token.startsWith("<")) {
+      appendTag(token);
+    } else {
+      appendEntity(token);
+    }
+
+    cursor = index + token.length;
+  }
+
+  appendVisibleText(text.slice(cursor));
+  flushChunk();
+
+  return chunks.length > 0 ? chunks : [text];
+}
+
 function getValidCitations(
   response: string,
   citations: LlmCitation[],
@@ -237,7 +411,7 @@ function formatLlmResponse(llmResponse: LlmResponse): {
   text: string;
   parse_mode: "HTML";
 } {
-  const response = llmResponse.response ?? "I could not generate a response.";
+  const response = llmResponse.response ?? "";
 
   if (!hasSearchInfo(llmResponse)) {
     return {
@@ -250,6 +424,16 @@ function formatLlmResponse(llmResponse: LlmResponse): {
     text: formatCitations(response, llmResponse.web_search.citations),
     parse_mode: "HTML",
   };
+}
+
+function getErrorResponseText(error: unknown): string {
+  if (error instanceof LlmRequestError) {
+    const prefix = error.kind === "content_filter" ? "Warn" : "Error";
+    return `${prefix}: ${sanitizeLlmHtml(error.details)}`;
+  }
+
+  const details = error instanceof Error ? error.message : String(error);
+  return `Error: ${sanitizeLlmHtml(details)}`;
 }
 
 chatComposer.on("message", async (ctx, next) => {
@@ -270,45 +454,67 @@ chatComposer.on("message", async (ctx, next) => {
 
   try {
     const toolContext = getLlmToolContext(ctx.chat.id, message);
-    const llmResponse = await withTypingAction(ctx, () => {
-      return thread?.response_id
-        ? requestLlm(
-            buildThreadRequest(text, message.quote?.text),
-            LLM_TOOLS,
-            thread.response_id,
-            toolContext,
-          )
-        : requestLlm(
-            buildRootRequest(text, reply && getMessageText(reply)),
-            LLM_TOOLS,
-            undefined,
-            toolContext,
-          );
-    });
+    const researchReaction = createResearchReactionTracker(ctx);
+    const llmResponse = await (async () => {
+      try {
+        return await withTypingAction(ctx, () => {
+          const requestOptions = {
+            context: toolContext,
+            onProgress: researchReaction.onProgress,
+            onWarning: (details: string) =>
+              sendLlmWarning(ctx, message, details),
+          };
+
+          return thread?.response_id
+            ? requestLlm(
+                buildThreadRequest(text, message.quote?.text),
+                LLM_TOOLS,
+                thread.response_id,
+                requestOptions,
+              )
+            : requestLlm(
+                buildRootRequest(text, reply && getMessageText(reply)),
+                LLM_TOOLS,
+                undefined,
+                requestOptions,
+              );
+        });
+      } finally {
+        researchReaction.stop();
+      }
+    })();
     const formattedResponse = formatLlmResponse(llmResponse);
-    const sentMessage = await ctx.reply(formattedResponse.text, {
-      ...linkPreviewOptions,
-      parse_mode: formattedResponse.parse_mode,
-      reply_parameters: {
-        message_id: message.message_id,
-      },
-    });
+    const sentMessages = [];
+
+    for (const chunk of splitHtmlMessage(formattedResponse.text)) {
+      const sentMessage = await ctx.reply(chunk, {
+        ...linkPreviewOptions,
+        parse_mode: formattedResponse.parse_mode,
+        reply_parameters: {
+          message_id: message.message_id,
+        },
+      });
+
+      sentMessages.push(sentMessage);
+    }
 
     if (!llmResponse.response_id) {
       return;
     }
 
-    await createThread(ctx.database, {
-      chat_id: ctx.chat.id,
-      message_id: sentMessage.message_id,
-      response_id: llmResponse.response_id,
-    });
+    for (const sentMessage of sentMessages) {
+      await createThread(ctx.database, {
+        chat_id: ctx.chat.id,
+        message_id: sentMessage.message_id,
+        response_id: llmResponse.response_id,
+      });
+    }
   } catch (error) {
-    await ctx.reply("I could not generate a response", {
+    logError("Error handling message:", error);
+    await ctx.reply(getErrorResponseText(error), {
       ...linkPreviewOptions,
       parse_mode: "HTML",
     });
-    logError("Error handling message:", error);
     await next();
   }
 });
