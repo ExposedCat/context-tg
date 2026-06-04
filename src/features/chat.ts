@@ -590,6 +590,7 @@ chatComposer.on("message", async (ctx, next) => {
                 responseId,
                 requestOptions,
                 agent.buildInstructions(),
+                agent.MODEL,
               )
             : requestLlm(
                 buildRootRequest(text, reply && getMessageText(reply)),
@@ -597,6 +598,7 @@ chatComposer.on("message", async (ctx, next) => {
                 undefined,
                 requestOptions,
                 agent.buildInstructions(),
+                agent.MODEL,
               );
         });
       } finally {

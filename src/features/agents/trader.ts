@@ -8,6 +8,7 @@ import type { AgentDefinition } from "./types.ts";
 
 export const id = "trader";
 export const name = ["трейдер лейло", "трейдейло", "trader laylo"];
+export const MODEL = "big";
 export const tools = [
   "web_search",
   "fetch_ticker_price",
@@ -112,6 +113,7 @@ In a regular text response after the report, show each score value and a single 
 export const traderAgent = {
   id,
   name,
+  MODEL,
   tools,
   buildInstructions,
 } satisfies AgentDefinition;

@@ -4,7 +4,7 @@ import { traderAgent } from "./trader.ts";
 import type { AgentDefinition, AgentId } from "./types.ts";
 import { ultimateAgent } from "./ultimate.ts";
 
-export type { AgentDefinition, AgentId } from "./types.ts";
+export type { AgentDefinition, AgentId, AgentModel } from "./types.ts";
 export { normalAgent, researcherAgent, traderAgent, ultimateAgent };
 
 export const AGENTS = [

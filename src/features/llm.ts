@@ -1,6 +1,10 @@
 import { createDebug } from "@grammyjs/debug";
 import OpenAI from "@openai/openai";
-import { getCallableAgentById, normalAgent } from "./agents/index.ts";
+import {
+  type AgentModel,
+  getCallableAgentById,
+  normalAgent,
+} from "./agents/index.ts";
 import { APP_ENV } from "./env.ts";
 import * as agentTool from "./llm-tools/agent.ts";
 import {
@@ -172,6 +176,10 @@ function getClient(): OpenAI {
     apiKey: APP_ENV.LLM_API_KEY,
     baseURL: APP_ENV.LLM_BASE_URL,
   });
+}
+
+function getLlmModelName(model: AgentModel): string {
+  return model === "small" ? APP_ENV.LLM_MODEL_SMALL : APP_ENV.LLM_MODEL;
 }
 
 function getToolDefinitions(tools: ToolName[]): ToolDefinition[] {
@@ -524,10 +532,11 @@ async function createLlmResponse(
   input: string | FunctionCallOutput[],
   tools: ToolName[],
   responseId?: string | null,
+  model: AgentModel = normalAgent.MODEL,
   instructions = getSystemInstructions(),
 ): Promise<ApiResponse> {
   return await client.responses.create({
-    model: APP_ENV.LLM_MODEL,
+    model: getLlmModelName(model),
     input,
     instructions,
     // temperature: APP_ENV.LLM_TEMPERATURE,
@@ -548,6 +557,7 @@ async function createLlmResponseWithRetries(
   responseId: string | undefined,
   state: LlmRequestState,
   options: LlmRequestOptions = {},
+  model: AgentModel = normalAgent.MODEL,
   instructions = getSystemInstructions(),
 ): Promise<ApiResponse> {
   let lastError: unknown;
@@ -564,6 +574,7 @@ async function createLlmResponseWithRetries(
         input,
         tools,
         currentResponseId,
+        model,
         instructions,
       );
       const responseError = getResponseError(response);
@@ -647,6 +658,7 @@ async function resolveFunctionToolCalls(
   tools: ToolName[],
   options: LlmRequestOptions = {},
   state: LlmRequestState,
+  model: AgentModel = normalAgent.MODEL,
   instructions = getSystemInstructions(),
 ): Promise<{
   response: ApiResponse;
@@ -681,6 +693,7 @@ async function resolveFunctionToolCalls(
       response.id,
       state,
       options,
+      model,
       instructions,
     );
 
@@ -708,8 +721,9 @@ async function requestLlmWithInstructions(
   responseId?: string | null,
   options: LlmRequestOptions = {},
   instructions = getSystemInstructions(),
+  model: AgentModel = normalAgent.MODEL,
 ): Promise<LlmResponse> {
-  logDebug("Sending request to LLM", { tools, responseId });
+  logDebug("Sending request to LLM", { tools, responseId, model });
   const client = getClient();
   const state: LlmRequestState = {
     lastResponseId: responseId ?? undefined,
@@ -723,6 +737,7 @@ async function requestLlmWithInstructions(
     responseId ?? undefined,
     state,
     options,
+    model,
     instructions,
   );
 
@@ -733,6 +748,7 @@ async function requestLlmWithInstructions(
       tools,
       options,
       state,
+      model,
       instructions,
     );
   logDebug("Received response from LLM", formatResponseSummary(response));
@@ -785,6 +801,7 @@ async function runAgent(
     undefined,
     { context },
     agent.buildInstructions(),
+    agent.MODEL,
   );
 
   const output = JSON.stringify({
@@ -811,6 +828,7 @@ export async function requestLlm(
   responseId?: string | null,
   options: LlmRequestOptions = {},
   instructions = getSystemInstructions(),
+  model: AgentModel = normalAgent.MODEL,
 ): Promise<LlmResponse> {
   return await requestLlmWithInstructions(
     request,
@@ -818,5 +836,6 @@ export async function requestLlm(
     responseId,
     options,
     instructions,
+    model,
   );
 }

@@ -26,6 +26,7 @@ export const APP_ENV = {
   BOT_TOKEN: getRequiredEnv("BOT_TOKEN"),
   SQLITE_PATH: getRequiredEnv("SQLITE_PATH"),
   LLM_MODEL: getRequiredEnv("LLM_MODEL"),
+  LLM_MODEL_SMALL: getRequiredEnv("LLM_MODEL_SMALL"),
   LLM_BASE_URL: getRequiredEnv("LLM_BASE_URL"),
   LLM_API_KEY: getRequiredEnv("LLM_API_KEY"),
   LLM_TEMPERATURE: getRequiredNumberEnv("LLM_TEMPERATURE"),

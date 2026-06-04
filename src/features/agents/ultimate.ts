@@ -8,6 +8,7 @@ import type { AgentDefinition } from "./types.ts";
 
 export const id = "ultimate";
 export const name = ["дикий лейло", "ultimate laylo"];
+export const MODEL = "small";
 export const tools = [
   "web_search",
   "fetch_ticker_price",
@@ -49,6 +50,7 @@ Use call_agent to delegate bounded subtasks to normal, trader, or researcher whe
 export const ultimateAgent = {
   id,
   name,
+  MODEL,
   tools,
   buildInstructions,
 } satisfies AgentDefinition;

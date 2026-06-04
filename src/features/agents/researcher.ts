@@ -8,6 +8,7 @@ import type { AgentDefinition } from "./types.ts";
 
 export const id = "researcher";
 export const name = ["researcher laylo", "ресерчер лейло"];
+export const MODEL = "big";
 export const tools = ["web_search", "send_html_report"] satisfies ToolName[];
 
 export function buildInstructions(): string {
@@ -40,6 +41,7 @@ You have tools at your disposal. Whenever you need one, call the tool by name wi
 export const researcherAgent = {
   id,
   name,
+  MODEL,
   tools,
   buildInstructions,
 } satisfies AgentDefinition;
