@@ -1,11 +1,6 @@
 import { createDebug } from "@grammyjs/debug";
 import OpenAI from "@openai/openai";
-import {
-  getCallableAgentById,
-  normalAgent,
-  researcherAgent,
-} from "./agents/index.ts";
-import { buildDelegatedResearchInstructions } from "./agents/researcher.ts";
+import { getCallableAgentById, normalAgent } from "./agents/index.ts";
 import { APP_ENV } from "./env.ts";
 import * as agentTool from "./llm-tools/agent.ts";
 import {
@@ -16,7 +11,6 @@ import {
   SEARCH_CHAT_USAGE_LABEL,
   searchChatToolDefinition,
 } from "./llm-tools/chat.ts";
-import * as deepResearchTool from "./llm-tools/deep-research.ts";
 import * as gdeltTool from "./llm-tools/gdelt.ts";
 import * as marketTool from "./llm-tools/market.ts";
 import type { LlmHtmlReport } from "./llm-tools/reports.ts";
@@ -40,20 +34,10 @@ export const TOOL_DEFINITIONS = {
   read_last_messages: readLastMessagesToolDefinition,
   get_recent_news: gdeltTool.toolDefinition,
   send_html_report: reportsTool.toolDefinition,
-  generate_deep_research: deepResearchTool.toolDefinition,
   call_agent: agentTool.toolDefinition,
 } as const;
 
 export type ToolName = keyof typeof TOOL_DEFINITIONS;
-
-const EXCLUDED_RESEARCHER_TOOLS = new Set<ToolName>([
-  "generate_deep_research",
-  "get_recent_news",
-]);
-
-const RESEARCHER_TOOLS: ToolName[] = researcherAgent.tools.filter(
-  (tool) => !EXCLUDED_RESEARCHER_TOOLS.has(tool),
-);
 
 const FUNCTION_TOOL_RUNNERS = {
   fetch_ticker_price: tickerPriceTool.execute,
@@ -62,7 +46,6 @@ const FUNCTION_TOOL_RUNNERS = {
   read_last_messages: executeReadLastMessages,
   get_recent_news: gdeltTool.execute,
   send_html_report: reportsTool.execute,
-  generate_deep_research: deepResearchTool.createRunner(runDeepResearch),
   call_agent: agentTool.createRunner(runAgent),
 } satisfies Record<string, FunctionToolRunner>;
 
@@ -75,7 +58,6 @@ const TOOL_USAGE_LABELS: Partial<Record<ToolName, string>> = {
   search_chat: SEARCH_CHAT_USAGE_LABEL,
   read_last_messages: READ_LAST_MESSAGES_USAGE_LABEL,
   get_recent_news: gdeltTool.USAGE_LABEL,
-  generate_deep_research: deepResearchTool.USAGE_LABEL,
   call_agent: agentTool.USAGE_LABEL,
 };
 
@@ -171,14 +153,6 @@ type FunctionCallOutput = {
 const logDebug = createDebug("app:llm:debug");
 const logError = createDebug("app:llm:error");
 const MAX_LLM_RETRIES = 3;
-const RECENT_NEWS_BATCH_SIZE = 2;
-const RECENT_NEWS_BATCH_DELAY_MS = 2_000;
-
-type PreparedRecentNewsResult = {
-  query: string;
-  articles: unknown;
-  articleCount: number;
-};
 
 type LlmRequestState = {
   lastResponseId?: string;
@@ -189,83 +163,6 @@ type LlmRequestState = {
 
 function getSystemInstructions(): string {
   return normalAgent.buildInstructions();
-}
-
-function formatResearchList(title: string, values: string[]): string {
-  if (values.length === 0) {
-    return `${title}: none provided`;
-  }
-
-  return `${title}:\n${values.map((value) => `- ${value}`).join("\n")}`;
-}
-
-function buildResearcherRequest(
-  request: deepResearchTool.DeepResearchRequest,
-  preparedRecentNews: PreparedRecentNewsResult[],
-) {
-  return `Research task:
-${request.task}
-
-${formatResearchList("Focus", request.focus)}
-
-${formatResearchList("Additional instructions", request.instructions)}
-
-Prepared 24-hour recent-news search bundle:
-${JSON.stringify(preparedRecentNews, null, 2)}
-
-Required web_search queries:
-${request.webSearchQueries.map((query, index) => `${index + 1}. ${query}`).join("\n")}
-
-Research workflow requirements:
-- Treat the prepared recent-news bundle as pre-fetched evidence from get_recent_news. You do not have get_recent_news available; do not ask for it or claim you called it.
-- Run web_search for each of the 10 required web_search queries. Search them as distinct queries so coverage does not collapse into one generic search.
-- Use both the prepared recent-news evidence and your web_search findings in the report.
-- Prefer primary sources, filings, company materials, regulator pages, reputable financial/news outlets, analyst or market commentary, and credible opposing views.
-- Separate sourced facts from interpretation. Flag thin evidence, stale data, contradictions, and places where the search results are weak.
-
-Generate a complete HTML report with send_html_report. The HTML report must include these sections and subsections in this order:
-1. Executive TL;DR
-   - Bottom-line answer
-   - Confidence level and time horizon
-   - Most important caveat
-2. Research Method
-   - The 10 prepared recent-news queries and what they found
-   - The 10 web_search queries you ran and what each was meant to test
-   - Source quality notes and evidence gaps
-3. Current Situation
-   - What changed recently
-   - Key timeline and upcoming dates
-   - Stakeholders, incentives, and constraints
-4. Evidence Map
-   - Primary-source or company evidence
-   - Recent news evidence
-   - Market, sector, or macro context
-   - Expert, analyst, community, or sentiment signals
-5. Non-Obvious Insights
-   - Hidden facts or weak signals that are easy to miss
-   - Contradictions between sources
-   - What the consensus may be underestimating
-6. Scenarios
-   - Base case
-   - Upside case
-   - Downside case
-   - Triggers that would move the view between cases
-7. Recommendation
-   - Clear recommendation
-   - Best action now
-   - Watchlist triggers, dates, or thresholds
-   - What would invalidate the recommendation
-8. Risks And Uncertainties
-   - Known risks
-   - Unknowns or missing data
-   - How to monitor the risk
-9. Source Notes
-   - Most useful sources
-   - Sources that were noisy, promotional, stale, or low-confidence
-10. TL;DR At The Bottom
-   - 3-5 bullets that summarize the decision, evidence, and caveat
-
-After send_html_report, your normal text response must be a 2-3 sentence TL;DR of the report's conclusion, strongest evidence, and most important caveat. Do not respond with only "report attached" or similar.`;
 }
 
 function getClient(): OpenAI {
@@ -440,56 +337,6 @@ function parseJsonObject(data: string): Record<string, unknown> | null {
   } catch {
     return null;
   }
-}
-
-function parseJsonValue(data: string): unknown {
-  try {
-    return JSON.parse(data);
-  } catch {
-    return data;
-  }
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function getArrayLength(value: unknown): number {
-  return Array.isArray(value) ? value.length : 0;
-}
-
-async function fetchPreparedRecentNewsQuery(
-  query: string,
-): Promise<PreparedRecentNewsResult> {
-  const result = normalizeFunctionToolResult(
-    await gdeltTool.execute({ query }),
-  );
-  const articles = parseJsonValue(result.output);
-
-  return {
-    query,
-    articles,
-    articleCount: getArrayLength(articles),
-  };
-}
-
-async function fetchPreparedRecentNews(
-  queries: string[],
-): Promise<PreparedRecentNewsResult[]> {
-  const results: PreparedRecentNewsResult[] = [];
-
-  for (let index = 0; index < queries.length; index += RECENT_NEWS_BATCH_SIZE) {
-    const batch = queries.slice(index, index + RECENT_NEWS_BATCH_SIZE);
-    results.push(
-      ...(await Promise.all(batch.map(fetchPreparedRecentNewsQuery))),
-    );
-
-    if (index + RECENT_NEWS_BATCH_SIZE < queries.length) {
-      await sleep(RECENT_NEWS_BATCH_DELAY_MS);
-    }
-  }
-
-  return results;
 }
 
 function formatToolCallLog(call: FunctionToolCall): Record<string, unknown> {
@@ -866,58 +713,6 @@ async function requestLlmWithInstructions(
       sources,
     },
     tools: calledTools,
-  };
-}
-
-async function runDeepResearch(
-  researchRequest: deepResearchTool.DeepResearchRequest,
-  context?: LlmToolContext,
-): Promise<FunctionToolResult> {
-  const preparedRecentNews = await fetchPreparedRecentNews(
-    researchRequest.recentNewsQueries,
-  );
-  const result = await requestLlmWithInstructions(
-    buildResearcherRequest(researchRequest, preparedRecentNews),
-    RESEARCHER_TOOLS,
-    undefined,
-    { context },
-    buildDelegatedResearchInstructions(),
-  );
-  const output = JSON.stringify({
-    delegated: true,
-    researcher_response: result.response ?? "",
-    report_attached: Boolean(result.html_report),
-    recent_news_queries: researchRequest.recentNewsQueries,
-    recent_news_result_counts: preparedRecentNews.map((item) => ({
-      query: item.query,
-      article_count: item.articleCount,
-    })),
-    required_web_search_queries: researchRequest.webSearchQueries,
-    tools_used: result.tools,
-    web_search: result.web_search.used,
-  });
-
-  if (result.html_report) {
-    return {
-      output,
-      htmlReport: result.html_report,
-    };
-  }
-
-  return {
-    output: JSON.stringify({
-      delegated: true,
-      warning: "Researcher did not generate the required HTML report.",
-      researcher_response: result.response ?? "",
-      recent_news_queries: researchRequest.recentNewsQueries,
-      recent_news_result_counts: preparedRecentNews.map((item) => ({
-        query: item.query,
-        article_count: item.articleCount,
-      })),
-      required_web_search_queries: researchRequest.webSearchQueries,
-      tools_used: result.tools,
-      web_search: result.web_search.used,
-    }),
   };
 }
 

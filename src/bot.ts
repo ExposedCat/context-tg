@@ -1,10 +1,13 @@
 import { createDebug } from "@grammyjs/debug";
 import { Bot, type Context as GrammyContext } from "grammy";
 import { I18n, type I18nFlavor } from "grammy-i18n";
+import { run } from "grammy-runner";
 import { chatComposer } from "./features/chat.ts";
 import type { Database } from "./features/database.ts";
 import { messagesComposer } from "./features/messages.ts";
 import { stateComposer } from "./features/state.ts";
+
+const RUNNER_CONCURRENCY = 500;
 
 export type Context = GrammyContext &
   I18nFlavor & {
@@ -34,10 +37,13 @@ export function initBot(token: string, database: Database) {
 
   bot.catch((error) => logError("Grammy error", { error }));
 
-  return () =>
-    new Promise((resolve) =>
-      bot.start({
-        onStart: () => resolve(undefined),
-      }),
-    );
+  return async () => {
+    await bot.init();
+    await bot.api.deleteWebhook({ drop_pending_updates: true });
+
+    run(bot, {
+      runner: { fetch: { allowed_updates: [] } },
+      sink: { concurrency: RUNNER_CONCURRENCY },
+    });
+  };
 }
