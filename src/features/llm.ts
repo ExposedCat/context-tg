@@ -163,14 +163,8 @@ type FunctionCallOutput = {
   output: string;
 };
 
-type LabeledToolOutput = {
-  label: string;
-  output: string;
-};
-
 type FunctionToolCallResult = {
   toolOutput: FunctionCallOutput;
-  labeledOutput?: LabeledToolOutput;
 };
 
 const logDebug = createDebug("app:llm:debug");
@@ -178,8 +172,6 @@ const logError = createDebug("app:llm:error");
 const MAX_LLM_RETRIES = 3;
 const LLM_RATE_LIMIT_RETRY_DELAY_MS = 3000;
 const LLM_RATE_LIMIT_MAX_RETRIES = 5;
-const TOOL_USAGE_LABEL_MAX_LENGTH = 3900;
-
 type LlmRequestState = {
   lastResponseId?: string;
   receivedResponse: boolean;
@@ -360,33 +352,6 @@ function getIntermediateUsageLabel(response: ApiResponse): string | undefined {
   }
 
   return undefined;
-}
-
-function truncateToolUsageLabel(text: string): string {
-  if (text.length <= TOOL_USAGE_LABEL_MAX_LENGTH) {
-    return text;
-  }
-
-  return `${text.slice(0, TOOL_USAGE_LABEL_MAX_LENGTH)}\n...`;
-}
-
-function formatLabeledToolOutputs(
-  label: string | undefined,
-  outputs: LabeledToolOutput[],
-): string | undefined {
-  if (!label || outputs.length === 0) {
-    return label;
-  }
-
-  const matchingOutputs = outputs.filter((output) => output.label === label);
-
-  if (matchingOutputs.length === 0) {
-    return label;
-  }
-
-  return truncateToolUsageLabel(
-    [label, ...matchingOutputs.map((output) => output.output)].join("\n\n"),
-  );
 }
 
 function getFunctionToolCalls(response: ApiResponse): FunctionToolCall[] {
@@ -581,11 +546,8 @@ async function runFunctionToolCall(
     state.htmlReport = result.htmlReport;
   }
 
-  const label = TOOL_USAGE_LABELS[call.name];
-
   return {
     toolOutput: createToolOutput(call, result.output),
-    labeledOutput: label ? { label, output: result.output } : undefined,
   };
 }
 
@@ -749,15 +711,9 @@ async function resolveFunctionToolCalls(
         runFunctionToolCall(call, state, options.context),
       ),
     );
-    const labeledOutputs = toolCallResults
-      .map((result) => result.labeledOutput)
-      .filter((output) => output !== undefined);
     await options.onProgress?.({
       toolCallCount,
-      usageLabel: formatLabeledToolOutputs(
-        getIntermediateUsageLabel(response),
-        labeledOutputs,
-      ),
+      usageLabel: getIntermediateUsageLabel(response),
     });
 
     response = await createLlmResponseWithRetries(
