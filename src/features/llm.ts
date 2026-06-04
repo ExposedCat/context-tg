@@ -163,11 +163,22 @@ type FunctionCallOutput = {
   output: string;
 };
 
+type LabeledToolOutput = {
+  label: string;
+  output: string;
+};
+
+type FunctionToolCallResult = {
+  toolOutput: FunctionCallOutput;
+  labeledOutput?: LabeledToolOutput;
+};
+
 const logDebug = createDebug("app:llm:debug");
 const logError = createDebug("app:llm:error");
 const MAX_LLM_RETRIES = 3;
 const LLM_RATE_LIMIT_RETRY_DELAY_MS = 3000;
 const LLM_RATE_LIMIT_MAX_RETRIES = 5;
+const TOOL_USAGE_LABEL_MAX_LENGTH = 3900;
 
 type LlmRequestState = {
   lastResponseId?: string;
@@ -336,7 +347,7 @@ function getToolCallCount(response: ApiResponse): number {
 }
 
 function getIntermediateUsageLabel(response: ApiResponse): string | undefined {
-  if (response.output_text || getToolCallCount(response) === 0) {
+  if (getToolCallCount(response) === 0) {
     return undefined;
   }
 
@@ -349,6 +360,33 @@ function getIntermediateUsageLabel(response: ApiResponse): string | undefined {
   }
 
   return undefined;
+}
+
+function truncateToolUsageLabel(text: string): string {
+  if (text.length <= TOOL_USAGE_LABEL_MAX_LENGTH) {
+    return text;
+  }
+
+  return `${text.slice(0, TOOL_USAGE_LABEL_MAX_LENGTH)}\n...`;
+}
+
+function formatLabeledToolOutputs(
+  label: string | undefined,
+  outputs: LabeledToolOutput[],
+): string | undefined {
+  if (!label || outputs.length === 0) {
+    return label;
+  }
+
+  const matchingOutputs = outputs.filter((output) => output.label === label);
+
+  if (matchingOutputs.length === 0) {
+    return label;
+  }
+
+  return truncateToolUsageLabel(
+    [label, ...matchingOutputs.map((output) => output.output)].join("\n\n"),
+  );
 }
 
 function getFunctionToolCalls(response: ApiResponse): FunctionToolCall[] {
@@ -533,7 +571,7 @@ async function runFunctionToolCall(
   call: FunctionToolCall,
   state: LlmRequestState,
   context?: LlmToolContext,
-): Promise<FunctionCallOutput> {
+): Promise<FunctionToolCallResult> {
   const args = parseJsonObject(call.arguments);
   logDebug("Running tool call", formatToolCallLog(call));
   const runner = FUNCTION_TOOL_RUNNERS[call.name];
@@ -543,7 +581,12 @@ async function runFunctionToolCall(
     state.htmlReport = result.htmlReport;
   }
 
-  return createToolOutput(call, result.output);
+  const label = TOOL_USAGE_LABELS[call.name];
+
+  return {
+    toolOutput: createToolOutput(call, result.output),
+    labeledOutput: label ? { label, output: result.output } : undefined,
+  };
 }
 
 async function createLlmResponse(
@@ -701,15 +744,25 @@ async function resolveFunctionToolCalls(
       break;
     }
 
-    const toolOutputs = await Promise.all(
+    const toolCallResults = await Promise.all(
       functionCalls.map((call) =>
         runFunctionToolCall(call, state, options.context),
       ),
     );
+    const labeledOutputs = toolCallResults
+      .map((result) => result.labeledOutput)
+      .filter((output) => output !== undefined);
+    await options.onProgress?.({
+      toolCallCount,
+      usageLabel: formatLabeledToolOutputs(
+        getIntermediateUsageLabel(response),
+        labeledOutputs,
+      ),
+    });
 
     response = await createLlmResponseWithRetries(
       client,
-      toolOutputs,
+      toolCallResults.map((result) => result.toolOutput),
       tools,
       response.id,
       state,
