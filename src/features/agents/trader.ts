@@ -1,5 +1,4 @@
 import type { ToolName } from "../llm.ts";
-import { getMarketsState } from "../stocks.ts";
 import {
   buildFormattingInstructions,
   formatAgentNames,
@@ -12,25 +11,10 @@ export const name = ["трейдер лейло", "трейдейло", "trader 
 export const tools = [
   "web_search",
   "fetch_ticker_price",
+  "get_markets_state",
   "get_recent_news",
   "send_html_report",
 ] satisfies ToolName[];
-
-function formatMarketStateLine(exchange: "US" | "UK"): string {
-  const market = getMarketsState().exchanges.find(
-    (item) => item.exchange === exchange,
-  );
-
-  if (!market) {
-    return `${exchange} Market -> unknown now -> unknown in unknown`;
-  }
-
-  return `${exchange} Market -> ${market.currentState} now -> ${market.nextState} in ${market.timeUntilNextState.human}`;
-}
-
-function formatCurrentMarketData(): string {
-  return [formatMarketStateLine("US"), formatMarketStateLine("UK")].join("\n");
-}
 
 export function buildInstructions(): string {
   return joinPromptSections([
@@ -116,12 +100,11 @@ In a regular text response after the report, show each score value and a single 
 - Be specific with dates, expected events, and source claims when current sources mention them.
 - Do not answer with generic advice like "buy if you believe in the company" or "do not buy if you do not." Translate belief into concrete thesis checks.
 - Use fetch_ticker_price only for explicit ticker price checks or when price action is needed to judge a catalyst.
+- Use get_markets_state when market-session timing matters or when completing the Market state section.
 - Use get_recent_news for fresh 24-hour news context!
 - Use web_search when broader source verification, event timing, sentiment, filings, analyst context, or current market context is needed.
 - For trade ideas, include direction, thesis, overlooked insight, trigger/date, key conditions, risks, invalidation, and a brief confidence note.
 - For extensive analysis, use send_html_report.`,
-    `# Current Market Data
-${formatCurrentMarketData()}`,
     buildFormattingInstructions(),
   ]);
 }

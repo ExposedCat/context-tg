@@ -153,6 +153,8 @@ type FunctionCallOutput = {
 const logDebug = createDebug("app:llm:debug");
 const logError = createDebug("app:llm:error");
 const MAX_LLM_RETRIES = 3;
+const LLM_RATE_LIMIT_RETRY_DELAY_MS = 3000;
+const LLM_RATE_LIMIT_MAX_RETRIES = 5;
 
 type LlmRequestState = {
   lastResponseId?: string;
@@ -380,6 +382,32 @@ function getErrorObject(error: unknown): Record<string, unknown> | undefined {
   return error as Record<string, unknown>;
 }
 
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isRateLimitError(error: unknown): boolean {
+  const errorObject = getErrorObject(error);
+  const apiError = getErrorObject(errorObject?.error);
+  const values = [
+    error instanceof Error ? error.message : undefined,
+    errorObject?.code,
+    errorObject?.type,
+    apiError?.code,
+    apiError?.type,
+    apiError?.message,
+  ];
+
+  return (
+    errorObject?.status === 429 ||
+    values.some(
+      (value) =>
+        typeof value === "string" &&
+        /rate[_ -]?limit|too_many_requests/i.test(value),
+    )
+  );
+}
+
 function getErrorDetail(error: unknown): string {
   if (error instanceof LlmRequestError) {
     return error.details;
@@ -524,8 +552,10 @@ async function createLlmResponseWithRetries(
 ): Promise<ApiResponse> {
   let lastError: unknown;
   let currentResponseId = responseId;
+  let retryAttempts = 0;
+  let rateLimitRetries = 0;
 
-  for (let attempt = 0; attempt <= MAX_LLM_RETRIES; attempt += 1) {
+  while (true) {
     const immediate = !state.receivedResponse;
 
     try {
@@ -548,15 +578,29 @@ async function createLlmResponseWithRetries(
       return response;
     } catch (error) {
       lastError = error;
+      const rateLimited = isRateLimitError(error);
       const contentFiltered = isContentFilterError(error);
+      const retryingRateLimit =
+        rateLimited && rateLimitRetries < LLM_RATE_LIMIT_MAX_RETRIES;
+      const retrying =
+        retryingRateLimit ||
+        (retryAttempts < MAX_LLM_RETRIES && (!immediate || contentFiltered));
+
       logError("LLM response step failed", {
-        attempt,
+        retryAttempts,
+        rateLimitRetries,
         immediate,
-        retrying: attempt < MAX_LLM_RETRIES && (!immediate || contentFiltered),
+        retrying,
         responseId: currentResponseId,
         lastResponseId: state.lastResponseId,
         error,
       });
+
+      if (retryingRateLimit) {
+        rateLimitRetries += 1;
+        await delay(LLM_RATE_LIMIT_RETRY_DELAY_MS);
+        continue;
+      }
 
       if (immediate && contentFiltered) {
         if (!state.sentImmediateContentFilterWarning) {
@@ -564,10 +608,11 @@ async function createLlmResponseWithRetries(
           await options.onWarning?.(getErrorDetail(error));
         }
 
-        if (attempt >= MAX_LLM_RETRIES) {
+        if (retryAttempts >= MAX_LLM_RETRIES) {
           break;
         }
 
+        retryAttempts += 1;
         continue;
       }
 
@@ -580,9 +625,11 @@ async function createLlmResponseWithRetries(
         );
       }
 
-      if (attempt >= MAX_LLM_RETRIES) {
+      if (retryAttempts >= MAX_LLM_RETRIES) {
         break;
       }
+
+      retryAttempts += 1;
     }
   }
 
