@@ -6,6 +6,7 @@ import {
   normalAgent,
 } from "./agents/index.ts";
 import { APP_ENV } from "./env.ts";
+import { getLlmModelName } from "./llm-models.ts";
 import * as agentTool from "./llm-tools/agent.ts";
 import {
   executeReadLastMessages,
@@ -176,10 +177,6 @@ function getClient(): OpenAI {
     apiKey: APP_ENV.LLM_API_KEY,
     baseURL: APP_ENV.LLM_BASE_URL,
   });
-}
-
-function getLlmModelName(model: AgentModel): string {
-  return model === "small" ? APP_ENV.LLM_MODEL_SMALL : APP_ENV.LLM_MODEL;
 }
 
 function getToolDefinitions(tools: ToolName[]): ToolDefinition[] {
