@@ -2,8 +2,14 @@ import { Composer } from "grammy";
 import type { Context } from "../bot.ts";
 import {
   getLlmModelNames,
+  getReasoningEfforts,
+  getWebSearchSetting,
   isLlmModelTier,
+  isWebSearchSetting,
+  parseReasoningSetting,
   setLlmModelName,
+  setReasoningEffort,
+  setWebSearchSetting,
 } from "./llm-models.ts";
 
 export const stateComposer = new Composer<Context>();
@@ -14,6 +20,27 @@ function getModelCommandUsage(): string {
     "Usage: /model big NAME",
     "",
     `Current: small=${getLlmModelNames().small}, big=${getLlmModelNames().big}`,
+  ].join("\n");
+}
+
+function getReasoningCommandUsage(): string {
+  const reasoningEfforts = getReasoningEfforts();
+
+  return [
+    "Usage: /reasoning small null|none|minimal|low|medium|high|xhigh",
+    "Usage: /reasoning big null|none|minimal|low|medium|high|xhigh",
+    "",
+    `Current: small=${reasoningEfforts.small ?? "null"}, big=${
+      reasoningEfforts.big ?? "null"
+    }`,
+  ].join("\n");
+}
+
+function getWebSearchCommandUsage(): string {
+  return [
+    "Usage: /websearch off|low|medium|high",
+    "",
+    `Current: websearch=${getWebSearchSetting()}`,
   ].join("\n");
 }
 
@@ -44,4 +71,49 @@ stateComposer.command("model", async (ctx) => {
   const updatedModelName = setLlmModelName(tier, modelName);
 
   await ctx.reply(`Updated ${tier} model to ${updatedModelName}`);
+});
+
+stateComposer.command("reasoning", async (ctx) => {
+  const args = typeof ctx.match === "string" ? ctx.match.trim() : "";
+
+  if (!args) {
+    await ctx.reply(getReasoningCommandUsage());
+    return;
+  }
+
+  const [tier, rawEffort, ...extraParts] = args.split(/\s+/);
+
+  if (!isLlmModelTier(tier) || !rawEffort || extraParts.length > 0) {
+    await ctx.reply(getReasoningCommandUsage());
+    return;
+  }
+
+  const effort = parseReasoningSetting(rawEffort);
+
+  if (effort === undefined) {
+    await ctx.reply(getReasoningCommandUsage());
+    return;
+  }
+
+  const updatedEffort = setReasoningEffort(tier, effort);
+
+  await ctx.reply(`Updated ${tier} reasoning to ${updatedEffort ?? "null"}`);
+});
+
+stateComposer.command("websearch", async (ctx) => {
+  const setting = typeof ctx.match === "string" ? ctx.match.trim() : "";
+
+  if (!setting) {
+    await ctx.reply(getWebSearchCommandUsage());
+    return;
+  }
+
+  if (!isWebSearchSetting(setting)) {
+    await ctx.reply(getWebSearchCommandUsage());
+    return;
+  }
+
+  const updatedSetting = setWebSearchSetting(setting);
+
+  await ctx.reply(`Updated websearch to ${updatedSetting}`);
 });

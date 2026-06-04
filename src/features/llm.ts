@@ -6,7 +6,11 @@ import {
   normalAgent,
 } from "./agents/index.ts";
 import { APP_ENV } from "./env.ts";
-import { getLlmModelName } from "./llm-models.ts";
+import {
+  getLlmModelName,
+  getReasoningEffort,
+  isWebSearchEnabled,
+} from "./llm-models.ts";
 import * as agentTool from "./llm-tools/agent.ts";
 import {
   executeReadLastMessages,
@@ -32,7 +36,6 @@ export type { LlmHtmlReport } from "./llm-tools/reports.ts";
 export type { LlmToolContext } from "./llm-tools/types.ts";
 
 export const TOOL_DEFINITIONS = {
-  web_search: webSearchTool.toolDefinition,
   fetch_ticker_price: tickerPriceTool.toolDefinition,
   get_markets_state: marketTool.toolDefinition,
   search_chat: searchChatToolDefinition,
@@ -42,7 +45,7 @@ export const TOOL_DEFINITIONS = {
   call_agent: agentTool.toolDefinition,
 } as const;
 
-export type ToolName = keyof typeof TOOL_DEFINITIONS;
+export type ToolName = "web_search" | keyof typeof TOOL_DEFINITIONS;
 
 const FUNCTION_TOOL_RUNNERS = {
   fetch_ticker_price: tickerPriceTool.execute,
@@ -66,7 +69,10 @@ const TOOL_USAGE_LABELS: Partial<Record<ToolName, string>> = {
   call_agent: agentTool.USAGE_LABEL,
 };
 
-export const DEFAULT_LLM_TOOLS = Object.keys(TOOL_DEFINITIONS) as ToolName[];
+export const DEFAULT_LLM_TOOLS = [
+  "web_search",
+  ...Object.keys(TOOL_DEFINITIONS),
+] as ToolName[];
 
 export type LlmProgress = {
   toolCallCount: number;
@@ -101,7 +107,9 @@ export type LlmResponse = {
   tools: ToolName[];
 };
 
-type ToolDefinition = (typeof TOOL_DEFINITIONS)[ToolName];
+type ToolDefinition =
+  | ReturnType<typeof webSearchTool.createToolDefinition>
+  | (typeof TOOL_DEFINITIONS)[keyof typeof TOOL_DEFINITIONS];
 
 type ApiResponse = {
   id?: string;
@@ -180,11 +188,25 @@ function getClient(): OpenAI {
 }
 
 function getToolDefinitions(tools: ToolName[]): ToolDefinition[] {
-  return tools.map((tool) => TOOL_DEFINITIONS[tool]);
+  const definitions: ToolDefinition[] = [];
+
+  for (const tool of tools) {
+    if (tool === "web_search") {
+      if (isWebSearchEnabled()) {
+        definitions.push(webSearchTool.createToolDefinition());
+      }
+
+      continue;
+    }
+
+    definitions.push(TOOL_DEFINITIONS[tool]);
+  }
+
+  return definitions;
 }
 
 function getResponseInclude(tools: ToolName[]) {
-  return tools.includes("web_search")
+  return tools.includes("web_search") && isWebSearchEnabled()
     ? ["web_search_call.action.sources" as const]
     : undefined;
 }
@@ -532,6 +554,8 @@ async function createLlmResponse(
   model: AgentModel = normalAgent.MODEL,
   instructions = getSystemInstructions(),
 ): Promise<ApiResponse> {
+  const reasoningEffort = getReasoningEffort(model);
+
   return await client.responses.create({
     model: getLlmModelName(model),
     input,
@@ -541,9 +565,9 @@ async function createLlmResponse(
     tool_choice: "auto",
     include: getResponseInclude(tools),
     previous_response_id: responseId == null ? undefined : responseId,
-    reasoning: {
-      effort: "high",
-    },
+    ...(reasoningEffort === null
+      ? {}
+      : { reasoning: { effort: reasoningEffort } }),
   });
 }
 
