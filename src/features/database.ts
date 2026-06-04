@@ -2,10 +2,16 @@ import { Database as SqliteDatabase } from "@db/sqlite";
 import { Kysely } from "@kysely/kysely";
 import { DenoSqlite3Dialect } from "@marshift/kysely-deno-sqlite3";
 import { APP_ENV } from "./env.ts";
+import {
+  type LlmSettingsTable,
+  loadLlmSettings,
+  migrateLlmSettings,
+} from "./llm-models.ts";
 import { migrateThreads, type ThreadsTable } from "./threads.ts";
 
 export type DatabaseSchema = {
   threads: ThreadsTable;
+  llm_settings: LlmSettingsTable;
 };
 
 export type Database = Kysely<DatabaseSchema>;
@@ -40,6 +46,8 @@ export function initDatabase() {
     });
 
     await migrateThreads(database);
+    await migrateLlmSettings(database);
+    await loadLlmSettings(database);
 
     return database;
   };

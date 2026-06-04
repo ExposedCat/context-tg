@@ -7,9 +7,9 @@ import {
   isLlmModelTier,
   isWebSearchSetting,
   parseReasoningSetting,
-  setLlmModelName,
-  setReasoningEffort,
-  setWebSearchSetting,
+  persistLlmModelName,
+  persistReasoningEffort,
+  persistWebSearchSetting,
 } from "./llm-models.ts";
 
 export const stateComposer = new Composer<Context>();
@@ -68,7 +68,11 @@ stateComposer.command("model", async (ctx) => {
     return;
   }
 
-  const updatedModelName = setLlmModelName(tier, modelName);
+  const updatedModelName = await persistLlmModelName(
+    ctx.database,
+    tier,
+    modelName,
+  );
 
   await ctx.reply(`Updated ${tier} model to ${updatedModelName}`);
 });
@@ -95,7 +99,11 @@ stateComposer.command("reasoning", async (ctx) => {
     return;
   }
 
-  const updatedEffort = setReasoningEffort(tier, effort);
+  const updatedEffort = await persistReasoningEffort(
+    ctx.database,
+    tier,
+    effort,
+  );
 
   await ctx.reply(`Updated ${tier} reasoning to ${updatedEffort ?? "null"}`);
 });
@@ -113,7 +121,7 @@ stateComposer.command("websearch", async (ctx) => {
     return;
   }
 
-  const updatedSetting = setWebSearchSetting(setting);
+  const updatedSetting = await persistWebSearchSetting(ctx.database, setting);
 
   await ctx.reply(`Updated websearch to ${updatedSetting}`);
 });
