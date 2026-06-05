@@ -56,7 +56,11 @@ const linkPreviewOptions = {
 };
 const activeTaskControllers = new Map<string, AbortController>();
 
-type CancelTaskResult = "canceled" | "not_found" | "not_working";
+type CancelTaskResult =
+  | "canceled"
+  | "canceled_without_controller"
+  | "not_found"
+  | "not_working";
 type TaskChat = {
   id: number;
   username?: string;
@@ -206,7 +210,7 @@ export async function cancelTask(
   controller?.abort(new DOMException("Task canceled", "AbortError"));
   await completeTask(database, taskKey, "canceled");
 
-  return "canceled";
+  return controller ? "canceled" : "canceled_without_controller";
 }
 
 export async function listRecentTasks(
@@ -460,12 +464,21 @@ export async function replyWithCancelTask(
     chat_id: ctx.chat.id,
     message_id: messageId,
   });
+
+  if (result === "canceled") {
+    return;
+  }
+
   const response =
-    result === "canceled"
+    result === "canceled_without_controller"
       ? "Canceled."
       : result === "not_working"
         ? "Task is not working."
         : "Task not found.";
 
-  await ctx.reply(response);
+  await ctx.reply(response, {
+    reply_parameters: {
+      message_id: messageId,
+    },
+  });
 }

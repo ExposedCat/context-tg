@@ -851,17 +851,16 @@ async function handleChatRequest(
     }
 
     if (taskStatus === "canceled") {
-      if (resumable) {
-        await ctx.reply(
-          `Canceled. Resume: ${getResumeCommand(message.message_id)}`,
-          {
-            ...linkPreviewOptions,
-            reply_parameters: {
-              message_id: message.message_id,
-            },
-          },
-        );
-      }
+      const canceledResponse = resumable
+        ? `Canceled. Resume: ${getResumeCommand(message.message_id)}`
+        : "Canceled.";
+
+      await ctx.reply(canceledResponse, {
+        ...linkPreviewOptions,
+        reply_parameters: {
+          message_id: message.message_id,
+        },
+      });
       return;
     }
 
