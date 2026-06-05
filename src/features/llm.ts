@@ -182,15 +182,16 @@ function getClient(): OpenAI {
   });
 }
 
+function getExposedTools(tools: ToolName[]): ToolName[] {
+  return tools.filter((tool) => tool !== "web_search" || isWebSearchEnabled());
+}
+
 function getToolDefinitions(tools: ToolName[]): ToolDefinition[] {
   const definitions: ToolDefinition[] = [];
 
-  for (const tool of tools) {
+  for (const tool of getExposedTools(tools)) {
     if (tool === "web_search") {
-      if (isWebSearchEnabled()) {
-        definitions.push(webSearchTool.createToolDefinition());
-      }
-
+      definitions.push(webSearchTool.createToolDefinition());
       continue;
     }
 
@@ -201,9 +202,23 @@ function getToolDefinitions(tools: ToolName[]): ToolDefinition[] {
 }
 
 function getResponseInclude(tools: ToolName[]) {
-  return tools.includes("web_search") && isWebSearchEnabled()
+  return getExposedTools(tools).includes("web_search")
     ? ["web_search_call.action.sources" as const]
     : undefined;
+}
+
+function withToolAvailabilityInstructions(
+  instructions: string,
+  tools: ToolName[],
+): string {
+  const exposedTools = getExposedTools(tools);
+  const toolList = exposedTools.length > 0 ? exposedTools.join(", ") : "none";
+
+  return `${instructions}
+
+# Available Runtime Tools
+The tool interface currently exposes exactly these tools: ${toolList}.
+Only call tools that are exposed through the tool interface. If a tool is not exposed here, do not write its name, JSON arguments, or pseudo tool call syntax in a normal response; explain briefly that the tool is unavailable.`;
 }
 
 function isOutputText(content: unknown): content is OutputTextContent {
@@ -569,7 +584,7 @@ async function createLlmResponse(
     {
       model: getLlmModelName(model),
       input,
-      instructions,
+      instructions: withToolAvailabilityInstructions(instructions, tools),
       // temperature: APP_ENV.LLM_TEMPERATURE,
       tools: getToolDefinitions(tools),
       tool_choice: "auto",

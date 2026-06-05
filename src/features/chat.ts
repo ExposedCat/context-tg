@@ -676,6 +676,11 @@ async function handleChatRequest(
     const agent: AgentDefinition = explicitAgent ?? threadAgent;
     activeAgent = agent;
     const toolUsage = await getUsageStatus(ctx.database, chatId, "tool_usages");
+
+    if (agent.tools.length > 0 && toolUsage.used >= toolUsage.quota) {
+      throw new Error(formatQuotaExceededResponse("tool_usages", toolUsage));
+    }
+
     const imageUsageRemaining = await hasUsageRemaining(
       ctx.database,
       chatId,
