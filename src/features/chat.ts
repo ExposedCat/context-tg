@@ -485,7 +485,10 @@ function filterToolsForUsage(
       return false;
     }
 
-    if (tool === "send_report" && !options.imageUsageRemaining) {
+    if (
+      (tool === "send_report" || tool === "send_trading_report") &&
+      !options.imageUsageRemaining
+    ) {
       return false;
     }
 

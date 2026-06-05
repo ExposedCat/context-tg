@@ -21,7 +21,8 @@ export type TaskKey = Pick<Task, "chat_id" | "message_id">;
 export type TaskStatus = "working" | "finished" | "failed" | "canceled";
 
 const RECENT_TASKS_LIMIT = 5;
-const TASK_LABEL_LENGTH = 15;
+const TASK_LABEL_LENGTH = 40;
+const MILLISECONDS_TIMESTAMP_MINIMUM = 1_000_000_000_000;
 const STATUS_EMOJI_IDS = {
   working: {
     id: "6113685078825505075",
@@ -48,6 +49,10 @@ const linkPreviewOptions = {
 const activeTaskControllers = new Map<string, AbortController>();
 
 type CancelTaskResult = "canceled" | "not_found" | "not_working";
+type TaskChat = {
+  id: number;
+  username?: string;
+};
 
 export async function migrateTasks(database: Database) {
   await database.schema
@@ -193,7 +198,11 @@ function padDatePart(value: number): string {
 }
 
 function formatTaskDate(timestamp: number): string {
-  const date = new Date(timestamp);
+  const normalizedTimestamp =
+    Math.abs(timestamp) < MILLISECONDS_TIMESTAMP_MINIMUM
+      ? timestamp * 1000
+      : timestamp;
+  const date = new Date(normalizedTimestamp);
   const year = date.getFullYear();
   const month = padDatePart(date.getMonth() + 1);
   const day = padDatePart(date.getDate());
@@ -203,8 +212,18 @@ function formatTaskDate(timestamp: number): string {
   return `${year}-${month}-${day} ${hours}:${minutes}`;
 }
 
-function getTaskMessageLink(task: Task): string {
-  return `https://t.me/${task.chat_id}/${task.message_id}`;
+function getTaskMessageLink(task: Task, chat: TaskChat): string {
+  if (chat.username) {
+    return `https://t.me/${chat.username}/${task.message_id}`;
+  }
+
+  const chatId = String(chat.id);
+
+  if (chatId.startsWith("-100")) {
+    return `https://t.me/c/${chatId.slice(4)}/${task.message_id}`;
+  }
+
+  return `tg://openmessage?chat_id=${task.chat_id}&message_id=${task.message_id}`;
 }
 
 function getTaskStatusEmoji(task: Task, useCustomEmoji: boolean): string {
@@ -219,35 +238,40 @@ function getCancelCommand(task: Task): string {
   return `/cancel_${task.message_id}`;
 }
 
-function formatTaskLine(task: Task, useCustomEmoji: boolean): string {
+function formatTaskLine(
+  task: Task,
+  chat: TaskChat,
+  useCustomEmoji: boolean,
+): string {
   const taskEmoji = getTaskStatusEmoji(task, useCustomEmoji);
   const taskText = escapeHtml(truncateTaskText(task.task_text));
-  const taskLink = escapeHtmlAttribute(getTaskMessageLink(task));
+  const taskLink = escapeHtmlAttribute(getTaskMessageLink(task, chat));
   const startedAt = formatTaskDate(task.started_at);
-  const parts = [
-    `${taskEmoji} <a href="${taskLink}">${taskText}</a>`,
-    startedAt,
-  ];
+  const firstLine = `${taskEmoji} <a href="${taskLink}">${taskText}</a>`;
+  const secondLineParts = [startedAt];
 
   if (task.finished_at !== null) {
-    parts.push(formatTaskDate(task.finished_at));
+    secondLineParts.push(formatTaskDate(task.finished_at));
   }
 
-  parts.push(getCancelCommand(task));
+  secondLineParts.push(getCancelCommand(task));
 
-  return parts.join(" - ");
+  return `${firstLine}\n${secondLineParts.join(" - ")}`;
 }
 
-export function formatTasksList(tasks: Task[]): string {
-  return formatTasksListWithOptions(tasks, true);
+export function formatTasksList(tasks: Task[], chat: TaskChat): string {
+  return formatTasksListWithOptions(tasks, chat, true);
 }
 
 function formatTasksListWithOptions(
   tasks: Task[],
+  chat: TaskChat,
   useCustomEmoji: boolean,
 ): string {
   return tasks.length > 0
-    ? tasks.map((task) => formatTaskLine(task, useCustomEmoji)).join("\n")
+    ? tasks
+        .map((task) => formatTaskLine(task, chat, useCustomEmoji))
+        .join("\n\n")
     : "No tasks yet.";
 }
 
@@ -259,12 +283,12 @@ export async function replyWithRecentTasks(ctx: Context): Promise<void> {
   const tasks = await listRecentTasks(ctx.database, ctx.chat.id);
 
   try {
-    await ctx.reply(formatTasksList(tasks), {
+    await ctx.reply(formatTasksList(tasks, ctx.chat), {
       ...linkPreviewOptions,
       parse_mode: "HTML",
     });
   } catch {
-    await ctx.reply(formatTasksListWithOptions(tasks, false), {
+    await ctx.reply(formatTasksListWithOptions(tasks, ctx.chat, false), {
       ...linkPreviewOptions,
       parse_mode: "HTML",
     });

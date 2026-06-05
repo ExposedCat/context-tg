@@ -26,7 +26,7 @@ type ReportSource = {
   url: string;
 };
 
-type ReportCompanyInfo = {
+type ReportCompanyData = {
   uniqueness: string;
   capitalization: string;
   revenue: string;
@@ -44,9 +44,26 @@ export type LlmReport = {
 type StructuredReport = {
   title: string;
   filename: string;
-  companyInfo: ReportCompanyInfo;
   sections: ReportSection[];
   sources: ReportSource[];
+};
+
+type TradingSubsectionInput = {
+  elaboration: string;
+  bullets: string[];
+};
+
+type TradingScoreInput = {
+  value: string;
+  note: string;
+};
+
+type TradingReport = StructuredReport & {
+  companyData: ReportCompanyData;
+};
+
+type RenderableReport = StructuredReport & {
+  companyData?: ReportCompanyData;
 };
 
 const emptyScoreDescription =
@@ -102,7 +119,7 @@ export const toolDefinition = {
   type: "function",
   name: "send_report",
   description:
-    "Attach a long research report. Use this only for long research purposes when the report is too large or rich for a normal chat reply. Send structured JSON sections only; the app will turn them into a polished predefined HTML document. After using this tool, the normal assistant response must be a 2-3 sentence TL;DR of the report's conclusion, strongest evidence, and most important caveat; do not respond with only a generic attachment notice.",
+    "Attach a long general research report. Use this only for broad research when the report is too large or rich for a normal chat reply. Send structured JSON sections only, without company data or HTML; the app will turn them into a polished predefined HTML document. After using this tool, the normal assistant response must be a 2-3 sentence TL;DR of the report's conclusion, strongest evidence, and most important caveat; do not respond with only a generic attachment notice.",
   parameters: {
     type: "object",
     properties: {
@@ -114,54 +131,6 @@ export const toolDefinition = {
         type: "string",
         description:
           "A short filename for the report. The bot will normalize it and ensure it uses the .html extension.",
-      },
-      company_info: {
-        type: "object",
-        description:
-          "Company metrics for company or ticker reports. Use empty strings for every field when the report is not about a company.",
-        properties: {
-          uniqueness: {
-            type: "string",
-            description:
-              "What makes the company differentiated, if anything. Mention if there is no clear uniqueness.",
-          },
-          capitalization: {
-            type: "string",
-            description:
-              "Market capitalization or relevant capitalization context.",
-          },
-          revenue: {
-            type: "string",
-            description: "Most relevant recent revenue figure.",
-          },
-          annual_revenue_growth: {
-            type: "string",
-            description:
-              "Annual revenue growth, including period/year when known.",
-          },
-          pe_ratio: {
-            type: "string",
-            description: "Trailing P/E ratio or N/A with a short reason.",
-          },
-          forward_pe_ratio: {
-            type: "string",
-            description: "Forward P/E ratio or N/A with a short reason.",
-          },
-          gross_margin: {
-            type: "string",
-            description: "Gross margin, including period/year when known.",
-          },
-        },
-        required: [
-          "uniqueness",
-          "capitalization",
-          "revenue",
-          "annual_revenue_growth",
-          "pe_ratio",
-          "forward_pe_ratio",
-          "gross_margin",
-        ],
-        additionalProperties: false,
       },
       sections: {
         type: "array",
@@ -219,7 +188,222 @@ export const toolDefinition = {
         },
       },
     },
-    required: ["title", "filename", "company_info", "sections", "sources"],
+    required: ["title", "filename", "sections", "sources"],
+    additionalProperties: false,
+  },
+  strict: true,
+} as const;
+
+const companyDataSchema = {
+  type: "object",
+  description:
+    "Company data shown at the top of the trading report. Use N/A plus a short reason when a metric is not meaningful or not found.",
+  properties: {
+    uniqueness: {
+      type: "string",
+      description:
+        "What makes the company differentiated, if anything. Mention if there is no clear uniqueness.",
+    },
+    capitalization: {
+      type: "string",
+      description: "Market capitalization or relevant capitalization context.",
+    },
+    revenue: {
+      type: "string",
+      description: "Most relevant recent revenue figure.",
+    },
+    annual_revenue_growth: {
+      type: "string",
+      description: "Annual revenue growth, including period/year when known.",
+    },
+    pe_ratio: {
+      type: "string",
+      description: "Trailing P/E ratio or N/A with a short reason.",
+    },
+    forward_pe_ratio: {
+      type: "string",
+      description: "Forward P/E ratio or N/A with a short reason.",
+    },
+    gross_margin: {
+      type: "string",
+      description: "Gross margin, including period/year when known.",
+    },
+  },
+  required: [
+    "uniqueness",
+    "capitalization",
+    "revenue",
+    "annual_revenue_growth",
+    "pe_ratio",
+    "forward_pe_ratio",
+    "gross_margin",
+  ],
+  additionalProperties: false,
+} as const;
+
+const tradingSubsectionSchema = {
+  type: "object",
+  properties: {
+    elaboration: {
+      type: "string",
+      description:
+        "Concrete evidence, dates, source type, interpretation, and confidence limits for this required subsection.",
+    },
+    bullets: {
+      type: "array",
+      description: "Important points for this subsection. Use [] if none.",
+      items: { type: "string" },
+    },
+  },
+  required: ["elaboration", "bullets"],
+  additionalProperties: false,
+} as const;
+
+const tradingScoreSchema = {
+  type: "object",
+  properties: {
+    value: {
+      type: "string",
+      enum: ["POOR", "MEDIOCRE", "GREAT"],
+      description: "Required score value.",
+    },
+    note: {
+      type: "string",
+      description:
+        "One short sentence explaining the score through the lens of entry quality right now.",
+    },
+  },
+  required: ["value", "note"],
+  additionalProperties: false,
+} as const;
+
+export const tradingToolDefinition = {
+  type: "function",
+  name: "send_trading_report",
+  description:
+    "Attach a trading research report with the exact required scorecard structure. Use this for company, ticker, stock, or trade-analysis research. Do not send generic sections or HTML; fill the fixed company news, market news, market state, company scope news, final view, company data, and sources fields. After using this tool, the normal assistant response must show each score value and summarize the resulting action in one useful sentence.",
+  parameters: {
+    type: "object",
+    properties: {
+      title: {
+        type: "string",
+        description: "Human-readable trading report title.",
+      },
+      filename: {
+        type: "string",
+        description:
+          "A short filename for the report. The bot will normalize it and ensure it uses the .html extension.",
+      },
+      company_data: companyDataSchema,
+      company_news: {
+        type: "object",
+        properties: {
+          company: tradingSubsectionSchema,
+          reportings_and_earnings: tradingSubsectionSchema,
+          praises_and_complaints: tradingSubsectionSchema,
+          collaborations: tradingSubsectionSchema,
+          misc: tradingSubsectionSchema,
+          state_score: tradingScoreSchema,
+        },
+        required: [
+          "company",
+          "reportings_and_earnings",
+          "praises_and_complaints",
+          "collaborations",
+          "misc",
+          "state_score",
+        ],
+        additionalProperties: false,
+      },
+      market_news: {
+        type: "object",
+        properties: {
+          events: tradingSubsectionSchema,
+          talks_and_postings: tradingSubsectionSchema,
+          misc: tradingSubsectionSchema,
+          background_score: tradingScoreSchema,
+        },
+        required: ["events", "talks_and_postings", "misc", "background_score"],
+        additionalProperties: false,
+      },
+      market_state: {
+        type: "object",
+        properties: {
+          evaluation: tradingSubsectionSchema,
+          sentiment: tradingSubsectionSchema,
+          misc: tradingSubsectionSchema,
+          market_score: tradingScoreSchema,
+        },
+        required: ["evaluation", "sentiment", "misc", "market_score"],
+        additionalProperties: false,
+      },
+      company_scope_news: {
+        type: "object",
+        properties: {
+          industry: tradingSubsectionSchema,
+          sentiments: tradingSubsectionSchema,
+          competitors: tradingSubsectionSchema,
+          misc: tradingSubsectionSchema,
+          industry_score: tradingScoreSchema,
+        },
+        required: [
+          "industry",
+          "sentiments",
+          "competitors",
+          "misc",
+          "industry_score",
+        ],
+        additionalProperties: false,
+      },
+      final_view: {
+        type: "object",
+        properties: {
+          content: {
+            type: "string",
+            description:
+              "Concise actionable trade view with preferred action, time horizon, trigger or condition, strongest opposing argument, invalidation facts, and confidence.",
+          },
+          bullets: {
+            type: "array",
+            description: "Optional compact action points. Use [] if none.",
+            items: { type: "string" },
+          },
+        },
+        required: ["content", "bullets"],
+        additionalProperties: false,
+      },
+      sources: {
+        type: "array",
+        description:
+          "Source links used in the report. Use [] if sources are already covered by chat citations or no source links are needed.",
+        items: {
+          type: "object",
+          properties: {
+            title: {
+              type: "string",
+              description: "Source label or title.",
+            },
+            url: {
+              type: "string",
+              description: "Source URL.",
+            },
+          },
+          required: ["title", "url"],
+          additionalProperties: false,
+        },
+      },
+    },
+    required: [
+      "title",
+      "filename",
+      "company_data",
+      "company_news",
+      "market_news",
+      "market_state",
+      "company_scope_news",
+      "final_view",
+      "sources",
+    ],
     additionalProperties: false,
   },
   strict: true,
@@ -313,17 +497,17 @@ function parseSource(value: unknown): ReportSource | undefined {
   };
 }
 
-function parseCompanyInfo(value: unknown): ReportCompanyInfo {
-  const companyInfo = asRecord(value);
+function parseCompanyData(value: unknown): ReportCompanyData {
+  const companyData = asRecord(value);
 
   return {
-    uniqueness: asString(companyInfo?.uniqueness),
-    capitalization: asString(companyInfo?.capitalization),
-    revenue: asString(companyInfo?.revenue),
-    annualRevenueGrowth: asString(companyInfo?.annual_revenue_growth),
-    peRatio: asString(companyInfo?.pe_ratio),
-    forwardPeRatio: asString(companyInfo?.forward_pe_ratio),
-    grossMargin: asString(companyInfo?.gross_margin),
+    uniqueness: asString(companyData?.uniqueness),
+    capitalization: asString(companyData?.capitalization),
+    revenue: asString(companyData?.revenue),
+    annualRevenueGrowth: asString(companyData?.annual_revenue_growth),
+    peRatio: asString(companyData?.pe_ratio),
+    forwardPeRatio: asString(companyData?.forward_pe_ratio),
+    grossMargin: asString(companyData?.gross_margin),
   };
 }
 
@@ -331,13 +515,189 @@ function parseReport(args: Record<string, unknown> | null): StructuredReport {
   return {
     title: asString(args?.title) || "Report",
     filename: normalizeReportFilename(args?.filename),
-    companyInfo: parseCompanyInfo(args?.company_info),
     sections: Array.isArray(args?.sections)
       ? args.sections.flatMap((item) => {
           const parsed = parseSection(item);
           return parsed?.title ? [parsed] : [];
         })
       : [],
+    sources: Array.isArray(args?.sources)
+      ? args.sources.flatMap((item) => {
+          const parsed = parseSource(item);
+          return parsed ? [parsed] : [];
+        })
+      : [],
+  };
+}
+
+function parseTradingSubsection(value: unknown): TradingSubsectionInput {
+  const subsection = asRecord(value);
+
+  return {
+    elaboration: asString(subsection?.elaboration),
+    bullets: asStringArray(subsection?.bullets),
+  };
+}
+
+function parseTradingScore(value: unknown): TradingScoreInput {
+  const score = asRecord(value);
+  const scoreValue = asString(score?.value).toUpperCase();
+
+  return {
+    value: ["POOR", "MEDIOCRE", "GREAT"].includes(scoreValue) ? scoreValue : "",
+    note: asString(score?.note),
+  };
+}
+
+function buildTradingSubsection(
+  title: string,
+  subsection: TradingSubsectionInput,
+): ReportSubsection {
+  return {
+    title,
+    content: subsection.elaboration,
+    bullets: subsection.bullets,
+    score: { label: "", value: "", note: "" },
+  };
+}
+
+function buildTradingScore(
+  label: string,
+  score: TradingScoreInput,
+): ReportScore {
+  return {
+    label,
+    value: score.value,
+    note: score.note,
+  };
+}
+
+function parseTradingReport(
+  args: Record<string, unknown> | null,
+): TradingReport {
+  const companyNews = asRecord(args?.company_news);
+  const marketNews = asRecord(args?.market_news);
+  const marketState = asRecord(args?.market_state);
+  const companyScopeNews = asRecord(args?.company_scope_news);
+  const finalView = asRecord(args?.final_view);
+
+  return {
+    title: asString(args?.title) || "Trading Report",
+    filename: normalizeReportFilename(args?.filename),
+    companyData: parseCompanyData(args?.company_data),
+    sections: [
+      {
+        title: "Company news",
+        content: "",
+        bullets: [],
+        score: buildTradingScore(
+          "State Score",
+          parseTradingScore(companyNews?.state_score),
+        ),
+        subsections: [
+          buildTradingSubsection(
+            "Company",
+            parseTradingSubsection(companyNews?.company),
+          ),
+          buildTradingSubsection(
+            "Reportings & Earnings",
+            parseTradingSubsection(companyNews?.reportings_and_earnings),
+          ),
+          buildTradingSubsection(
+            "Praises & Complaints",
+            parseTradingSubsection(companyNews?.praises_and_complaints),
+          ),
+          buildTradingSubsection(
+            "Collaborations",
+            parseTradingSubsection(companyNews?.collaborations),
+          ),
+          buildTradingSubsection(
+            "Misc",
+            parseTradingSubsection(companyNews?.misc),
+          ),
+        ],
+      },
+      {
+        title: "Market news",
+        content: "",
+        bullets: [],
+        score: buildTradingScore(
+          "Background Score",
+          parseTradingScore(marketNews?.background_score),
+        ),
+        subsections: [
+          buildTradingSubsection(
+            "Events",
+            parseTradingSubsection(marketNews?.events),
+          ),
+          buildTradingSubsection(
+            "Talks & Postings",
+            parseTradingSubsection(marketNews?.talks_and_postings),
+          ),
+          buildTradingSubsection(
+            "Misc",
+            parseTradingSubsection(marketNews?.misc),
+          ),
+        ],
+      },
+      {
+        title: "Market state",
+        content: "",
+        bullets: [],
+        score: buildTradingScore(
+          "Market Score",
+          parseTradingScore(marketState?.market_score),
+        ),
+        subsections: [
+          buildTradingSubsection(
+            "Evaluation",
+            parseTradingSubsection(marketState?.evaluation),
+          ),
+          buildTradingSubsection(
+            "Sentiment",
+            parseTradingSubsection(marketState?.sentiment),
+          ),
+          buildTradingSubsection(
+            "Misc",
+            parseTradingSubsection(marketState?.misc),
+          ),
+        ],
+      },
+      {
+        title: "Company scope news",
+        content: "",
+        bullets: [],
+        score: buildTradingScore(
+          "Industry Score",
+          parseTradingScore(companyScopeNews?.industry_score),
+        ),
+        subsections: [
+          buildTradingSubsection(
+            "Industry",
+            parseTradingSubsection(companyScopeNews?.industry),
+          ),
+          buildTradingSubsection(
+            "Sentiments",
+            parseTradingSubsection(companyScopeNews?.sentiments),
+          ),
+          buildTradingSubsection(
+            "Competitors",
+            parseTradingSubsection(companyScopeNews?.competitors),
+          ),
+          buildTradingSubsection(
+            "Misc",
+            parseTradingSubsection(companyScopeNews?.misc),
+          ),
+        ],
+      },
+      {
+        title: "Final view",
+        content: asString(finalView?.content),
+        bullets: asStringArray(finalView?.bullets),
+        score: { label: "", value: "", note: "" },
+        subsections: [],
+      },
+    ],
     sources: Array.isArray(args?.sources)
       ? args.sources.flatMap((item) => {
           const parsed = parseSource(item);
@@ -440,8 +800,8 @@ function renderSection(section: ReportSection, index: number): string {
   </section>`;
 }
 
-function hasCompanyInfo(companyInfo: ReportCompanyInfo): boolean {
-  return Object.values(companyInfo).some((value) => value.length > 0);
+function hasCompanyData(companyData: ReportCompanyData): boolean {
+  return Object.values(companyData).some((value) => value.length > 0);
 }
 
 function renderCompanyMetric(label: string, value: string): string {
@@ -455,26 +815,26 @@ function renderCompanyMetric(label: string, value: string): string {
     </div>`;
 }
 
-function renderCompanyInfo(companyInfo: ReportCompanyInfo): string {
-  if (!hasCompanyInfo(companyInfo)) {
+function renderCompanyData(companyData: ReportCompanyData | undefined): string {
+  if (!companyData || !hasCompanyData(companyData)) {
     return "";
   }
 
   return `<section class="company-info">
     <div class="company-info-heading">
-      <span class="report-label">Company Info</span>
-      <p>${escapeHtml(companyInfo.uniqueness || "No clear uniqueness found.")}</p>
+      <span class="report-label">Company Data</span>
+      <p>${escapeHtml(companyData.uniqueness || "No clear uniqueness found.")}</p>
     </div>
     <div class="company-metrics">
-      ${renderCompanyMetric("Capitalization", companyInfo.capitalization)}
-      ${renderCompanyMetric("Revenue", companyInfo.revenue)}
+      ${renderCompanyMetric("Capitalization", companyData.capitalization)}
+      ${renderCompanyMetric("Revenue", companyData.revenue)}
       ${renderCompanyMetric(
         "Annual Revenue Growth",
-        companyInfo.annualRevenueGrowth,
+        companyData.annualRevenueGrowth,
       )}
-      ${renderCompanyMetric("P/E", companyInfo.peRatio)}
-      ${renderCompanyMetric("Forward P/E", companyInfo.forwardPeRatio)}
-      ${renderCompanyMetric("Gross Margin", companyInfo.grossMargin)}
+      ${renderCompanyMetric("P/E", companyData.peRatio)}
+      ${renderCompanyMetric("Forward P/E", companyData.forwardPeRatio)}
+      ${renderCompanyMetric("Gross Margin", companyData.grossMargin)}
     </div>
   </section>`;
 }
@@ -499,7 +859,7 @@ ${sources
   </section>`;
 }
 
-function renderReportDocument(report: StructuredReport): string {
+function renderReportDocument(report: RenderableReport): string {
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -768,7 +1128,7 @@ function renderReportDocument(report: StructuredReport): string {
       <span class="report-label">Report</span>
       <h1>${escapeHtml(report.title)}</h1>
     </header>
-    ${renderCompanyInfo(report.companyInfo)}
+    ${renderCompanyData(report.companyData)}
     ${report.sections.map(renderSection).join("\n")}
     ${renderSources(report.sources)}
   </main>
@@ -788,6 +1148,54 @@ export const execute: FunctionToolRunner = (args) => {
   return {
     output:
       "Report accepted. Final response must be a 2-3 sentence TL;DR of the report's conclusion, strongest evidence, and most important caveat; do not respond with only a generic attachment notice.",
+    report: {
+      documentHtml: renderReportDocument(report),
+      filename: report.filename,
+    },
+  };
+};
+
+function getMissingTradingFields(report: TradingReport): string[] {
+  const missing = [];
+
+  if (!hasCompanyData(report.companyData)) {
+    missing.push("company_data");
+  }
+
+  for (const section of report.sections.slice(0, 4)) {
+    if (!section.score.value) {
+      missing.push(`${section.title} score`);
+    }
+
+    for (const subsection of section.subsections) {
+      if (!subsection.content) {
+        missing.push(`${section.title} / ${subsection.title}`);
+      }
+    }
+  }
+
+  const finalView = report.sections.at(-1);
+  if (!finalView?.content) {
+    missing.push("Final view");
+  }
+
+  return missing;
+}
+
+export const executeTrading: FunctionToolRunner = (args) => {
+  const report = parseTradingReport(args);
+  const missing = getMissingTradingFields(report);
+
+  if (missing.length > 0) {
+    return JSON.stringify({
+      error: "Trading report is missing required content.",
+      missing,
+    });
+  }
+
+  return {
+    output:
+      "Trading report accepted. Final response must show State Score, Background Score, Market Score, and Industry Score, then give one concise actionable sentence based on those scores.",
     report: {
       documentHtml: renderReportDocument(report),
       filename: report.filename,

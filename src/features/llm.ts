@@ -42,6 +42,7 @@ export const TOOL_DEFINITIONS = {
   read_last_messages: readLastMessagesToolDefinition,
   get_recent_news: gdeltTool.toolDefinition,
   send_report: reportsTool.toolDefinition,
+  send_trading_report: reportsTool.tradingToolDefinition,
   call_agent: agentTool.toolDefinition,
 } as const;
 
@@ -54,6 +55,7 @@ const FUNCTION_TOOL_RUNNERS = {
   read_last_messages: executeReadLastMessages,
   get_recent_news: gdeltTool.execute,
   send_report: reportsTool.execute,
+  send_trading_report: reportsTool.executeTrading,
   call_agent: agentTool.createRunner(runAgent),
 } satisfies Record<string, FunctionToolRunner>;
 

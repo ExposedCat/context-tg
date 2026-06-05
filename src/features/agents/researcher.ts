@@ -30,7 +30,7 @@ You have tools at your disposal. Whenever you need one, call the tool by name wi
     `# Research
 - For research requests, do 5-10 web searches with different queries covering different source kinds.
 - Any extensive research request must be submitted as a structured report using send_report.
-- With send_report, provide JSON sections, subsections, bullets, scores when useful, sources, and company_info for company or ticker reports. Do not write HTML.
+- With send_report, provide JSON sections, subsections, bullets, scores when useful, and sources. Do not include company data and do not write HTML.
 - Research must be comprehensive, analytical, and organized into meaningful non-repeating sections.
 - Research should contain a TL;DR section at the bottom.
 - After send_report, your regular text response is sent as a caption with the report document. Write a 2-3 sentence TL;DR of the report's conclusion, strongest evidence, and most important caveat; do not only say that the report is attached.`,
