@@ -1,5 +1,4 @@
 import { createDebug } from "@grammyjs/debug";
-import { youtubeDl } from "youtube-dl-exec";
 import type { FunctionToolRunner } from "./types.ts";
 
 const REQUEST_TIMEOUT_MS = 60_000;
@@ -163,6 +162,8 @@ async function findSubtitleFiles(directory: string): Promise<string[]> {
 }
 
 async function downloadCaptions(url: string, directory: string) {
+  const { youtubeDl } = await import("youtube-dl-exec");
+
   await youtubeDl(
     url,
     {

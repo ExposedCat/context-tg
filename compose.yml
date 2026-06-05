@@ -1,17 +1,20 @@
 services:
   bot:
-    image: denoland/deno:2.8.1
+    build:
+      context: .
+    image: context-tg-bot:latest
     working_dir: /app
     command:
       - deno
       - run
+      - --allow-run
       - --allow-ffi
       - --allow-env
       - --allow-net
       - --allow-read
       - --allow-sys
       - --allow-write
-      - --allow-import=cdn.skypack.dev,jsr.io,deno.land
+      - --allow-import=cdn.skypack.dev,jsr.io,deno.land,registry.npmjs.org
       - src/app.ts
     env_file:
       - .env
