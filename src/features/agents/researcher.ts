@@ -9,11 +9,7 @@ import type { AgentDefinition } from "./types.ts";
 export const id = "researcher";
 export const name = ["researcher laylo", "ресерчер лейло"];
 export const MODEL = "big";
-export const tools = [
-  "web_search",
-  "get_recent_news",
-  "send_report",
-] satisfies ToolName[];
+export const tools = ["web_search", "send_report"] satisfies ToolName[];
 
 export function buildInstructions(): string {
   return joinPromptSections([
@@ -32,8 +28,8 @@ You have tools at your disposal. Whenever you need one, call the tool by name wi
 - Provide implications, risks, and decision points.
 - For large research requests, create a complete report with send_report.`,
     `# Research
-- Prefer get_recent_news for fresh 24-hour news context because it is fast and returns control to the app.
-- Use web_search only when broader source verification is necessary. By default, use at most 2-3 web searches; go deeper only when the user explicitly asks for deep research.
+- Use web_search to get broader source verification is necessary.
+- Reports must be extensive, but concise. Don't over-bloat reports and responses. Prefer shorter, structural responses. Less yapping, more data.
 - Only create a structured report with send_report when the user asks for a report, asks for extensive/deep research, or the answer is too large for a normal chat response.
 - With send_report, provide JSON sections, subsections, bullets, scores when useful, and sources. Do not include company data and do not write HTML.
 - Research must be comprehensive, analytical, and organized into meaningful non-repeating sections.
