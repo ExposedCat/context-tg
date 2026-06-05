@@ -68,3 +68,27 @@ export async function createThread(
 
   return row;
 }
+
+export async function saveThread(
+  database: Database,
+  thread: CreateThread,
+): Promise<Thread> {
+  const row: Thread = {
+    ...thread,
+    agent_id: thread.agent_id ?? null,
+    response_id: thread.response_id ?? null,
+  };
+
+  await database
+    .insertInto("threads")
+    .values(row)
+    .onConflict((conflict) =>
+      conflict.columns(["chat_id", "message_id"]).doUpdateSet({
+        agent_id: row.agent_id,
+        response_id: row.response_id,
+      }),
+    )
+    .execute();
+
+  return row;
+}

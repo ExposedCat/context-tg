@@ -23,9 +23,11 @@ import {
   createTask,
   createTaskAbortController,
   deleteTaskAbortController,
+  getTask,
+  hasResumableTask,
   type TaskStatus,
 } from "./tasks.ts";
-import { createThread, getThread } from "./threads.ts";
+import { createThread, getThread, saveThread, type Thread } from "./threads.ts";
 import {
   consumeUsage,
   getUsageStatus,
@@ -566,22 +568,67 @@ async function sendReportResponse(
   return sentMessages;
 }
 
-chatComposer.on("message", async (ctx, next) => {
-  const message = ctx.message as TextMessage;
-  const text = getMessageText(message);
-  const reply = message.reply_to_message;
-  const thread = reply
-    ? await getThread(ctx.database, {
-        chat_id: ctx.chat.id,
-        message_id: reply.message_id,
-      })
-    : undefined;
+function getResumeCommand(messageId: number): string {
+  return `/resume_${messageId}`;
+}
 
-  if (!text || (!isAddressed(text, ctx.me.username) && !thread)) {
-    await next();
-    return;
+function getResumePrompt(taskText: string): string {
+  return [
+    "Continue the previous failed or canceled task and produce the final answer.",
+    "",
+    `Original task: ${taskText}`,
+  ].join("\n");
+}
+
+function getResumableResponseId(
+  error: unknown,
+  progressResponseId: string | undefined,
+): string | undefined {
+  return error instanceof LlmRequestError
+    ? (error.lastResponseId ?? progressResponseId)
+    : progressResponseId;
+}
+
+async function saveResumableTaskThread(
+  ctx: Context,
+  message: TextMessage,
+  agent: AgentDefinition,
+  responseId: string | undefined,
+  taskCreated: boolean,
+): Promise<boolean> {
+  if (!responseId || !taskCreated) {
+    return false;
   }
 
+  try {
+    await saveThread(ctx.database, {
+      chat_id: ctx.chat.id,
+      message_id: message.message_id,
+      response_id: responseId,
+      agent_id: agent.id,
+    });
+    return true;
+  } catch (error) {
+    logError("Failed to save resumable task thread:", { responseId, error });
+    return false;
+  }
+}
+
+type HandleChatRequestOptions = {
+  reply?: TextMessage;
+  thread?: Thread;
+  taskText?: string;
+  onUnhandledError?: () => Promise<void>;
+};
+
+async function handleChatRequest(
+  ctx: Context,
+  message: TextMessage,
+  text: string,
+  options: HandleChatRequestOptions = {},
+): Promise<void> {
+  const reply = options.reply;
+  const thread = options.thread;
   const textUsage = await consumeUsage(
     ctx.database,
     ctx.chat.id,
@@ -605,13 +652,15 @@ chatComposer.on("message", async (ctx, next) => {
   let taskStatus: Exclude<TaskStatus, "working"> = "finished";
   let responseSent = false;
   let imageUsageConsumed = false;
+  let progressResponseId: string | undefined;
+  let activeAgent: AgentDefinition = normalAgent;
   const taskAbortController = createTaskAbortController(taskKey);
 
   try {
     await createTask(ctx.database, {
       ...taskKey,
-      task_text: stripMessageAgentName(text, ctx.me.username),
-      started_at: Date.now(),
+      task_text:
+        options.taskText ?? stripMessageAgentName(text, ctx.me.username),
     });
     taskCreated = true;
   } catch (error) {
@@ -622,6 +671,7 @@ chatComposer.on("message", async (ctx, next) => {
     const explicitAgent = resolveMessageAgent(text, ctx.me.username);
     const threadAgent = getAgentById(thread?.agent_id) ?? normalAgent;
     const agent: AgentDefinition = explicitAgent ?? threadAgent;
+    activeAgent = agent;
     const toolUsage = await getUsageStatus(
       ctx.database,
       ctx.chat.id,
@@ -653,8 +703,10 @@ chatComposer.on("message", async (ctx, next) => {
         return await withTypingAction(ctx, () => {
           const requestOptions = {
             context: toolContext,
-            onProgress: (progress: LlmProgress) =>
-              toolUsageLabel.show(progress),
+            onProgress: async (progress: LlmProgress) => {
+              progressResponseId = progress.responseId ?? progressResponseId;
+              await toolUsageLabel.show(progress);
+            },
             onWarning: (details: string) =>
               sendLlmWarning(ctx, message, details),
             signal: taskAbortController.signal,
@@ -751,6 +803,17 @@ chatComposer.on("message", async (ctx, next) => {
         ? "canceled"
         : "failed";
     logError("Error handling message:", error);
+    const resumableResponseId = getResumableResponseId(
+      error,
+      progressResponseId,
+    );
+    const resumable = await saveResumableTaskThread(
+      ctx,
+      message,
+      activeAgent,
+      resumableResponseId,
+      taskCreated,
+    );
     if (!responseSent) {
       await refundUsage(ctx.database, ctx.chat.id, "text_responses");
 
@@ -760,14 +823,31 @@ chatComposer.on("message", async (ctx, next) => {
     }
 
     if (taskStatus === "canceled") {
+      if (resumable) {
+        await ctx.reply(
+          `Canceled. Resume: ${getResumeCommand(message.message_id)}`,
+          {
+            ...linkPreviewOptions,
+            reply_parameters: {
+              message_id: message.message_id,
+            },
+          },
+        );
+      }
       return;
     }
 
-    await ctx.reply(getErrorResponseText(error), {
+    const errorResponse = resumable
+      ? `${getErrorResponseText(error)}\n\nResume: ${getResumeCommand(
+          message.message_id,
+        )}`
+      : getErrorResponseText(error);
+
+    await ctx.reply(errorResponse, {
       ...linkPreviewOptions,
       parse_mode: "HTML",
     });
-    await next();
+    await options.onUnhandledError?.();
   } finally {
     deleteTaskAbortController(taskKey);
     if (taskCreated) {
@@ -778,4 +858,75 @@ chatComposer.on("message", async (ctx, next) => {
       }
     }
   }
+}
+
+export async function replyWithResumeTask(
+  ctx: Context,
+  messageId: number,
+): Promise<void> {
+  if (!ctx.chat) {
+    return;
+  }
+
+  const taskKey = {
+    chat_id: ctx.chat.id,
+    message_id: messageId,
+  };
+  const task = await getTask(ctx.database, taskKey);
+
+  if (!task) {
+    await ctx.reply("Task not found.");
+    return;
+  }
+
+  if (task.status === "working") {
+    await ctx.reply("Task is still working.");
+    return;
+  }
+
+  if (task.status === "finished") {
+    await ctx.reply("Task already finished.");
+    return;
+  }
+
+  if (!(await hasResumableTask(ctx.database, taskKey))) {
+    await ctx.reply("Task has no progress to resume.");
+    return;
+  }
+
+  const thread = await getThread(ctx.database, taskKey);
+
+  if (!thread?.response_id) {
+    await ctx.reply("Task has no progress to resume.");
+    return;
+  }
+
+  const message = ctx.message as TextMessage;
+  await handleChatRequest(ctx, message, getResumePrompt(task.task_text), {
+    thread,
+    taskText: `Resume: ${task.task_text}`,
+  });
+}
+
+chatComposer.on("message", async (ctx, next) => {
+  const message = ctx.message as TextMessage;
+  const text = getMessageText(message);
+  const reply = message.reply_to_message;
+  const thread = reply
+    ? await getThread(ctx.database, {
+        chat_id: ctx.chat.id,
+        message_id: reply.message_id,
+      })
+    : undefined;
+
+  if (!text || (!isAddressed(text, ctx.me.username) && !thread)) {
+    await next();
+    return;
+  }
+
+  await handleChatRequest(ctx, message, text, {
+    reply,
+    thread,
+    onUnhandledError: next,
+  });
 });

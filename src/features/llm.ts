@@ -78,6 +78,7 @@ export const DEFAULT_LLM_TOOLS = [
 
 export type LlmProgress = {
   toolCallCount: number;
+  responseId?: string;
   usageLabel?: string;
 };
 
@@ -734,6 +735,7 @@ async function resolveFunctionToolCalls(
   let response = initialResponse;
   await options.onProgress?.({
     toolCallCount,
+    responseId: response.id ?? state.lastResponseId,
     usageLabel: getIntermediateUsageLabel(response),
   });
 
@@ -751,6 +753,7 @@ async function resolveFunctionToolCalls(
     );
     await options.onProgress?.({
       toolCallCount,
+      responseId: response.id ?? state.lastResponseId,
       usageLabel: getIntermediateUsageLabel(response),
     });
 
@@ -768,6 +771,7 @@ async function resolveFunctionToolCalls(
     toolCallCount += getToolCallCount(response);
     await options.onProgress?.({
       toolCallCount,
+      responseId: response.id ?? state.lastResponseId,
       usageLabel: getIntermediateUsageLabel(response),
     });
 

@@ -1,5 +1,6 @@
 import { Composer } from "grammy";
 import type { Context } from "../bot.ts";
+import { replyWithResumeTask } from "./chat.ts";
 import { APP_ENV } from "./env.ts";
 import {
   getLlmModelNames,
@@ -111,14 +112,23 @@ stateComposer.command("usage", async (ctx) => {
 });
 
 stateComposer.on("message:text", async (ctx, next) => {
-  const match = ctx.message.text.match(/^\/cancel_(\d+)(?:@\w+)?(?:\s|$)/);
+  const match = ctx.message.text.match(
+    /^\/(cancel|resume)_(\d+)(?:@\w+)?(?:\s|$)/,
+  );
 
   if (!match) {
     await next();
     return;
   }
 
-  await replyWithCancelTask(ctx, Number(match[1]));
+  const messageId = Number(match[2]);
+
+  if (match[1] === "resume") {
+    await replyWithResumeTask(ctx, messageId);
+    return;
+  }
+
+  await replyWithCancelTask(ctx, messageId);
 });
 
 stateComposer.command("model", async (ctx) => {
