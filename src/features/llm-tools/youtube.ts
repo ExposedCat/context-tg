@@ -4,6 +4,7 @@ import type { FunctionToolRunner } from "./types.ts";
 const REQUEST_TIMEOUT_MS = 60_000;
 const MAX_TRANSCRIPT_CHARS = 80_000;
 const SUBTITLE_LANGUAGES = "en";
+const SYSTEM_YOUTUBE_DL_PATH = "/usr/local/bin/yt-dlp";
 
 const logError = createDebug("app:llm-tools:youtube:error");
 
@@ -161,8 +162,37 @@ async function findSubtitleFiles(directory: string): Promise<string[]> {
   return files.sort();
 }
 
+async function pathExists(path: string): Promise<boolean> {
+  try {
+    const stat = await Deno.stat(path);
+    return stat.isFile;
+  } catch (error) {
+    if (error instanceof Deno.errors.NotFound) {
+      return false;
+    }
+
+    throw error;
+  }
+}
+
+async function getYoutubeDl() {
+  const { create, youtubeDl } = await import("youtube-dl-exec");
+  const configuredPath =
+    Deno.env.get("YOUTUBE_DL_PATH") ?? Deno.env.get("YT_DLP_PATH");
+
+  if (configuredPath) {
+    return create(configuredPath);
+  }
+
+  if (await pathExists(SYSTEM_YOUTUBE_DL_PATH)) {
+    return create(SYSTEM_YOUTUBE_DL_PATH);
+  }
+
+  return youtubeDl;
+}
+
 async function downloadCaptions(url: string, directory: string) {
-  const { youtubeDl } = await import("youtube-dl-exec");
+  const youtubeDl = await getYoutubeDl();
 
   await youtubeDl(
     url,
