@@ -15,9 +15,7 @@ import * as agentTool from "./llm-tools/agent.ts";
 import {
   executeReadLastMessages,
   executeSearchChat,
-  READ_LAST_MESSAGES_USAGE_LABEL,
   readLastMessagesToolDefinition,
-  SEARCH_CHAT_USAGE_LABEL,
   searchChatToolDefinition,
 } from "./llm-tools/chat.ts";
 import * as gdeltTool from "./llm-tools/gdelt.ts";
@@ -61,16 +59,6 @@ const FUNCTION_TOOL_RUNNERS = {
 
 type FunctionToolName = keyof typeof FUNCTION_TOOL_RUNNERS;
 
-const TOOL_USAGE_LABELS: Partial<Record<ToolName, string>> = {
-  web_search: webSearchTool.USAGE_LABEL,
-  fetch_ticker_price: tickerPriceTool.USAGE_LABEL,
-  get_markets_state: marketTool.USAGE_LABEL,
-  search_chat: SEARCH_CHAT_USAGE_LABEL,
-  read_last_messages: READ_LAST_MESSAGES_USAGE_LABEL,
-  get_recent_news: gdeltTool.USAGE_LABEL,
-  call_agent: agentTool.USAGE_LABEL,
-};
-
 export const DEFAULT_LLM_TOOLS = [
   "web_search",
   ...Object.keys(TOOL_DEFINITIONS),
@@ -79,7 +67,6 @@ export const DEFAULT_LLM_TOOLS = [
 export type LlmProgress = {
   toolCallCount: number;
   responseId?: string;
-  usageLabel?: string;
 };
 
 export type LlmRequestOptions = {
@@ -341,22 +328,6 @@ function getToolCallCount(response: ApiResponse): number {
   return response.output.filter(
     (item) => item.type === "web_search_call" || isFunctionToolCall(item),
   ).length;
-}
-
-function getIntermediateUsageLabel(response: ApiResponse): string | undefined {
-  if (getToolCallCount(response) === 0) {
-    return undefined;
-  }
-
-  for (const tool of getCalledTools(response)) {
-    const label = TOOL_USAGE_LABELS[tool];
-
-    if (label) {
-      return label;
-    }
-  }
-
-  return undefined;
 }
 
 function getFunctionToolCalls(response: ApiResponse): FunctionToolCall[] {
@@ -736,7 +707,6 @@ async function resolveFunctionToolCalls(
   await options.onProgress?.({
     toolCallCount,
     responseId: response.id ?? state.lastResponseId,
-    usageLabel: getIntermediateUsageLabel(response),
   });
 
   for (let index = 0; index < 4; index += 1) {
@@ -754,7 +724,6 @@ async function resolveFunctionToolCalls(
     await options.onProgress?.({
       toolCallCount,
       responseId: response.id ?? state.lastResponseId,
-      usageLabel: getIntermediateUsageLabel(response),
     });
 
     response = await createLlmResponseWithRetries(
@@ -772,7 +741,6 @@ async function resolveFunctionToolCalls(
     await options.onProgress?.({
       toolCallCount,
       responseId: response.id ?? state.lastResponseId,
-      usageLabel: getIntermediateUsageLabel(response),
     });
 
     for (const tool of getCalledTools(response)) {

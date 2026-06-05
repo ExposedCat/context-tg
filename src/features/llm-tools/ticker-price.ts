@@ -1,8 +1,6 @@
 import { fetchTickerPrice } from "../stocks.ts";
 import type { FunctionToolRunner } from "./types.ts";
 
-export const USAGE_LABEL = "Checking stock price...";
-
 export const toolDefinition = {
   type: "function",
   name: "fetch_ticker_price",

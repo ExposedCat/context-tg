@@ -15,8 +15,6 @@ type GdeltContextArticle = {
 
 const logError = createDebug("app:llm-tools:gdelt:error");
 
-export const USAGE_LABEL = "Checking recent news...";
-
 export const toolDefinition = {
   type: "function",
   name: "get_recent_news",

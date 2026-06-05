@@ -1,7 +1,5 @@
 import type { FunctionToolRunner, LlmToolContext } from "./types.ts";
 
-export const USAGE_LABEL = "Calling agent...";
-
 export const toolDefinition = {
   type: "function",
   name: "call_agent",

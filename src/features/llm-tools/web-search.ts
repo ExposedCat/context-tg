@@ -3,8 +3,6 @@ import {
   type WebSearchContextSize,
 } from "../llm-models.ts";
 
-export const USAGE_LABEL = "Searching web...";
-
 export function createToolDefinition(): {
   type: "web_search";
   search_context_size: WebSearchContextSize;

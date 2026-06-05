@@ -10,9 +10,9 @@ import {
 } from "./agents/index.ts";
 import {
   type LlmCitation,
-  type LlmProgress,
   type LlmReport,
   LlmRequestError,
+  type LlmRequestOptions,
   type LlmResponse,
   type LlmToolContext,
   requestLlm,
@@ -153,45 +153,6 @@ function createSlowResponseReactionTracker(ctx: Context): {
     stop() {
       stopped = true;
       clearTimeout(timeoutId);
-    },
-  };
-}
-
-function createToolUsageLabelTracker(
-  ctx: Context,
-  chatId: number,
-  message: TextMessage,
-): {
-  show: (progress: LlmProgress) => Promise<void>;
-} {
-  let lastLabel: string | undefined;
-  let sentMessageId: number | undefined;
-
-  return {
-    async show(progress) {
-      const label = progress.usageLabel;
-
-      if (!label || label === lastLabel) {
-        return;
-      }
-
-      try {
-        if (sentMessageId) {
-          await ctx.api.editMessageText(chatId, sentMessageId, label);
-          lastLabel = label;
-          return;
-        }
-
-        const sentMessage = await ctx.reply(label, {
-          reply_parameters: {
-            message_id: message.message_id,
-          },
-        });
-        sentMessageId = sentMessage.message_id;
-        lastLabel = label;
-      } catch (error) {
-        logError("Failed to send tool usage label:", { label, error });
-      }
     },
   };
 }
@@ -439,21 +400,61 @@ function hasSearchInfo(llmResponse: LlmResponse): boolean {
   );
 }
 
+const TOOL_USAGE_EMOJIS: Partial<
+  Record<ToolName, { id: string; fallback: string }>
+> = {
+  web_search: { id: "5879585266426973039", fallback: "🔎" },
+  search_chat: { id: "5891169510483823323", fallback: "💬" },
+  read_last_messages: { id: "5891169510483823323", fallback: "💬" },
+  send_report: { id: "5877597667231534929", fallback: "📄" },
+  send_trading_report: { id: "5877597667231534929", fallback: "📄" },
+  get_markets_state: { id: "5900104897885376843", fallback: "📈" },
+  fetch_ticker_price: { id: "5974217466270716579", fallback: "💵" },
+  get_recent_news: { id: "6008090211181923982", fallback: "📰" },
+};
+
+function formatToolUsageEmojis(tools: ToolName[]): string {
+  const usedEmojiIds = new Set<string>();
+  const emojis: string[] = [];
+
+  for (const tool of tools) {
+    const emoji = TOOL_USAGE_EMOJIS[tool];
+
+    if (!emoji || usedEmojiIds.has(emoji.id)) {
+      continue;
+    }
+
+    usedEmojiIds.add(emoji.id);
+    emojis.push(
+      `<tg-emoji emoji-id="${emoji.id}">${emoji.fallback}</tg-emoji>`,
+    );
+  }
+
+  return emojis.join(" ");
+}
+
+function appendToolUsageEmojis(text: string, tools: ToolName[]): string {
+  const suffix = formatToolUsageEmojis(tools);
+
+  if (!suffix) {
+    return text;
+  }
+
+  const trimmedText = text.trimEnd();
+  return trimmedText ? `${trimmedText}\n\n${suffix}` : suffix;
+}
+
 function formatLlmResponse(llmResponse: LlmResponse): {
   text: string;
   parse_mode: "HTML";
 } {
   const response = llmResponse.response ?? "";
-
-  if (!hasSearchInfo(llmResponse)) {
-    return {
-      text: sanitizeLlmHtml(response),
-      parse_mode: "HTML",
-    };
-  }
+  const text = hasSearchInfo(llmResponse)
+    ? formatCitations(response, llmResponse.web_search.citations)
+    : sanitizeLlmHtml(response);
 
   return {
-    text: formatCitations(response, llmResponse.web_search.citations),
+    text: appendToolUsageEmojis(text, llmResponse.tools),
     parse_mode: "HTML",
   };
 }
@@ -591,6 +592,7 @@ function getResumableResponseId(
 
 async function saveResumableTaskThread(
   ctx: Context,
+  chatId: number,
   message: TextMessage,
   agent: AgentDefinition,
   responseId: string | undefined,
@@ -602,7 +604,7 @@ async function saveResumableTaskThread(
 
   try {
     await saveThread(ctx.database, {
-      chat_id: ctx.chat.id,
+      chat_id: chatId,
       message_id: message.message_id,
       response_id: responseId,
       agent_id: agent.id,
@@ -627,13 +629,14 @@ async function handleChatRequest(
   text: string,
   options: HandleChatRequestOptions = {},
 ): Promise<void> {
+  if (!ctx.chat) {
+    return;
+  }
+
+  const chatId = ctx.chat.id;
   const reply = options.reply;
   const thread = options.thread;
-  const textUsage = await consumeUsage(
-    ctx.database,
-    ctx.chat.id,
-    "text_responses",
-  );
+  const textUsage = await consumeUsage(ctx.database, chatId, "text_responses");
 
   if (!textUsage.ok) {
     await ctx.reply(formatQuotaExceededResponse("text_responses", textUsage), {
@@ -645,7 +648,7 @@ async function handleChatRequest(
   }
 
   const taskKey = {
-    chat_id: ctx.chat.id,
+    chat_id: chatId,
     message_id: message.message_id,
   };
   let taskCreated = false;
@@ -672,14 +675,10 @@ async function handleChatRequest(
     const threadAgent = getAgentById(thread?.agent_id) ?? normalAgent;
     const agent: AgentDefinition = explicitAgent ?? threadAgent;
     activeAgent = agent;
-    const toolUsage = await getUsageStatus(
-      ctx.database,
-      ctx.chat.id,
-      "tool_usages",
-    );
+    const toolUsage = await getUsageStatus(ctx.database, chatId, "tool_usages");
     const imageUsageRemaining = await hasUsageRemaining(
       ctx.database,
-      ctx.chat.id,
+      chatId,
       "image_responses",
     );
     const agentTools = filterToolsForUsage(agent.tools, {
@@ -691,21 +690,15 @@ async function handleChatRequest(
       (!explicitAgent || explicitAgent.id === threadAgent.id)
         ? thread.response_id
         : undefined;
-    const toolContext = getLlmToolContext(ctx.chat.id, message);
+    const toolContext = getLlmToolContext(chatId, message);
     const slowResponseReaction = createSlowResponseReactionTracker(ctx);
-    const toolUsageLabel = createToolUsageLabelTracker(
-      ctx,
-      ctx.chat.id,
-      message,
-    );
     const llmResponse = await (async () => {
       try {
         return await withTypingAction(ctx, () => {
-          const requestOptions = {
+          const requestOptions: LlmRequestOptions = {
             context: toolContext,
-            onProgress: async (progress: LlmProgress) => {
+            onProgress: async (progress) => {
               progressResponseId = progress.responseId ?? progressResponseId;
-              await toolUsageLabel.show(progress);
             },
             onWarning: (details: string) =>
               sendLlmWarning(ctx, message, details),
@@ -739,7 +732,7 @@ async function handleChatRequest(
 
     await recordUsage(
       ctx.database,
-      ctx.chat.id,
+      chatId,
       "tool_usages",
       llmResponse.tool_call_count,
     );
@@ -747,7 +740,7 @@ async function handleChatRequest(
     if (llmResponse.report) {
       const imageUsage = await consumeUsage(
         ctx.database,
-        ctx.chat.id,
+        chatId,
         "image_responses",
       );
 
@@ -791,7 +784,7 @@ async function handleChatRequest(
 
     for (const sentMessage of sentMessages) {
       await createThread(ctx.database, {
-        chat_id: ctx.chat.id,
+        chat_id: chatId,
         message_id: sentMessage.message_id,
         response_id: llmResponse.response_id,
         agent_id: agent.id,
@@ -809,16 +802,17 @@ async function handleChatRequest(
     );
     const resumable = await saveResumableTaskThread(
       ctx,
+      chatId,
       message,
       activeAgent,
       resumableResponseId,
       taskCreated,
     );
     if (!responseSent) {
-      await refundUsage(ctx.database, ctx.chat.id, "text_responses");
+      await refundUsage(ctx.database, chatId, "text_responses");
 
       if (imageUsageConsumed) {
-        await refundUsage(ctx.database, ctx.chat.id, "image_responses");
+        await refundUsage(ctx.database, chatId, "image_responses");
       }
     }
 
@@ -909,6 +903,11 @@ export async function replyWithResumeTask(
 }
 
 chatComposer.on("message", async (ctx, next) => {
+  if (!ctx.chat) {
+    await next();
+    return;
+  }
+
   const message = ctx.message as TextMessage;
   const text = getMessageText(message);
   const reply = message.reply_to_message;

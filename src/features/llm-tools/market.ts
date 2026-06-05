@@ -1,8 +1,6 @@
 import { getMarketsState } from "../stocks.ts";
 import type { FunctionToolRunner } from "./types.ts";
 
-export const USAGE_LABEL = "Checking markets...";
-
 export const toolDefinition = {
   type: "function",
   name: "get_markets_state",

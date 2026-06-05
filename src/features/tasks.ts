@@ -331,7 +331,9 @@ function formatTaskLine(
     secondLineParts.push(formatTaskDate(task.finished_at));
   }
 
-  secondLineParts.push(getCancelCommand(task));
+  if (task.status === "working") {
+    secondLineParts.push(getCancelCommand(task));
+  }
 
   if (resumableTaskIds.has(task.message_id)) {
     secondLineParts.push(getResumeCommand(task));
