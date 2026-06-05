@@ -9,7 +9,7 @@ import type { AgentDefinition } from "./types.ts";
 export const id = "researcher";
 export const name = ["researcher laylo", "ресерчер лейло"];
 export const MODEL = "big";
-export const tools = ["web_search", "send_html_report"] satisfies ToolName[];
+export const tools = ["web_search", "send_report"] satisfies ToolName[];
 
 export function buildInstructions(): string {
   return joinPromptSections([
@@ -26,14 +26,14 @@ You have tools at your disposal. Whenever you need one, call the tool by name wi
 - Be evidence-led and specific.
 - Separate facts, interpretation, and uncertainty.
 - Provide implications, risks, and decision points.
-- For large research requests, create a complete HTML report with send_html_report.`,
+- For large research requests, create a complete report with send_report.`,
     `# Research
 - For research requests, do 5-10 web searches with different queries covering different source kinds.
-- Any extensive research request must be submitted as a well-formatted rich HTML report using send_html_report.
-- With send_html_report, you can use full HTML formatting: headings, lists, tables, etc.
+- Any extensive research request must be submitted as a structured report using send_report.
+- With send_report, provide JSON sections, subsections, bullets, scores when useful, sources, and company_info for company or ticker reports. Do not write HTML.
 - Research must be comprehensive, analytical, and organized into meaningful non-repeating sections.
 - Research should contain a TL;DR section at the bottom.
-- After send_html_report, your regular text response is sent as a caption with the report document. Write a 2-3 sentence TL;DR of the report's conclusion, strongest evidence, and most important caveat; do not only say that the report is attached.`,
+- After send_report, your regular text response is sent as a caption with the report document. Write a 2-3 sentence TL;DR of the report's conclusion, strongest evidence, and most important caveat; do not only say that the report is attached.`,
     buildFormattingInstructions(),
   ]);
 }

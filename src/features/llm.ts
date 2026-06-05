@@ -22,7 +22,7 @@ import {
 } from "./llm-tools/chat.ts";
 import * as gdeltTool from "./llm-tools/gdelt.ts";
 import * as marketTool from "./llm-tools/market.ts";
-import type { LlmHtmlReport } from "./llm-tools/reports.ts";
+import type { LlmReport } from "./llm-tools/reports.ts";
 import * as reportsTool from "./llm-tools/reports.ts";
 import * as tickerPriceTool from "./llm-tools/ticker-price.ts";
 import type {
@@ -32,7 +32,7 @@ import type {
 } from "./llm-tools/types.ts";
 import * as webSearchTool from "./llm-tools/web-search.ts";
 
-export type { LlmHtmlReport } from "./llm-tools/reports.ts";
+export type { LlmReport } from "./llm-tools/reports.ts";
 export type { LlmToolContext } from "./llm-tools/types.ts";
 
 export const TOOL_DEFINITIONS = {
@@ -41,7 +41,7 @@ export const TOOL_DEFINITIONS = {
   search_chat: searchChatToolDefinition,
   read_last_messages: readLastMessagesToolDefinition,
   get_recent_news: gdeltTool.toolDefinition,
-  send_html_report: reportsTool.toolDefinition,
+  send_report: reportsTool.toolDefinition,
   call_agent: agentTool.toolDefinition,
 } as const;
 
@@ -53,7 +53,7 @@ const FUNCTION_TOOL_RUNNERS = {
   search_chat: executeSearchChat,
   read_last_messages: executeReadLastMessages,
   get_recent_news: gdeltTool.execute,
-  send_html_report: reportsTool.execute,
+  send_report: reportsTool.execute,
   call_agent: agentTool.createRunner(runAgent),
 } satisfies Record<string, FunctionToolRunner>;
 
@@ -98,7 +98,7 @@ export type LlmSource = {
 export type LlmResponse = {
   response_id?: string;
   response?: string;
-  html_report?: LlmHtmlReport;
+  report?: LlmReport;
   web_search: {
     used: boolean;
     citations: LlmCitation[];
@@ -176,7 +176,7 @@ type LlmRequestState = {
   lastResponseId?: string;
   receivedResponse: boolean;
   sentImmediateContentFilterWarning: boolean;
-  htmlReport?: LlmHtmlReport;
+  report?: LlmReport;
 };
 
 function getSystemInstructions(): string {
@@ -542,8 +542,8 @@ async function runFunctionToolCall(
   const runner = FUNCTION_TOOL_RUNNERS[call.name];
   const result = normalizeFunctionToolResult(await runner(args, context));
 
-  if (result.htmlReport) {
-    state.htmlReport = result.htmlReport;
+  if (result.report) {
+    state.report = result.report;
   }
 
   return {
@@ -799,7 +799,7 @@ async function requestLlmWithInstructions(
   return {
     response_id: response.id ?? lastResponseId,
     response: responseText,
-    html_report: state.htmlReport,
+    report: state.report,
     web_search: {
       used: calledTools.includes("web_search"),
       citations,
@@ -837,15 +837,15 @@ async function runAgent(
   const output = JSON.stringify({
     agent: agent.id,
     response: result.response ?? "",
-    report_attached: Boolean(result.html_report),
+    report_attached: Boolean(result.report),
     tools_used: result.tools,
     web_search: result.web_search.used,
   });
 
-  if (result.html_report) {
+  if (result.report) {
     return {
       output,
-      htmlReport: result.html_report,
+      report: result.report,
     };
   }
 

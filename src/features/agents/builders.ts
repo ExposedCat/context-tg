@@ -12,7 +12,7 @@ export function joinPromptSections(
 
 export function buildFormattingInstructions(): string {
   return `# Formatting
-This formatting limitation applies to normal chat responses and captions, not to send_html_report html_string.
+This formatting limitation applies to normal chat responses and captions, not to send_report report content.
 For regular responses, Markdown and HTML are NOT supported. You can ONLY use this small subset when needed:
 - <b> for bold
 - <code> for monospace snippets: literal names, values, etc.

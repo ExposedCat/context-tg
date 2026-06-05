@@ -16,7 +16,7 @@ export const tools = [
   "search_chat",
   "read_last_messages",
   "get_recent_news",
-  "send_html_report",
+  "send_report",
   "call_agent",
 ] satisfies ToolName[];
 
@@ -38,11 +38,11 @@ Use call_agent to delegate bounded subtasks to normal, trader, or researcher whe
 - Keep normal chat responses concise unless the user asks for a report or deep analysis.`,
     `# Research
 - If you handle a research request yourself instead of delegating it, do 5-10 web searches with different queries covering different source kinds.
-- Any extensive research request must be submitted as a well-formatted rich HTML report using send_html_report.
-- With send_html_report, you can use full HTML formatting: headings, lists, tables, etc.
+- Any extensive research request must be submitted as a structured report using send_report.
+- With send_report, provide JSON sections, subsections, bullets, scores when useful, sources, and company_info for company or ticker reports. Do not write HTML.
 - Research must be comprehensive, analytical, and organized into meaningful non-repeating sections.
 - Research should contain a TL;DR section at the bottom.
-- After send_html_report, your regular text response is sent as a caption with the report document. Write a 2-3 sentence TL;DR of the report's conclusion, strongest evidence, and most important caveat; do not only say that the report is attached.`,
+- After send_report, your regular text response is sent as a caption with the report document. Write a 2-3 sentence TL;DR of the report's conclusion, strongest evidence, and most important caveat; do not only say that the report is attached.`,
     buildFormattingInstructions(),
   ]);
 }

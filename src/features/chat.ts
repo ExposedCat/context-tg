@@ -9,8 +9,8 @@ import {
 } from "./agents/index.ts";
 import {
   type LlmCitation,
-  type LlmHtmlReport,
   type LlmProgress,
+  type LlmReport,
   LlmRequestError,
   type LlmResponse,
   type LlmToolContext,
@@ -469,29 +469,10 @@ function normalizeReportFilename(filename: string): string {
   return /\.html?$/i.test(normalized) ? normalized : `${normalized}.html`;
 }
 
-function createHtmlDocument(report: LlmHtmlReport): string {
-  const html = report.htmlString.trim();
-
-  if (/^\s*(?:<!doctype\s+html\b|<html[\s>])/i.test(html)) {
-    return html;
-  }
-
-  return `<!doctype html>
-<html>
-<head>
-  <meta charset="utf-8">
-  <title>${escapeHtml(report.filename)}</title>
-</head>
-<body>
-${report.htmlString}
-</body>
-</html>`;
-}
-
-async function sendHtmlReportResponse(
+async function sendReportResponse(
   ctx: Context,
   message: TextMessage,
-  report: LlmHtmlReport,
+  report: LlmReport,
   formattedResponse: ReturnType<typeof formatLlmResponse>,
 ): Promise<Array<{ message_id: number }>> {
   const filename = normalizeReportFilename(report.filename);
@@ -506,7 +487,7 @@ async function sendHtmlReportResponse(
   const sentMessages = [];
 
   try {
-    await Deno.writeTextFile(tmpPath, createHtmlDocument(report));
+    await Deno.writeTextFile(tmpPath, report.documentHtml);
 
     const sentDocument = await ctx.replyWithDocument(
       new InputFile(tmpPath, filename),
@@ -521,7 +502,7 @@ async function sendHtmlReportResponse(
     sentMessages.push(sentDocument);
   } finally {
     await Deno.remove(tmpPath).catch((error) =>
-      logError("Failed to delete temporary HTML report:", { tmpPath, error }),
+      logError("Failed to delete temporary report:", { tmpPath, error }),
     );
   }
 
@@ -607,16 +588,16 @@ chatComposer.on("message", async (ctx, next) => {
     })();
 
     const formattedResponse = formatLlmResponse(llmResponse);
-    const sentMessages = llmResponse.html_report
-      ? await sendHtmlReportResponse(
+    const sentMessages = llmResponse.report
+      ? await sendReportResponse(
           ctx,
           message,
-          llmResponse.html_report,
+          llmResponse.report,
           formattedResponse,
         )
       : [];
 
-    if (!llmResponse.html_report) {
+    if (!llmResponse.report) {
       for (const chunk of splitHtmlMessage(formattedResponse.text)) {
         const sentMessage = await ctx.reply(chunk, {
           ...linkPreviewOptions,

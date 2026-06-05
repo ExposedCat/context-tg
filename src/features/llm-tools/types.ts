@@ -6,8 +6,8 @@ export type LlmToolContext = {
 
 export type FunctionToolResult = {
   output: string;
-  htmlReport?: {
-    htmlString: string;
+  report?: {
+    documentHtml: string;
     filename: string;
   };
 };
