@@ -17,7 +17,13 @@ import {
   type LlmToolContext,
   requestLlm,
 } from "./llm.ts";
-import { createTask, finishTask } from "./tasks.ts";
+import {
+  completeTask,
+  createTask,
+  createTaskAbortController,
+  deleteTaskAbortController,
+  type TaskStatus,
+} from "./tasks.ts";
 import { createThread, getThread } from "./threads.ts";
 
 type TextMessage = {
@@ -450,6 +456,13 @@ function getErrorResponseText(error: unknown): string {
   return `Error: ${sanitizeLlmHtml(details)}`;
 }
 
+function isAbortError(error: unknown): boolean {
+  return (
+    (error instanceof DOMException && error.name === "AbortError") ||
+    (error instanceof Error && error.name === "AbortError")
+  );
+}
+
 function normalizeReportFilename(filename: string): string {
   const safeFilename = filename
     .replaceAll(/[\\/]/g, "-")
@@ -534,6 +547,8 @@ chatComposer.on("message", async (ctx, next) => {
     message_id: message.message_id,
   };
   let taskCreated = false;
+  let taskStatus: Exclude<TaskStatus, "working"> = "finished";
+  const taskAbortController = createTaskAbortController(taskKey);
 
   try {
     await createTask(ctx.database, {
@@ -571,6 +586,7 @@ chatComposer.on("message", async (ctx, next) => {
               toolUsageLabel.show(progress),
             onWarning: (details: string) =>
               sendLlmWarning(ctx, message, details),
+            signal: taskAbortController.signal,
           };
 
           return responseId
@@ -633,16 +649,25 @@ chatComposer.on("message", async (ctx, next) => {
       });
     }
   } catch (error) {
+    taskStatus =
+      taskAbortController.signal.aborted || isAbortError(error)
+        ? "canceled"
+        : "failed";
     logError("Error handling message:", error);
+    if (taskStatus === "canceled") {
+      return;
+    }
+
     await ctx.reply(getErrorResponseText(error), {
       ...linkPreviewOptions,
       parse_mode: "HTML",
     });
     await next();
   } finally {
+    deleteTaskAbortController(taskKey);
     if (taskCreated) {
       try {
-        await finishTask(ctx.database, taskKey);
+        await completeTask(ctx.database, taskKey, taskStatus);
       } catch (error) {
         logError("Failed to finish task:", { error });
       }

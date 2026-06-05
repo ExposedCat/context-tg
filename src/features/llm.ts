@@ -83,6 +83,7 @@ export type LlmRequestOptions = {
   context?: LlmToolContext;
   onProgress?: (progress: LlmProgress) => void | Promise<void>;
   onWarning?: (details: string) => void | Promise<void>;
+  signal?: AbortSignal;
 };
 
 export type LlmCitation = {
@@ -412,8 +413,29 @@ function getErrorObject(error: unknown): Record<string, unknown> | undefined {
   return error as Record<string, unknown>;
 }
 
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+function throwIfAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) {
+    throw signal.reason ?? new DOMException("Aborted", "AbortError");
+  }
+}
+
+function delay(ms: number, signal?: AbortSignal): Promise<void> {
+  throwIfAborted(signal);
+
+  return new Promise((resolve, reject) => {
+    const timeoutId = setTimeout(() => {
+      signal?.removeEventListener("abort", abort);
+      resolve();
+    }, ms);
+
+    const abort = () => {
+      clearTimeout(timeoutId);
+      signal?.removeEventListener("abort", abort);
+      reject(signal?.reason ?? new DOMException("Aborted", "AbortError"));
+    };
+
+    signal?.addEventListener("abort", abort, { once: true });
+  });
 }
 
 function isRateLimitError(error: unknown): boolean {
@@ -558,22 +580,27 @@ async function createLlmResponse(
   responseId?: string | null,
   model: AgentModel = normalAgent.MODEL,
   instructions = getSystemInstructions(),
+  signal?: AbortSignal,
 ): Promise<ApiResponse> {
   const reasoningEffort = getReasoningEffort(model);
+  throwIfAborted(signal);
 
-  return await client.responses.create({
-    model: getLlmModelName(model),
-    input,
-    instructions,
-    // temperature: APP_ENV.LLM_TEMPERATURE,
-    tools: getToolDefinitions(tools),
-    tool_choice: "auto",
-    include: getResponseInclude(tools),
-    previous_response_id: responseId == null ? undefined : responseId,
-    ...(reasoningEffort === null
-      ? {}
-      : { reasoning: { effort: reasoningEffort } }),
-  });
+  return await client.responses.create(
+    {
+      model: getLlmModelName(model),
+      input,
+      instructions,
+      // temperature: APP_ENV.LLM_TEMPERATURE,
+      tools: getToolDefinitions(tools),
+      tool_choice: "auto",
+      include: getResponseInclude(tools),
+      previous_response_id: responseId == null ? undefined : responseId,
+      ...(reasoningEffort === null
+        ? {}
+        : { reasoning: { effort: reasoningEffort } }),
+    },
+    { signal },
+  );
 }
 
 async function createLlmResponseWithRetries(
@@ -592,6 +619,7 @@ async function createLlmResponseWithRetries(
   let rateLimitRetries = 0;
 
   while (true) {
+    throwIfAborted(options.signal);
     const immediate = !state.receivedResponse;
 
     try {
@@ -602,6 +630,7 @@ async function createLlmResponseWithRetries(
         currentResponseId,
         model,
         instructions,
+        options.signal,
       );
       const responseError = getResponseError(response);
       state.lastResponseId = response.id ?? state.lastResponseId;
@@ -635,7 +664,7 @@ async function createLlmResponseWithRetries(
 
       if (retryingRateLimit) {
         rateLimitRetries += 1;
-        await delay(LLM_RATE_LIMIT_RETRY_DELAY_MS);
+        await delay(LLM_RATE_LIMIT_RETRY_DELAY_MS, options.signal);
         continue;
       }
 

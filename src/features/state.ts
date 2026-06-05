@@ -11,7 +11,7 @@ import {
   persistReasoningEffort,
   persistWebSearchSetting,
 } from "./llm-models.ts";
-import { replyWithRecentTasks } from "./tasks.ts";
+import { replyWithCancelTask, replyWithRecentTasks } from "./tasks.ts";
 
 export const stateComposer = new Composer<Context>();
 
@@ -55,6 +55,17 @@ stateComposer.chatType("private").command("stop", async (ctx) => {
 
 stateComposer.command("tasks", async (ctx) => {
   await replyWithRecentTasks(ctx);
+});
+
+stateComposer.on("message:text", async (ctx, next) => {
+  const match = ctx.message.text.match(/^\/cancel_(\d+)(?:@\w+)?(?:\s|$)/);
+
+  if (!match) {
+    await next();
+    return;
+  }
+
+  await replyWithCancelTask(ctx, Number(match[1]));
 });
 
 stateComposer.command("model", async (ctx) => {

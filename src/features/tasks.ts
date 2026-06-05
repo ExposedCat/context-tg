@@ -7,6 +7,7 @@ export type TasksTable = {
   message_id: number;
   task_text: string;
   started_at: number;
+  status: ColumnType<TaskStatus, TaskStatus | undefined, TaskStatus>;
   finished_at: ColumnType<
     number | null,
     number | null | undefined,
@@ -17,9 +18,19 @@ export type TasksTable = {
 export type Task = Selectable<TasksTable>;
 export type CreateTask = Insertable<TasksTable>;
 export type TaskKey = Pick<Task, "chat_id" | "message_id">;
+export type TaskStatus = "working" | "finished" | "failed" | "canceled";
 
 const RECENT_TASKS_LIMIT = 5;
 const TASK_LABEL_LENGTH = 15;
+const STATUS_EMOJI_IDS = {
+  working: "6113685078825505075",
+  finished: "5825794181183836432",
+  failed: "6269316311172518259",
+  canceled: "6269316311172518259",
+} satisfies Record<TaskStatus, string>;
+const activeTaskControllers = new Map<string, AbortController>();
+
+type CancelTaskResult = "canceled" | "not_found" | "not_working";
 
 export async function migrateTasks(database: Database) {
   await database.schema
@@ -29,8 +40,29 @@ export async function migrateTasks(database: Database) {
     .addColumn("message_id", "integer", (column) => column.notNull())
     .addColumn("task_text", "text", (column) => column.notNull())
     .addColumn("started_at", "integer", (column) => column.notNull())
+    .addColumn("status", "text", (column) =>
+      column.notNull().defaultTo("working"),
+    )
     .addColumn("finished_at", "integer")
     .addPrimaryKeyConstraint("tasks_primary_key", ["chat_id", "message_id"])
+    .execute();
+
+  try {
+    await database.schema
+      .alterTable("tasks")
+      .addColumn("status", "text", (column) =>
+        column.notNull().defaultTo("working"),
+      )
+      .execute();
+  } catch {
+    // Column already exists on fresh or previously migrated databases.
+  }
+
+  await database
+    .updateTable("tasks")
+    .set({ status: "finished" })
+    .where("status", "=", "working")
+    .where("finished_at", "is not", null)
     .execute();
 }
 
@@ -40,6 +72,7 @@ export async function createTask(
 ): Promise<Task> {
   const row: Task = {
     ...task,
+    status: task.status ?? "working",
     finished_at: task.finished_at ?? null,
   };
 
@@ -48,17 +81,60 @@ export async function createTask(
   return row;
 }
 
-export async function finishTask(
+export async function completeTask(
   database: Database,
   { chat_id, message_id }: TaskKey,
+  status: Exclude<TaskStatus, "working"> = "finished",
   finishedAt = new Date(),
 ): Promise<void> {
   await database
     .updateTable("tasks")
-    .set({ finished_at: finishedAt.getTime() })
+    .set({ finished_at: finishedAt.getTime(), status })
     .where("chat_id", "=", chat_id)
     .where("message_id", "=", message_id)
+    .where("status", "=", "working")
     .execute();
+}
+
+function getTaskKey({ chat_id, message_id }: TaskKey): string {
+  return `${chat_id}:${message_id}`;
+}
+
+export function createTaskAbortController(taskKey: TaskKey): AbortController {
+  const controller = new AbortController();
+  activeTaskControllers.set(getTaskKey(taskKey), controller);
+
+  return controller;
+}
+
+export function deleteTaskAbortController(taskKey: TaskKey): void {
+  activeTaskControllers.delete(getTaskKey(taskKey));
+}
+
+export async function cancelTask(
+  database: Database,
+  taskKey: TaskKey,
+): Promise<CancelTaskResult> {
+  const task = await database
+    .selectFrom("tasks")
+    .selectAll()
+    .where("chat_id", "=", taskKey.chat_id)
+    .where("message_id", "=", taskKey.message_id)
+    .executeTakeFirst();
+
+  if (!task) {
+    return "not_found";
+  }
+
+  if (task.status !== "working") {
+    return "not_working";
+  }
+
+  const controller = activeTaskControllers.get(getTaskKey(taskKey));
+  controller?.abort(new DOMException("Task canceled", "AbortError"));
+  await completeTask(database, taskKey, "canceled");
+
+  return "canceled";
 }
 
 export async function listRecentTasks(
@@ -114,14 +190,33 @@ function getTaskMessageLink(task: Task): string {
   return `https://t.me/${task.chat_id}/${task.message_id}`;
 }
 
+function getTaskStatusEmoji(task: Task): string {
+  const emojiId = STATUS_EMOJI_IDS[task.status];
+
+  return `<tg-emoji emoji-id="${emojiId}">●</tg-emoji>`;
+}
+
+function getCancelCommand(task: Task): string {
+  return `/cancel_${task.message_id}`;
+}
+
 function formatTaskLine(task: Task): string {
+  const taskEmoji = getTaskStatusEmoji(task);
   const taskText = escapeHtml(truncateTaskText(task.task_text));
   const taskLink = escapeHtmlAttribute(getTaskMessageLink(task));
   const startedAt = formatTaskDate(task.started_at);
-  const finishedAt =
-    task.finished_at === null ? "Working" : formatTaskDate(task.finished_at);
+  const parts = [
+    `${taskEmoji} <a href="${taskLink}">${taskText}</a>`,
+    startedAt,
+  ];
 
-  return `<a href="${taskLink}">${taskText}</a> - ${startedAt} - ${finishedAt}`;
+  if (task.finished_at !== null) {
+    parts.push(formatTaskDate(task.finished_at));
+  }
+
+  parts.push(getCancelCommand(task));
+
+  return parts.join(" - ");
 }
 
 export function formatTasksList(tasks: Task[]): string {
@@ -143,4 +238,26 @@ export async function replyWithRecentTasks(ctx: Context): Promise<void> {
     },
     parse_mode: "HTML",
   });
+}
+
+export async function replyWithCancelTask(
+  ctx: Context,
+  messageId: number,
+): Promise<void> {
+  if (!ctx.chat) {
+    return;
+  }
+
+  const result = await cancelTask(ctx.database, {
+    chat_id: ctx.chat.id,
+    message_id: messageId,
+  });
+  const response =
+    result === "canceled"
+      ? "Canceled."
+      : result === "not_working"
+        ? "Task is not working."
+        : "Task not found.";
+
+  await ctx.reply(response);
 }
