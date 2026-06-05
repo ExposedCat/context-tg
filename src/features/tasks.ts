@@ -10,6 +10,7 @@ import type { Database } from "./database.ts";
 export type TasksTable = {
   chat_id: number;
   message_id: number;
+  thread_id: number;
   task_text: string;
   started_at: ColumnType<TaskDateValue, string | undefined, string>;
   status: ColumnType<TaskStatus, TaskStatus | undefined, TaskStatus>;
@@ -67,6 +68,7 @@ export async function migrateTasks(database: Database) {
     .ifNotExists()
     .addColumn("chat_id", "integer", (column) => column.notNull())
     .addColumn("message_id", "integer", (column) => column.notNull())
+    .addColumn("thread_id", "integer", (column) => column.notNull())
     .addColumn("task_text", "text", (column) => column.notNull())
     .addColumn("started_at", "text", (column) => column.notNull())
     .addColumn("status", "text", (column) =>
@@ -74,6 +76,21 @@ export async function migrateTasks(database: Database) {
     )
     .addColumn("finished_at", "text")
     .addPrimaryKeyConstraint("tasks_primary_key", ["chat_id", "message_id"])
+    .execute();
+
+  try {
+    await database.schema
+      .alterTable("tasks")
+      .addColumn("thread_id", "integer")
+      .execute();
+  } catch {
+    // Column already exists on fresh or previously migrated databases.
+  }
+
+  await database
+    .updateTable("tasks")
+    .set(({ ref }) => ({ thread_id: ref("message_id") }))
+    .where("thread_id", "is", null)
     .execute();
 
   try {
@@ -93,6 +110,13 @@ export async function migrateTasks(database: Database) {
     .where("status", "=", "working")
     .where("finished_at", "is not", null)
     .execute();
+
+  await database.schema
+    .createIndex("tasks_chat_thread_started_at_index")
+    .ifNotExists()
+    .on("tasks")
+    .columns(["chat_id", "thread_id", "started_at"])
+    .execute();
 }
 
 export async function createTask(
@@ -103,6 +127,7 @@ export async function createTask(
   const row = {
     chat_id: task.chat_id,
     message_id: task.message_id,
+    thread_id: task.thread_id,
     task_text: task.task_text,
     started_at: startedAt,
     status: task.status ?? "working",
@@ -190,10 +215,25 @@ export async function listRecentTasks(
   limit = RECENT_TASKS_LIMIT,
 ): Promise<Task[]> {
   return await database
-    .selectFrom("tasks")
-    .selectAll()
-    .where("chat_id", "=", chatId)
-    .orderBy("started_at", "desc")
+    .selectFrom("tasks as task")
+    .selectAll("task")
+    .where("task.chat_id", "=", chatId)
+    .where((expressionBuilder) =>
+      expressionBuilder(
+        "task.message_id",
+        "=",
+        expressionBuilder
+          .selectFrom("tasks as latest")
+          .select("latest.message_id")
+          .whereRef("latest.chat_id", "=", "task.chat_id")
+          .whereRef("latest.thread_id", "=", "task.thread_id")
+          .orderBy("latest.started_at", "desc")
+          .orderBy("latest.message_id", "desc")
+          .limit(1),
+      ),
+    )
+    .orderBy("task.started_at", "desc")
+    .orderBy("task.message_id", "desc")
     .limit(limit)
     .execute();
 }

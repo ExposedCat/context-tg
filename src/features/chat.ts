@@ -594,6 +594,7 @@ async function saveResumableTaskThread(
   ctx: Context,
   chatId: number,
   message: TextMessage,
+  threadId: number,
   agent: AgentDefinition,
   responseId: string | undefined,
   taskCreated: boolean,
@@ -606,6 +607,7 @@ async function saveResumableTaskThread(
     await saveThread(ctx.database, {
       chat_id: chatId,
       message_id: message.message_id,
+      thread_id: threadId,
       response_id: responseId,
       agent_id: agent.id,
     });
@@ -619,6 +621,7 @@ async function saveResumableTaskThread(
 type HandleChatRequestOptions = {
   reply?: TextMessage;
   thread?: Thread;
+  threadId?: number;
   taskText?: string;
   onUnhandledError?: () => Promise<void>;
 };
@@ -636,6 +639,7 @@ async function handleChatRequest(
   const chatId = ctx.chat.id;
   const reply = options.reply;
   const thread = options.thread;
+  const threadId = thread?.thread_id ?? options.threadId ?? message.message_id;
   const textUsage = await consumeUsage(ctx.database, chatId, "text_responses");
 
   if (!textUsage.ok) {
@@ -662,6 +666,7 @@ async function handleChatRequest(
   try {
     await createTask(ctx.database, {
       ...taskKey,
+      thread_id: threadId,
       task_text:
         options.taskText ?? stripMessageAgentName(text, ctx.me.username),
     });
@@ -787,10 +792,19 @@ async function handleChatRequest(
       return;
     }
 
+    await saveThread(ctx.database, {
+      chat_id: chatId,
+      message_id: message.message_id,
+      thread_id: threadId,
+      response_id: llmResponse.response_id,
+      agent_id: agent.id,
+    });
+
     for (const sentMessage of sentMessages) {
       await createThread(ctx.database, {
         chat_id: chatId,
         message_id: sentMessage.message_id,
+        thread_id: threadId,
         response_id: llmResponse.response_id,
         agent_id: agent.id,
       });
@@ -809,6 +823,7 @@ async function handleChatRequest(
       ctx,
       chatId,
       message,
+      threadId,
       activeAgent,
       resumableResponseId,
       taskCreated,
@@ -922,6 +937,13 @@ chatComposer.on("message", async (ctx, next) => {
         message_id: reply.message_id,
       })
     : undefined;
+  const repliedTask =
+    reply && !thread
+      ? await getTask(ctx.database, {
+          chat_id: ctx.chat.id,
+          message_id: reply.message_id,
+        })
+      : undefined;
 
   if (!text || (!isAddressed(text, ctx.me.username) && !thread)) {
     await next();
@@ -931,6 +953,7 @@ chatComposer.on("message", async (ctx, next) => {
   await handleChatRequest(ctx, message, text, {
     reply,
     thread,
+    threadId: repliedTask?.thread_id,
     onUnhandledError: next,
   });
 });

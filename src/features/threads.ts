@@ -5,6 +5,7 @@ import type { Database } from "./database.ts";
 export type ThreadsTable = {
   chat_id: number;
   message_id: number;
+  thread_id: number;
   agent_id: ColumnType<
     AgentId | null,
     AgentId | null | undefined,
@@ -27,9 +28,25 @@ export async function migrateThreads(database: Database) {
     .ifNotExists()
     .addColumn("chat_id", "integer", (column) => column.notNull())
     .addColumn("message_id", "integer", (column) => column.notNull())
+    .addColumn("thread_id", "integer", (column) => column.notNull())
     .addColumn("agent_id", "text")
     .addColumn("response_id", "text")
     .addPrimaryKeyConstraint("threads_primary_key", ["chat_id", "message_id"])
+    .execute();
+
+  try {
+    await database.schema
+      .alterTable("threads")
+      .addColumn("thread_id", "integer")
+      .execute();
+  } catch {
+    // Column already exists on fresh or previously migrated databases.
+  }
+
+  await database
+    .updateTable("threads")
+    .set(({ ref }) => ({ thread_id: ref("message_id") }))
+    .where("thread_id", "is", null)
     .execute();
 
   try {
