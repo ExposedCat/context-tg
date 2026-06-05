@@ -32,6 +32,18 @@ function startsWithBotMention(text: string, ownUsername: string): boolean {
   return startsWithName(text, `@${ownUsername}`);
 }
 
+function stripLeadingName(text: string, name: string): string | undefined {
+  if (!startsWithName(text, name)) {
+    return undefined;
+  }
+
+  const leadingWhitespaceLength = text.length - text.trimStart().length;
+  return text
+    .slice(leadingWhitespaceLength + name.length)
+    .replace(/^[\s:,.!?()[\]{}"'`-]+/, "")
+    .trim();
+}
+
 export function getAgentById(
   id: string | null | undefined,
 ): AgentDefinition | undefined {
@@ -57,6 +69,27 @@ export function resolveMessageAgent(
   return AGENTS.find((agent) =>
     agent.name.some((agentName) => startsWithName(text, agentName)),
   );
+}
+
+export function stripMessageAgentName(
+  text: string,
+  ownUsername: string,
+): string {
+  const botMentionText = stripLeadingName(text, `@${ownUsername}`);
+  if (botMentionText !== undefined) {
+    return botMentionText;
+  }
+
+  for (const agent of AGENTS) {
+    for (const agentName of agent.name) {
+      const taskText = stripLeadingName(text, agentName);
+      if (taskText !== undefined) {
+        return taskText;
+      }
+    }
+  }
+
+  return text.trim();
 }
 
 export function isAgentId(value: string | null | undefined): value is AgentId {

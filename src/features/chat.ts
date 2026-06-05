@@ -6,6 +6,7 @@ import {
   getAgentById,
   normalAgent,
   resolveMessageAgent,
+  stripMessageAgentName,
 } from "./agents/index.ts";
 import {
   type LlmCitation,
@@ -16,6 +17,7 @@ import {
   type LlmToolContext,
   requestLlm,
 } from "./llm.ts";
+import { createTask, finishTask } from "./tasks.ts";
 import { createThread, getThread } from "./threads.ts";
 
 type TextMessage = {
@@ -527,6 +529,23 @@ chatComposer.on("message", async (ctx, next) => {
     return;
   }
 
+  const taskKey = {
+    chat_id: ctx.chat.id,
+    message_id: message.message_id,
+  };
+  let taskCreated = false;
+
+  try {
+    await createTask(ctx.database, {
+      ...taskKey,
+      task_text: stripMessageAgentName(text, ctx.me.username),
+      started_at: Date.now(),
+    });
+    taskCreated = true;
+  } catch (error) {
+    logError("Failed to create task:", { error });
+  }
+
   try {
     const explicitAgent = resolveMessageAgent(text, ctx.me.username);
     const threadAgent = getAgentById(thread?.agent_id) ?? normalAgent;
@@ -620,5 +639,13 @@ chatComposer.on("message", async (ctx, next) => {
       parse_mode: "HTML",
     });
     await next();
+  } finally {
+    if (taskCreated) {
+      try {
+        await finishTask(ctx.database, taskKey);
+      } catch (error) {
+        logError("Failed to finish task:", { error });
+      }
+    }
   }
 });

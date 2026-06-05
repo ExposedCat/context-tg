@@ -11,6 +11,7 @@ import {
   persistReasoningEffort,
   persistWebSearchSetting,
 } from "./llm-models.ts";
+import { replyWithRecentTasks } from "./tasks.ts";
 
 export const stateComposer = new Composer<Context>();
 
@@ -50,6 +51,10 @@ stateComposer.chatType("private").command("start", async (ctx) => {
 
 stateComposer.chatType("private").command("stop", async (ctx) => {
   await ctx.reply(ctx.t("stop", { name: ctx.from.first_name }));
+});
+
+stateComposer.command("tasks", async (ctx) => {
+  await replyWithRecentTasks(ctx);
 });
 
 stateComposer.command("model", async (ctx) => {
