@@ -29,6 +29,7 @@ import type {
   LlmToolContext,
 } from "./llm-tools/types.ts";
 import * as webSearchTool from "./llm-tools/web-search.ts";
+import * as youtubeTool from "./llm-tools/youtube.ts";
 
 export type { LlmReport } from "./llm-tools/reports.ts";
 export type { LlmToolContext } from "./llm-tools/types.ts";
@@ -39,6 +40,7 @@ export const TOOL_DEFINITIONS = {
   search_chat: searchChatToolDefinition,
   read_last_messages: readLastMessagesToolDefinition,
   get_recent_news: gdeltTool.toolDefinition,
+  read_youtube_video: youtubeTool.toolDefinition,
   send_report: reportsTool.toolDefinition,
   send_trading_report: reportsTool.tradingToolDefinition,
   call_agent: agentTool.toolDefinition,
@@ -52,6 +54,7 @@ const FUNCTION_TOOL_RUNNERS = {
   search_chat: executeSearchChat,
   read_last_messages: executeReadLastMessages,
   get_recent_news: gdeltTool.execute,
+  read_youtube_video: youtubeTool.execute,
   send_report: reportsTool.execute,
   send_trading_report: reportsTool.executeTrading,
   call_agent: agentTool.createRunner(runAgent),
