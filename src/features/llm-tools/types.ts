@@ -15,4 +15,7 @@ export type FunctionToolResult = {
 export type FunctionToolRunner = (
   args: Record<string, unknown> | null,
   context?: LlmToolContext,
+  options?: {
+    signal?: AbortSignal;
+  },
 ) => FunctionToolResult | string | Promise<FunctionToolResult | string>;

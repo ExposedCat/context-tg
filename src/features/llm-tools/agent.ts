@@ -32,9 +32,10 @@ export function createRunner(
     agentId: string,
     task: string,
     context?: LlmToolContext,
+    signal?: AbortSignal,
   ) => ReturnType<FunctionToolRunner>,
 ): FunctionToolRunner {
-  return async (args, context) => {
+  return async (args, context, options) => {
     const agentId = typeof args?.agent === "string" ? args.agent : "";
     const task = typeof args?.task === "string" ? args.task.trim() : "";
 
@@ -42,6 +43,6 @@ export function createRunner(
       return JSON.stringify({ error: "agent and task must not be empty." });
     }
 
-    return await delegate(agentId, task, context);
+    return await delegate(agentId, task, context, options?.signal);
   };
 }

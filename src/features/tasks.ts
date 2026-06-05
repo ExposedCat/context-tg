@@ -23,11 +23,28 @@ export type TaskStatus = "working" | "finished" | "failed" | "canceled";
 const RECENT_TASKS_LIMIT = 5;
 const TASK_LABEL_LENGTH = 15;
 const STATUS_EMOJI_IDS = {
-  working: "6113685078825505075",
-  finished: "5825794181183836432",
-  failed: "6269316311172518259",
-  canceled: "6269316311172518259",
-} satisfies Record<TaskStatus, string>;
+  working: {
+    id: "6113685078825505075",
+    fallback: "⏳",
+  },
+  finished: {
+    id: "5825794181183836432",
+    fallback: "✅",
+  },
+  failed: {
+    id: "6269316311172518259",
+    fallback: "❌",
+  },
+  canceled: {
+    id: "6269316311172518259",
+    fallback: "❌",
+  },
+} satisfies Record<TaskStatus, { id: string; fallback: string }>;
+const linkPreviewOptions = {
+  link_preview_options: {
+    is_disabled: true,
+  },
+};
 const activeTaskControllers = new Map<string, AbortController>();
 
 type CancelTaskResult = "canceled" | "not_found" | "not_working";
@@ -190,18 +207,20 @@ function getTaskMessageLink(task: Task): string {
   return `https://t.me/${task.chat_id}/${task.message_id}`;
 }
 
-function getTaskStatusEmoji(task: Task): string {
-  const emojiId = STATUS_EMOJI_IDS[task.status];
+function getTaskStatusEmoji(task: Task, useCustomEmoji: boolean): string {
+  const emoji = STATUS_EMOJI_IDS[task.status];
 
-  return `<tg-emoji emoji-id="${emojiId}">●</tg-emoji>`;
+  return useCustomEmoji
+    ? `<tg-emoji emoji-id="${emoji.id}">${emoji.fallback}</tg-emoji>`
+    : emoji.fallback;
 }
 
 function getCancelCommand(task: Task): string {
   return `/cancel_${task.message_id}`;
 }
 
-function formatTaskLine(task: Task): string {
-  const taskEmoji = getTaskStatusEmoji(task);
+function formatTaskLine(task: Task, useCustomEmoji: boolean): string {
+  const taskEmoji = getTaskStatusEmoji(task, useCustomEmoji);
   const taskText = escapeHtml(truncateTaskText(task.task_text));
   const taskLink = escapeHtmlAttribute(getTaskMessageLink(task));
   const startedAt = formatTaskDate(task.started_at);
@@ -220,8 +239,15 @@ function formatTaskLine(task: Task): string {
 }
 
 export function formatTasksList(tasks: Task[]): string {
+  return formatTasksListWithOptions(tasks, true);
+}
+
+function formatTasksListWithOptions(
+  tasks: Task[],
+  useCustomEmoji: boolean,
+): string {
   return tasks.length > 0
-    ? tasks.map(formatTaskLine).join("\n")
+    ? tasks.map((task) => formatTaskLine(task, useCustomEmoji)).join("\n")
     : "No tasks yet.";
 }
 
@@ -232,12 +258,17 @@ export async function replyWithRecentTasks(ctx: Context): Promise<void> {
 
   const tasks = await listRecentTasks(ctx.database, ctx.chat.id);
 
-  await ctx.reply(formatTasksList(tasks), {
-    link_preview_options: {
-      is_disabled: true,
-    },
-    parse_mode: "HTML",
-  });
+  try {
+    await ctx.reply(formatTasksList(tasks), {
+      ...linkPreviewOptions,
+      parse_mode: "HTML",
+    });
+  } catch {
+    await ctx.reply(formatTasksListWithOptions(tasks, false), {
+      ...linkPreviewOptions,
+      parse_mode: "HTML",
+    });
+  }
 }
 
 export async function replyWithCancelTask(

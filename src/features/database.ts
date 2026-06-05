@@ -9,11 +9,18 @@ import {
 } from "./llm-models.ts";
 import { migrateTasks, type TasksTable } from "./tasks.ts";
 import { migrateThreads, type ThreadsTable } from "./threads.ts";
+import {
+  type ChatUsageLimitsTable,
+  type ChatUsageTable,
+  migrateUsage,
+} from "./usage.ts";
 
 export type DatabaseSchema = {
   threads: ThreadsTable;
   llm_settings: LlmSettingsTable;
   tasks: TasksTable;
+  chat_usage_limits: ChatUsageLimitsTable;
+  chat_usage: ChatUsageTable;
 };
 
 export type Database = Kysely<DatabaseSchema>;
@@ -50,6 +57,7 @@ export function initDatabase() {
     await migrateThreads(database);
     await migrateLlmSettings(database);
     await migrateTasks(database);
+    await migrateUsage(database);
     await loadLlmSettings(database);
 
     return database;

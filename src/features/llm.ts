@@ -106,6 +106,7 @@ export type LlmResponse = {
     sources: LlmSource[];
   };
   tools: ToolName[];
+  tool_call_count: number;
 };
 
 type ToolDefinition =
@@ -558,11 +559,16 @@ async function runFunctionToolCall(
   call: FunctionToolCall,
   state: LlmRequestState,
   context?: LlmToolContext,
+  signal?: AbortSignal,
 ): Promise<FunctionToolCallResult> {
+  throwIfAborted(signal);
   const args = parseJsonObject(call.arguments);
   logDebug("Running tool call", formatToolCallLog(call));
   const runner = FUNCTION_TOOL_RUNNERS[call.name];
-  const result = normalizeFunctionToolResult(await runner(args, context));
+  const result = normalizeFunctionToolResult(
+    await runner(args, context, { signal }),
+  );
+  throwIfAborted(signal);
 
   if (result.report) {
     state.report = result.report;
@@ -718,6 +724,7 @@ async function resolveFunctionToolCalls(
 ): Promise<{
   response: ApiResponse;
   calledTools: ToolName[];
+  toolCallCount: number;
   lastResponseId?: string;
 }> {
   const calledTools = new Set(getCalledTools(initialResponse));
@@ -737,7 +744,7 @@ async function resolveFunctionToolCalls(
 
     const toolCallResults = await Promise.all(
       functionCalls.map((call) =>
-        runFunctionToolCall(call, state, options.context),
+        runFunctionToolCall(call, state, options.context, options.signal),
       ),
     );
     await options.onProgress?.({
@@ -770,6 +777,7 @@ async function resolveFunctionToolCalls(
   return {
     response,
     calledTools: [...calledTools],
+    toolCallCount,
     lastResponseId: state.lastResponseId,
   };
 }
@@ -800,7 +808,7 @@ async function requestLlmWithInstructions(
     instructions,
   );
 
-  const { response, calledTools, lastResponseId } =
+  const { response, calledTools, toolCallCount, lastResponseId } =
     await resolveFunctionToolCalls(
       client,
       initialResponse,
@@ -835,6 +843,7 @@ async function requestLlmWithInstructions(
       sources,
     },
     tools: calledTools,
+    tool_call_count: toolCallCount,
   };
 }
 
@@ -842,6 +851,7 @@ async function runAgent(
   agentId: string,
   task: string,
   context?: LlmToolContext,
+  signal?: AbortSignal,
 ): Promise<FunctionToolResult> {
   const agent = getCallableAgentById(agentId);
 
@@ -858,7 +868,7 @@ async function runAgent(
     `Delegated task from ultimate agent:\n${task}\n\nReturn a concise result for the ultimate agent to synthesize.`,
     agent.tools,
     undefined,
-    { context },
+    { context, signal },
     agent.buildInstructions(),
     agent.MODEL,
   );
@@ -868,6 +878,7 @@ async function runAgent(
     response: result.response ?? "",
     report_attached: Boolean(result.report),
     tools_used: result.tools,
+    tool_call_count: result.tool_call_count,
     web_search: result.web_search.used,
   });
 

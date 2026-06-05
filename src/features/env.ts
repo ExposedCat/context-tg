@@ -24,6 +24,7 @@ function getRequiredNumberEnv(name: string): number {
 
 export const APP_ENV = {
   BOT_TOKEN: getRequiredEnv("BOT_TOKEN"),
+  ADMIN_ID: getRequiredNumberEnv("ADMIN_ID"),
   SQLITE_PATH: getRequiredEnv("SQLITE_PATH"),
   LLM_MODEL: getRequiredEnv("LLM_MODEL"),
   LLM_MODEL_SMALL: getRequiredEnv("LLM_MODEL_SMALL"),

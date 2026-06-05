@@ -16,6 +16,7 @@ import {
   type LlmResponse,
   type LlmToolContext,
   requestLlm,
+  type ToolName,
 } from "./llm.ts";
 import {
   completeTask,
@@ -25,6 +26,15 @@ import {
   type TaskStatus,
 } from "./tasks.ts";
 import { createThread, getThread } from "./threads.ts";
+import {
+  consumeUsage,
+  getUsageStatus,
+  hasUsageRemaining,
+  recordUsage,
+  refundUsage,
+  type UsageConsumeResult,
+  type UsageKey,
+} from "./usage.ts";
 
 type TextMessage = {
   message_id: number;
@@ -456,6 +466,33 @@ function getErrorResponseText(error: unknown): string {
   return `Error: ${sanitizeLlmHtml(details)}`;
 }
 
+function formatQuotaExceededResponse(
+  key: UsageKey,
+  status: Pick<UsageConsumeResult, "used" | "quota">,
+): string {
+  return `Quota exceeded: ${key} ${status.used}/${status.quota}`;
+}
+
+function filterToolsForUsage(
+  tools: ToolName[],
+  options: {
+    toolUsageRemaining: boolean;
+    imageUsageRemaining: boolean;
+  },
+): ToolName[] {
+  return tools.filter((tool) => {
+    if (!options.toolUsageRemaining) {
+      return false;
+    }
+
+    if (tool === "send_report" && !options.imageUsageRemaining) {
+      return false;
+    }
+
+    return true;
+  });
+}
+
 function isAbortError(error: unknown): boolean {
   return (
     (error instanceof DOMException && error.name === "AbortError") ||
@@ -542,12 +579,29 @@ chatComposer.on("message", async (ctx, next) => {
     return;
   }
 
+  const textUsage = await consumeUsage(
+    ctx.database,
+    ctx.chat.id,
+    "text_responses",
+  );
+
+  if (!textUsage.ok) {
+    await ctx.reply(formatQuotaExceededResponse("text_responses", textUsage), {
+      reply_parameters: {
+        message_id: message.message_id,
+      },
+    });
+    return;
+  }
+
   const taskKey = {
     chat_id: ctx.chat.id,
     message_id: message.message_id,
   };
   let taskCreated = false;
   let taskStatus: Exclude<TaskStatus, "working"> = "finished";
+  let responseSent = false;
+  let imageUsageConsumed = false;
   const taskAbortController = createTaskAbortController(taskKey);
 
   try {
@@ -565,6 +619,20 @@ chatComposer.on("message", async (ctx, next) => {
     const explicitAgent = resolveMessageAgent(text, ctx.me.username);
     const threadAgent = getAgentById(thread?.agent_id) ?? normalAgent;
     const agent: AgentDefinition = explicitAgent ?? threadAgent;
+    const toolUsage = await getUsageStatus(
+      ctx.database,
+      ctx.chat.id,
+      "tool_usages",
+    );
+    const imageUsageRemaining = await hasUsageRemaining(
+      ctx.database,
+      ctx.chat.id,
+      "image_responses",
+    );
+    const agentTools = filterToolsForUsage(agent.tools, {
+      toolUsageRemaining: toolUsage.used < toolUsage.quota,
+      imageUsageRemaining,
+    });
     const responseId =
       thread?.response_id &&
       (!explicitAgent || explicitAgent.id === threadAgent.id)
@@ -592,7 +660,7 @@ chatComposer.on("message", async (ctx, next) => {
           return responseId
             ? requestLlm(
                 buildThreadRequest(text, message.quote?.text),
-                agent.tools,
+                agentTools,
                 responseId,
                 requestOptions,
                 agent.buildInstructions(),
@@ -600,7 +668,7 @@ chatComposer.on("message", async (ctx, next) => {
               )
             : requestLlm(
                 buildRootRequest(text, reply && getMessageText(reply)),
-                agent.tools,
+                agentTools,
                 undefined,
                 requestOptions,
                 agent.buildInstructions(),
@@ -613,6 +681,30 @@ chatComposer.on("message", async (ctx, next) => {
     })();
 
     const formattedResponse = formatLlmResponse(llmResponse);
+
+    await recordUsage(
+      ctx.database,
+      ctx.chat.id,
+      "tool_usages",
+      llmResponse.tool_call_count,
+    );
+
+    if (llmResponse.report) {
+      const imageUsage = await consumeUsage(
+        ctx.database,
+        ctx.chat.id,
+        "image_responses",
+      );
+
+      if (!imageUsage.ok) {
+        throw new Error(
+          formatQuotaExceededResponse("image_responses", imageUsage),
+        );
+      }
+
+      imageUsageConsumed = true;
+    }
+
     const sentMessages = llmResponse.report
       ? await sendReportResponse(
           ctx,
@@ -636,6 +728,8 @@ chatComposer.on("message", async (ctx, next) => {
       }
     }
 
+    responseSent = true;
+
     if (!llmResponse.response_id) {
       return;
     }
@@ -654,6 +748,14 @@ chatComposer.on("message", async (ctx, next) => {
         ? "canceled"
         : "failed";
     logError("Error handling message:", error);
+    if (!responseSent) {
+      await refundUsage(ctx.database, ctx.chat.id, "text_responses");
+
+      if (imageUsageConsumed) {
+        await refundUsage(ctx.database, ctx.chat.id, "image_responses");
+      }
+    }
+
     if (taskStatus === "canceled") {
       return;
     }
