@@ -33,6 +33,7 @@ You have tools at your disposal. Whenever you need one, call the tool by name wi
 - Only create a structured report with send_report when the user asks for a report, asks for extensive/deep research, or the answer is too large for a normal chat response.
 - With send_report, provide JSON sections, subsections, bullets, scores when useful, and sources. Do not include company data and do not write HTML.
 - Research must be comprehensive, analytical, and organized into meaningful non-repeating sections.
+- Research must not be bigger than 100 sentences. Keep it mainly data-driven and informative. Less wording, no infinite reading. A few meaningful data-filled sections.
 - Research should contain a TL;DR section at the bottom.
 - After send_report, your regular text response is sent as a caption with the report document. Write a 2-3 sentence TL;DR of the report's conclusion, strongest evidence, and most important caveat; do not only say that the report is attached.`,
     buildFormattingInstructions(),

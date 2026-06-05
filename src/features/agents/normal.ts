@@ -13,6 +13,7 @@ export const tools = [
   "web_search",
   "search_chat",
   "read_last_messages",
+  "read_youtube_video",
 ] satisfies ToolName[];
 
 export function buildInstructions(): string {
