@@ -34,7 +34,6 @@ const logError = createDebug("app:chat:error");
 
 export const chatComposer = new Composer<Context>();
 
-const TYPING_ACTION_INTERVAL_MS = 3000;
 const TELEGRAM_MESSAGE_CHUNK_SIZE = 3000;
 const TELEGRAM_CAPTION_CHUNK_SIZE = 1000;
 const SLOW_RESPONSE_REACTION_DELAY_MS = 15_000;
@@ -182,16 +181,7 @@ async function withTypingAction<T>(
   callback: () => Promise<T>,
 ): Promise<T> {
   await submitTypingAction(ctx);
-
-  const intervalId = setInterval(() => {
-    void submitTypingAction(ctx);
-  }, TYPING_ACTION_INTERVAL_MS);
-
-  try {
-    return await callback();
-  } finally {
-    clearInterval(intervalId);
-  }
+  return await callback();
 }
 
 function escapeHtml(text: string): string {
