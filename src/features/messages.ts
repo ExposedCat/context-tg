@@ -3,6 +3,7 @@ import OpenAI from "@openai/openai";
 import { Composer } from "grammy";
 import type { Context } from "../bot.ts";
 import { APP_ENV } from "./env.ts";
+import { startsWithCommandPrefix } from "./message-filter.ts";
 
 type TextMessage = {
   message_id: number;
@@ -318,7 +319,7 @@ function shouldSkipIndexing(message: TextMessage): boolean {
     (entity) => entity.type === "bot_command" && entity.offset === 0,
   );
 
-  return hasCommandEntity === true || message.text.trimStart().startsWith("/");
+  return hasCommandEntity === true || startsWithCommandPrefix(message.text);
 }
 
 async function indexMessage(

@@ -18,6 +18,7 @@ import {
   requestLlm,
   type ToolName,
 } from "./llm.ts";
+import { startsWithCommandPrefix } from "./message-filter.ts";
 import {
   completeTask,
   createTask,
@@ -66,6 +67,13 @@ const linkPreviewOptions = {
 
 function getMessageText(message: TextMessage): string | undefined {
   return message.text ?? message.caption;
+}
+
+function getLlmContextText(
+  message: TextMessage | undefined,
+): string | undefined {
+  const text = message && getMessageText(message);
+  return startsWithCommandPrefix(text) ? undefined : text;
 }
 
 function isAddressed(text: string, ownUsername: string): boolean {
@@ -717,7 +725,12 @@ async function handleChatRequest(
 
           return responseId
             ? requestLlm(
-                buildThreadRequest(text, message.quote?.text),
+                buildThreadRequest(
+                  text,
+                  startsWithCommandPrefix(message.quote?.text)
+                    ? undefined
+                    : message.quote?.text,
+                ),
                 agentTools,
                 responseId,
                 requestOptions,
@@ -725,7 +738,7 @@ async function handleChatRequest(
                 agent.MODEL,
               )
             : requestLlm(
-                buildRootRequest(text, reply && getMessageText(reply)),
+                buildRootRequest(text, getLlmContextText(reply)),
                 agentTools,
                 undefined,
                 requestOptions,
@@ -945,7 +958,11 @@ chatComposer.on("message", async (ctx, next) => {
         })
       : undefined;
 
-  if (!text || (!isAddressed(text, ctx.me.username) && !thread)) {
+  if (
+    !text ||
+    startsWithCommandPrefix(text) ||
+    (!isAddressed(text, ctx.me.username) && !thread)
+  ) {
     await next();
     return;
   }
