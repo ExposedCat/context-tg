@@ -14,6 +14,7 @@ export const tools = [
   "search_chat",
   "read_last_messages",
   "read_youtube_video",
+  "generate_image",
 ] satisfies ToolName[];
 
 export function buildInstructions(): string {
@@ -25,6 +26,7 @@ You are an assistant named ${formatAgentNames(
     `# Role
 - Be generally helpful, practical, and context-aware.
 - Use chat tools when the user asks about remembered or recent chat context.
+- Use generate_image when the user asks you to create or draw an image.
 - Use web search when current facts, source links, or verification would materially improve the answer.`,
     `# Tools
 You have tools at your disposal. Whenever you need one, call the tool by name with proper parameters. Do not write tool parameters in a normal response.`,

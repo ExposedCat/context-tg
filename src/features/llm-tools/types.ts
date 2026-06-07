@@ -4,8 +4,17 @@ export type LlmToolContext = {
   replyMessageId?: number;
 };
 
+export type LlmGeneratedImage = {
+  prompt: string;
+  revisedPrompt?: string;
+  url?: string;
+  dataUrl?: string;
+  mimeType?: string;
+};
+
 export type FunctionToolResult = {
   output: string;
+  image?: LlmGeneratedImage;
   report?: {
     documentHtml: string;
     filename: string;

@@ -19,6 +19,7 @@ import {
   searchChatToolDefinition,
 } from "./llm-tools/chat.ts";
 import * as gdeltTool from "./llm-tools/gdelt.ts";
+import * as imageTool from "./llm-tools/image.ts";
 import * as marketTool from "./llm-tools/market.ts";
 import type { LlmReport } from "./llm-tools/reports.ts";
 import * as reportsTool from "./llm-tools/reports.ts";
@@ -26,13 +27,14 @@ import * as tickerPriceTool from "./llm-tools/ticker-price.ts";
 import type {
   FunctionToolResult,
   FunctionToolRunner,
+  LlmGeneratedImage,
   LlmToolContext,
 } from "./llm-tools/types.ts";
 import * as webSearchTool from "./llm-tools/web-search.ts";
 import * as youtubeTool from "./llm-tools/youtube.ts";
 
 export type { LlmReport } from "./llm-tools/reports.ts";
-export type { LlmToolContext } from "./llm-tools/types.ts";
+export type { LlmGeneratedImage, LlmToolContext } from "./llm-tools/types.ts";
 
 export const TOOL_DEFINITIONS = {
   fetch_ticker_price: tickerPriceTool.toolDefinition,
@@ -41,6 +43,7 @@ export const TOOL_DEFINITIONS = {
   read_last_messages: readLastMessagesToolDefinition,
   get_recent_news: gdeltTool.toolDefinition,
   read_youtube_video: youtubeTool.toolDefinition,
+  generate_image: imageTool.toolDefinition,
   send_report: reportsTool.toolDefinition,
   send_trading_report: reportsTool.tradingToolDefinition,
   call_agent: agentTool.toolDefinition,
@@ -55,6 +58,7 @@ const FUNCTION_TOOL_RUNNERS = {
   read_last_messages: executeReadLastMessages,
   get_recent_news: gdeltTool.execute,
   read_youtube_video: youtubeTool.execute,
+  generate_image: imageTool.execute,
   send_report: reportsTool.execute,
   send_trading_report: reportsTool.executeTrading,
   call_agent: agentTool.createRunner(runAgent),
@@ -105,6 +109,7 @@ export type LlmResponse = {
   response_id?: string;
   response?: string;
   report?: LlmReport;
+  images: LlmGeneratedImage[];
   web_search: {
     used: boolean;
     citations: LlmCitation[];
@@ -203,6 +208,7 @@ type LlmRequestState = {
   receivedResponse: boolean;
   sentImmediateContentFilterWarning: boolean;
   report?: LlmReport;
+  images: LlmGeneratedImage[];
 };
 
 function getSystemInstructions(): string {
@@ -217,7 +223,17 @@ function getClient(): OpenAI {
 }
 
 function getExposedTools(tools: ToolName[]): ToolName[] {
-  return tools.filter((tool) => tool !== "web_search" || isWebSearchEnabled());
+  return tools.filter((tool) => {
+    if (tool === "web_search") {
+      return isWebSearchEnabled();
+    }
+
+    if (tool === "generate_image") {
+      return imageTool.isConfigured();
+    }
+
+    return true;
+  });
 }
 
 function getToolDefinitions(tools: ToolName[]): ToolDefinition[] {
@@ -628,6 +644,10 @@ async function runFunctionToolCall(
     state.report = result.report;
   }
 
+  if (result.image) {
+    state.images.push(result.image);
+  }
+
   return {
     toolOutput: createToolOutput(call, result.output),
   };
@@ -850,6 +870,7 @@ async function requestLlmWithInstructions(
     lastResponseId: responseId ?? undefined,
     receivedResponse: false,
     sentImmediateContentFilterWarning: false,
+    images: [],
   };
   const initialResponse = await createLlmResponseWithRetries(
     client,
@@ -891,6 +912,7 @@ async function requestLlmWithInstructions(
     response_id: response.id ?? lastResponseId,
     response: responseText,
     report: state.report,
+    images: state.images,
     web_search: {
       used: calledTools.includes("web_search"),
       citations,

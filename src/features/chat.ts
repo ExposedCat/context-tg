@@ -11,6 +11,7 @@ import {
 import { APP_ENV } from "./env.ts";
 import {
   type LlmCitation,
+  type LlmGeneratedImage,
   type LlmImageInput,
   type LlmReport,
   LlmRequestError,
@@ -44,6 +45,7 @@ import {
 
 type TextMessage = {
   message_id: number;
+  from?: TelegramUser;
   text?: string;
   caption?: string;
   photo?: PhotoSize[];
@@ -52,6 +54,10 @@ type TextMessage = {
     text: string;
   };
   reply_to_message?: TextMessage;
+};
+
+type TelegramUser = {
+  id: number;
 };
 
 type PhotoSize = {
@@ -171,6 +177,13 @@ function hasImageAttachments(message: TextMessage | undefined): boolean {
 
 function isAddressed(text: string, ownUsername: string): boolean {
   return Boolean(resolveMessageAgent(text, ownUsername));
+}
+
+function isDirectReplyToBot(
+  reply: TextMessage | undefined,
+  botId: number,
+): boolean {
+  return reply?.from?.id === botId;
 }
 
 function buildRootRequest(text: string, replyText?: string): string {
@@ -618,6 +631,7 @@ const TOOL_USAGE_EMOJIS: Partial<
   fetch_ticker_price: { id: "5974217466270716579", fallback: "💵" },
   get_recent_news: { id: "6008090211181923982", fallback: "📰" },
   read_youtube_video: { id: "6005986106703613755", fallback: "▶️" },
+  generate_image: { id: "5766879414704935108", fallback: "🖼️" },
 };
 
 function formatToolUsageEmojis(tools: ToolName[]): string {
@@ -702,6 +716,10 @@ function filterToolsForUsage(
       return false;
     }
 
+    if (tool === "generate_image" && !options.imageUsageRemaining) {
+      return false;
+    }
+
     return true;
   });
 }
@@ -759,6 +777,117 @@ async function sendReportResponse(
     await Deno.remove(tmpPath).catch((error) =>
       logError("Failed to delete temporary report:", { tmpPath, error }),
     );
+  }
+
+  for (const chunk of captionChunks.slice(1)) {
+    const sentMessage = await ctx.reply(chunk, {
+      ...linkPreviewOptions,
+      parse_mode: formattedResponse.parse_mode,
+      reply_parameters: {
+        message_id: message.message_id,
+      },
+    });
+
+    sentMessages.push(sentMessage);
+  }
+
+  return sentMessages;
+}
+
+function getImageFileExtension(mimeType: string | undefined): string {
+  switch (mimeType) {
+    case "image/jpeg":
+      return "jpg";
+    case "image/webp":
+      return "webp";
+    default:
+      return "png";
+  }
+}
+
+function decodeBase64(value: string): Uint8Array {
+  return Uint8Array.from(atob(value), (char) => char.charCodeAt(0));
+}
+
+function parseDataUrlImage(dataUrl: string): {
+  bytes: Uint8Array;
+  mimeType: string;
+} {
+  const match = /^data:([^;,]+);base64,(.*)$/i.exec(dataUrl);
+
+  if (!match) {
+    throw new Error("Generated image data URL is invalid.");
+  }
+
+  return {
+    mimeType: match[1],
+    bytes: decodeBase64(match[2]),
+  };
+}
+
+async function createImageInputFile(
+  image: LlmGeneratedImage,
+): Promise<{ input: string | InputFile; cleanup: () => Promise<void> }> {
+  if (image.url) {
+    return {
+      input: image.url,
+      cleanup: async () => {},
+    };
+  }
+
+  if (!image.dataUrl) {
+    throw new Error("Generated image is missing data.");
+  }
+
+  const parsed = parseDataUrlImage(image.dataUrl);
+  const extension = getImageFileExtension(image.mimeType ?? parsed.mimeType);
+  const tmpPath = await Deno.makeTempFile({
+    prefix: "context-tg-image-",
+    suffix: `.${extension}`,
+  });
+
+  await Deno.writeFile(tmpPath, parsed.bytes);
+
+  return {
+    input: new InputFile(tmpPath, `generated-image.${extension}`),
+    cleanup: async () => {
+      await Deno.remove(tmpPath).catch((error) =>
+        logError("Failed to delete temporary generated image:", {
+          tmpPath,
+          error,
+        }),
+      );
+    },
+  };
+}
+
+async function sendGeneratedImagesResponse(
+  ctx: Context,
+  message: TextMessage,
+  images: LlmGeneratedImage[],
+  formattedResponse: ReturnType<typeof formatLlmResponse>,
+): Promise<Array<{ message_id: number }>> {
+  const captionChunks = splitHtmlMessage(
+    formattedResponse.text || "Image attached.",
+    TELEGRAM_CAPTION_CHUNK_SIZE,
+  );
+  const sentMessages = [];
+
+  for (const [index, image] of images.entries()) {
+    const { input, cleanup } = await createImageInputFile(image);
+
+    try {
+      const sentPhoto = await ctx.replyWithPhoto(input, {
+        caption: index === 0 ? captionChunks[0] : undefined,
+        parse_mode: index === 0 ? formattedResponse.parse_mode : undefined,
+        reply_parameters: {
+          message_id: message.message_id,
+        },
+      });
+      sentMessages.push(sentPhoto);
+    } finally {
+      await cleanup();
+    }
   }
 
   for (const chunk of captionChunks.slice(1)) {
@@ -865,7 +994,7 @@ async function handleChatRequest(
   let taskCreated = false;
   let taskStatus: Exclude<TaskStatus, "working"> = "finished";
   let responseSent = false;
-  let imageUsageConsumed = false;
+  let imageUsageConsumedCount = 0;
   let progressResponseId: string | undefined;
   let activeAgent: AgentDefinition = normalAgent;
   const taskAbortController = createTaskAbortController(taskKey);
@@ -975,11 +1104,15 @@ async function handleChatRequest(
       llmResponse.tool_call_count,
     );
 
-    if (llmResponse.report) {
+    const imageAttachmentCount =
+      llmResponse.images.length + (llmResponse.report ? 1 : 0);
+
+    if (imageAttachmentCount > 0) {
       const imageUsage = await consumeUsage(
         ctx.database,
         chatId,
         "image_responses",
+        imageAttachmentCount,
       );
 
       if (!imageUsage.ok) {
@@ -988,19 +1121,27 @@ async function handleChatRequest(
         );
       }
 
-      imageUsageConsumed = true;
+      imageUsageConsumedCount = imageAttachmentCount;
     }
 
-    const sentMessages = llmResponse.report
-      ? await sendReportResponse(
-          ctx,
-          message,
-          llmResponse.report,
-          formattedResponse,
-        )
-      : [];
+    const sentMessages =
+      llmResponse.images.length > 0
+        ? await sendGeneratedImagesResponse(
+            ctx,
+            message,
+            llmResponse.images,
+            formattedResponse,
+          )
+        : llmResponse.report
+          ? await sendReportResponse(
+              ctx,
+              message,
+              llmResponse.report,
+              formattedResponse,
+            )
+          : [];
 
-    if (!llmResponse.report) {
+    if (!llmResponse.report && llmResponse.images.length === 0) {
       for (const chunk of splitHtmlMessage(formattedResponse.text)) {
         const sentMessage = await ctx.reply(chunk, {
           ...linkPreviewOptions,
@@ -1059,8 +1200,13 @@ async function handleChatRequest(
     if (!responseSent) {
       await refundUsage(ctx.database, chatId, "text_responses");
 
-      if (imageUsageConsumed) {
-        await refundUsage(ctx.database, chatId, "image_responses");
+      if (imageUsageConsumedCount > 0) {
+        await refundUsage(
+          ctx.database,
+          chatId,
+          "image_responses",
+          imageUsageConsumedCount,
+        );
       }
     }
 
@@ -1158,6 +1304,8 @@ chatComposer.on("message", async (ctx, next) => {
   const message = ctx.message as TextMessage;
   const text = getMessageText(message);
   const reply = message.reply_to_message;
+  const isDirectBotReply = isDirectReplyToBot(reply, ctx.me.id);
+  const addressed = text ? isAddressed(text, ctx.me.username) : false;
   const thread = reply
     ? await getThread(ctx.database, {
         chat_id: ctx.chat.id,
@@ -1173,14 +1321,14 @@ chatComposer.on("message", async (ctx, next) => {
       : undefined;
   const requestText =
     text ??
-    (thread && hasImageAttachments(message)
+    (isDirectBotReply && hasImageAttachments(message)
       ? "Please respond to the attached image."
       : undefined);
 
   if (
     !requestText ||
     startsWithCommandPrefix(text) ||
-    (text ? !isAddressed(text, ctx.me.username) && !thread : !thread)
+    (!addressed && !isDirectBotReply)
   ) {
     await next();
     return;
