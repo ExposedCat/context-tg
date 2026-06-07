@@ -79,6 +79,18 @@ export type LlmRequestOptions = {
   signal?: AbortSignal;
 };
 
+export type LlmImageInput = {
+  image_url: string;
+  detail?: "low" | "high" | "auto" | "original";
+};
+
+export type LlmRequestInput =
+  | string
+  | {
+      text: string;
+      images?: LlmImageInput[];
+    };
+
 export type LlmCitation = {
   start_index: number;
   end_index: number;
@@ -157,6 +169,25 @@ type FunctionCallOutput = {
   call_id: string;
   output: string;
 };
+
+type InputTextContent = {
+  type: "input_text";
+  text: string;
+};
+
+type InputImageContent = {
+  type: "input_image";
+  image_url: string;
+  detail: "low" | "high" | "auto" | "original";
+};
+
+type UserInputMessage = {
+  type: "message";
+  role: "user";
+  content: Array<InputTextContent | InputImageContent>;
+};
+
+type LlmApiInput = string | UserInputMessage[] | FunctionCallOutput[];
 
 type FunctionToolCallResult = {
   toolOutput: FunctionCallOutput;
@@ -346,6 +377,37 @@ function getToolCallCount(response: ApiResponse): number {
   return response.output.filter(
     (item) => item.type === "web_search_call" || isFunctionToolCall(item),
   ).length;
+}
+
+function createInputMessage(
+  request: LlmRequestInput,
+): string | UserInputMessage[] {
+  if (typeof request === "string") {
+    return request;
+  }
+
+  const images = request.images ?? [];
+  if (images.length === 0) {
+    return request.text;
+  }
+
+  return [
+    {
+      type: "message",
+      role: "user",
+      content: [
+        {
+          type: "input_text",
+          text: request.text.trim() || "Please respond to the attached image.",
+        },
+        ...images.map((image) => ({
+          type: "input_image" as const,
+          image_url: image.image_url,
+          detail: image.detail ?? "auto",
+        })),
+      ],
+    },
+  ];
 }
 
 function getFunctionToolCalls(response: ApiResponse): FunctionToolCall[] {
@@ -573,7 +635,7 @@ async function runFunctionToolCall(
 
 async function createLlmResponse(
   client: OpenAI,
-  input: string | FunctionCallOutput[],
+  input: LlmApiInput,
   tools: ToolName[],
   responseId?: string | null,
   model: AgentModel = normalAgent.MODEL,
@@ -603,7 +665,7 @@ async function createLlmResponse(
 
 async function createLlmResponseWithRetries(
   client: OpenAI,
-  input: string | FunctionCallOutput[],
+  input: LlmApiInput,
   tools: ToolName[],
   responseId: string | undefined,
   state: LlmRequestState,
@@ -775,7 +837,7 @@ async function resolveFunctionToolCalls(
 }
 
 async function requestLlmWithInstructions(
-  request: string,
+  request: LlmRequestInput,
   tools: ToolName[],
   responseId?: string | null,
   options: LlmRequestOptions = {},
@@ -791,7 +853,7 @@ async function requestLlmWithInstructions(
   };
   const initialResponse = await createLlmResponseWithRetries(
     client,
-    request,
+    createInputMessage(request),
     tools,
     responseId ?? undefined,
     state,
@@ -885,7 +947,7 @@ async function runAgent(
 }
 
 export async function requestLlm(
-  request: string,
+  request: LlmRequestInput,
   tools: ToolName[],
   responseId?: string | null,
   options: LlmRequestOptions = {},

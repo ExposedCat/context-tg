@@ -8,10 +8,13 @@ import {
   resolveMessageAgent,
   stripMessageAgentName,
 } from "./agents/index.ts";
+import { APP_ENV } from "./env.ts";
 import {
   type LlmCitation,
+  type LlmImageInput,
   type LlmReport,
   LlmRequestError,
+  type LlmRequestInput,
   type LlmRequestOptions,
   type LlmResponse,
   type LlmToolContext,
@@ -43,10 +46,30 @@ type TextMessage = {
   message_id: number;
   text?: string;
   caption?: string;
+  photo?: PhotoSize[];
+  document?: TelegramDocument;
   quote?: {
     text: string;
   };
   reply_to_message?: TextMessage;
+};
+
+type PhotoSize = {
+  file_id: string;
+  width: number;
+  height: number;
+  file_size?: number;
+};
+
+type TelegramDocument = {
+  file_id: string;
+  file_name?: string;
+  mime_type?: string;
+};
+
+type TelegramImageAttachment = {
+  fileId: string;
+  mimeType?: string;
 };
 
 type BotReaction = "🤔";
@@ -76,12 +99,103 @@ function getLlmContextText(
   return startsWithCommandPrefix(text) ? undefined : text;
 }
 
+function getLargestPhoto(
+  photos: PhotoSize[] | undefined,
+): PhotoSize | undefined {
+  return photos?.toSorted((left, right) => {
+    const leftPixels = left.width * left.height;
+    const rightPixels = right.width * right.height;
+
+    return rightPixels - leftPixels;
+  })[0];
+}
+
+function getImageMimeTypeFromFilename(filename: string | undefined) {
+  const extension = filename?.split(".").at(-1)?.toLocaleLowerCase();
+
+  switch (extension) {
+    case "jpg":
+    case "jpeg":
+      return "image/jpeg";
+    case "png":
+      return "image/png";
+    case "webp":
+      return "image/webp";
+    case "gif":
+      return "image/gif";
+    case "heic":
+      return "image/heic";
+    case "heif":
+      return "image/heif";
+    default:
+      return undefined;
+  }
+}
+
+function isImageDocument(document: TelegramDocument): boolean {
+  return (
+    document.mime_type?.startsWith("image/") === true ||
+    getImageMimeTypeFromFilename(document.file_name) !== undefined
+  );
+}
+
+function getMessageImageAttachments(
+  message: TextMessage | undefined,
+): TelegramImageAttachment[] {
+  if (!message) {
+    return [];
+  }
+
+  const attachments: TelegramImageAttachment[] = [];
+  const photo = getLargestPhoto(message.photo);
+
+  if (photo) {
+    attachments.push({ fileId: photo.file_id, mimeType: "image/jpeg" });
+  }
+
+  if (message.document && isImageDocument(message.document)) {
+    attachments.push({
+      fileId: message.document.file_id,
+      mimeType:
+        message.document.mime_type ??
+        getImageMimeTypeFromFilename(message.document.file_name),
+    });
+  }
+
+  return attachments;
+}
+
+function hasImageAttachments(message: TextMessage | undefined): boolean {
+  return getMessageImageAttachments(message).length > 0;
+}
+
 function isAddressed(text: string, ownUsername: string): boolean {
   return Boolean(resolveMessageAgent(text, ownUsername));
 }
 
 function buildRootRequest(text: string, replyText?: string): string {
   return replyText ? `${replyText}\n\n${text}` : text;
+}
+
+function buildRootRequestText(
+  text: string,
+  reply: TextMessage | undefined,
+): string {
+  const replyText = getLlmContextText(reply);
+
+  if (replyText && hasImageAttachments(reply)) {
+    return `Replied message:\n${replyText}\n\nUser: ${text}`;
+  }
+
+  if (replyText) {
+    return buildRootRequest(text, replyText);
+  }
+
+  if (hasImageAttachments(reply)) {
+    return `User is replying to the attached image.\n\nUser: ${text}`;
+  }
+
+  return text;
 }
 
 function buildThreadRequest(text: string, quoteText?: string): string {
@@ -102,6 +216,90 @@ function getLlmToolContext(
     chatId,
     messageId: message.message_id,
     replyMessageId: message.reply_to_message?.message_id,
+  };
+}
+
+function getTelegramFileUrl(filePath: string): string {
+  const encodedPath = filePath.split("/").map(encodeURIComponent).join("/");
+  return `https://api.telegram.org/file/bot${APP_ENV.BOT_TOKEN}/${encodedPath}`;
+}
+
+function getResponseMimeType(
+  response: Response,
+  fallbackMimeType: string | undefined,
+  filePath: string,
+): string {
+  const responseMimeType = response.headers.get("content-type")?.split(";")[0];
+
+  if (responseMimeType?.startsWith("image/")) {
+    return responseMimeType;
+  }
+
+  return (
+    fallbackMimeType ?? getImageMimeTypeFromFilename(filePath) ?? "image/jpeg"
+  );
+}
+
+function encodeBase64(bytes: Uint8Array): string {
+  const chunkSize = 0x8000;
+  let binary = "";
+
+  for (let index = 0; index < bytes.length; index += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(index, index + chunkSize));
+  }
+
+  return btoa(binary);
+}
+
+async function downloadImageDataUrl(
+  ctx: Context,
+  attachment: TelegramImageAttachment,
+  signal?: AbortSignal,
+): Promise<LlmImageInput> {
+  const file = await ctx.api.getFile(attachment.fileId, signal);
+
+  if (!file.file_path) {
+    throw new Error("Telegram image file path is unavailable.");
+  }
+
+  const response = await fetch(getTelegramFileUrl(file.file_path), { signal });
+
+  if (!response.ok) {
+    throw new Error(`Telegram image download failed: ${response.status}`);
+  }
+
+  const bytes = new Uint8Array(await response.arrayBuffer());
+  const mimeType = getResponseMimeType(
+    response,
+    attachment.mimeType,
+    file.file_path,
+  );
+
+  return {
+    image_url: `data:${mimeType};base64,${encodeBase64(bytes)}`,
+    detail: "auto",
+  };
+}
+
+async function buildLlmRequestInput(
+  ctx: Context,
+  text: string,
+  messages: Array<TextMessage | undefined>,
+  signal?: AbortSignal,
+): Promise<LlmRequestInput> {
+  const attachments = messages.flatMap(getMessageImageAttachments);
+
+  if (attachments.length === 0) {
+    return text;
+  }
+
+  return {
+    text,
+    images: await Promise.all(
+      attachments.map((attachment) =>
+        downloadImageDataUrl(ctx, attachment, signal),
+      ),
+    ),
   };
 }
 
@@ -713,7 +911,7 @@ async function handleChatRequest(
     const slowResponseReaction = createSlowResponseReactionTracker(ctx);
     const llmResponse = await (async () => {
       try {
-        return await withTypingAction(ctx, () => {
+        return await withTypingAction(ctx, async () => {
           const requestOptions: LlmRequestOptions = {
             context: toolContext,
             onProgress: async (progress) => {
@@ -724,28 +922,44 @@ async function handleChatRequest(
             signal: taskAbortController.signal,
           };
 
-          return responseId
-            ? requestLlm(
-                buildThreadRequest(
-                  text,
-                  startsWithCommandPrefix(message.quote?.text)
-                    ? undefined
-                    : message.quote?.text,
-                ),
-                agentTools,
-                responseId,
-                requestOptions,
-                agent.buildInstructions(),
-                agent.MODEL,
-              )
-            : requestLlm(
-                buildRootRequest(text, getLlmContextText(reply)),
-                agentTools,
-                undefined,
-                requestOptions,
-                agent.buildInstructions(),
-                agent.MODEL,
-              );
+          if (responseId) {
+            const request = await buildLlmRequestInput(
+              ctx,
+              buildThreadRequest(
+                text,
+                startsWithCommandPrefix(message.quote?.text)
+                  ? undefined
+                  : message.quote?.text,
+              ),
+              [message],
+              taskAbortController.signal,
+            );
+
+            return await requestLlm(
+              request,
+              agentTools,
+              responseId,
+              requestOptions,
+              agent.buildInstructions(),
+              agent.MODEL,
+            );
+          }
+
+          const request = await buildLlmRequestInput(
+            ctx,
+            buildRootRequestText(text, reply),
+            [reply, message],
+            taskAbortController.signal,
+          );
+
+          return await requestLlm(
+            request,
+            agentTools,
+            undefined,
+            requestOptions,
+            agent.buildInstructions(),
+            agent.MODEL,
+          );
         });
       } finally {
         slowResponseReaction.stop();
@@ -957,17 +1171,22 @@ chatComposer.on("message", async (ctx, next) => {
           message_id: reply.message_id,
         })
       : undefined;
+  const requestText =
+    text ??
+    (thread && hasImageAttachments(message)
+      ? "Please respond to the attached image."
+      : undefined);
 
   if (
-    !text ||
+    !requestText ||
     startsWithCommandPrefix(text) ||
-    (!isAddressed(text, ctx.me.username) && !thread)
+    (text ? !isAddressed(text, ctx.me.username) && !thread : !thread)
   ) {
     await next();
     return;
   }
 
-  await handleChatRequest(ctx, message, text, {
+  await handleChatRequest(ctx, message, requestText, {
     reply,
     thread,
     threadId: repliedTask?.thread_id,
