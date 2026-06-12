@@ -84,8 +84,8 @@ const logError = createDebug("app:chat:error");
 
 export const chatComposer = new Composer<Context>();
 
-const TELEGRAM_MESSAGE_CHUNK_SIZE = 3000;
 const TELEGRAM_CAPTION_CHUNK_SIZE = 1000;
+const TELEGRAM_RICH_MESSAGE_CHUNK_SIZE_BYTES = 30_000;
 const SLOW_RESPONSE_REACTION_DELAY_MS = 15_000;
 
 const linkPreviewOptions = {
@@ -473,109 +473,54 @@ function sanitizeLlmHtml(text: string): string {
   return sanitized + escapeHtml(text.slice(cursor));
 }
 
-function getHtmlTagName(tag: string): string | undefined {
-  const tagBody = tag.slice(1, -1).trim();
-  const name = tagBody.startsWith("/")
-    ? tagBody.slice(1).trim()
-    : tagBody.split(/\s+/, 1)[0];
-
-  return name?.toLocaleLowerCase() || undefined;
+function getUtf8ByteLength(text: string): number {
+  return new TextEncoder().encode(text).length;
 }
 
-function isClosingHtmlTag(tag: string): boolean {
-  return tag.slice(1, -1).trim().startsWith("/");
-}
-
-function splitHtmlMessage(
-  text: string,
-  maxVisibleLength = TELEGRAM_MESSAGE_CHUNK_SIZE,
-): string[] {
+function splitTextMessage(text: string, maxLength: number): string[] {
   const chunks: string[] = [];
-  const openTags: Array<{ name: string; tag: string }> = [];
   let chunk = "";
-  let chunkLength = 0;
 
-  const getOpeningTags = () => openTags.map(({ tag }) => tag).join("");
-  const getClosingTags = () =>
-    openTags
-      .toReversed()
-      .map(({ name }) => `</${name}>`)
-      .join("");
-
-  const flushChunk = () => {
-    if (chunkLength === 0) {
-      return;
+  for (const character of text) {
+    if (chunk.length >= maxLength) {
+      chunks.push(chunk);
+      chunk = "";
     }
 
-    chunks.push(chunk + getClosingTags());
-    chunk = getOpeningTags();
-    chunkLength = 0;
-  };
-
-  const appendVisibleText = (visibleText: string) => {
-    for (const character of visibleText) {
-      if (chunkLength >= maxVisibleLength) {
-        flushChunk();
-      }
-
-      chunk += character;
-      chunkLength += 1;
-    }
-  };
-
-  const appendEntity = (entity: string) => {
-    if (chunkLength >= maxVisibleLength) {
-      flushChunk();
-    }
-
-    chunk += entity;
-    chunkLength += 1;
-  };
-
-  const appendTag = (tag: string) => {
-    const tagName = getHtmlTagName(tag);
-    if (!tagName) {
-      chunk += tag;
-      return;
-    }
-
-    const isClosingTag = isClosingHtmlTag(tag);
-    if (!isClosingTag && chunkLength >= maxVisibleLength) {
-      flushChunk();
-    }
-
-    chunk += tag;
-
-    if (isClosingTag) {
-      const lastOpenTag = openTags.at(-1);
-      if (lastOpenTag?.name === tagName) {
-        openTags.pop();
-      }
-      return;
-    }
-
-    openTags.push({ name: tagName, tag });
-  };
-
-  let cursor = 0;
-  for (const match of text.matchAll(
-    /<[^>]*>|&(?:[a-z]+|#[0-9]+|#x[0-9a-f]+);/gi,
-  )) {
-    const token = match[0];
-    const index = match.index ?? 0;
-    appendVisibleText(text.slice(cursor, index));
-
-    if (token.startsWith("<")) {
-      appendTag(token);
-    } else {
-      appendEntity(token);
-    }
-
-    cursor = index + token.length;
+    chunk += character;
   }
 
-  appendVisibleText(text.slice(cursor));
-  flushChunk();
+  if (chunk) {
+    chunks.push(chunk);
+  }
+
+  return chunks.length > 0 ? chunks : [text];
+}
+
+function splitRichMarkdownMessage(text: string): string[] {
+  const chunks: string[] = [];
+  let chunk = "";
+  let chunkBytes = 0;
+
+  for (const character of text) {
+    const characterBytes = getUtf8ByteLength(character);
+
+    if (
+      chunk &&
+      chunkBytes + characterBytes > TELEGRAM_RICH_MESSAGE_CHUNK_SIZE_BYTES
+    ) {
+      chunks.push(chunk);
+      chunk = "";
+      chunkBytes = 0;
+    }
+
+    chunk += character;
+    chunkBytes += characterBytes;
+  }
+
+  if (chunk) {
+    chunks.push(chunk);
+  }
 
   return chunks.length > 0 ? chunks : [text];
 }
@@ -596,19 +541,6 @@ function getValidCitations(
       const previous = sortedCitations[index - 1];
       return !previous || citation.start_index >= previous.end_index;
     });
-}
-
-function formatCitations(response: string, citations: LlmCitation[]): string {
-  let cursor = 0;
-  let formatted = "";
-
-  for (const citation of getValidCitations(response, citations)) {
-    formatted += sanitizeLlmHtml(response.slice(cursor, citation.start_index));
-    formatted += `<a href="${escapeHtmlAttribute(citation.link)}">ℹ️</a>`;
-    cursor = citation.end_index;
-  }
-
-  return formatted + sanitizeLlmHtml(response.slice(cursor));
 }
 
 function hasSearchInfo(llmResponse: LlmResponse): boolean {
@@ -634,7 +566,7 @@ const TOOL_USAGE_EMOJIS: Partial<
   generate_image: { id: "5766879414704935108", fallback: "🖼️" },
 };
 
-function formatToolUsageEmojis(tools: ToolName[]): string {
+function formatToolUsageMarkdown(tools: ToolName[]): string {
   const usedEmojiIds = new Set<string>();
   const emojis: string[] = [];
 
@@ -646,16 +578,14 @@ function formatToolUsageEmojis(tools: ToolName[]): string {
     }
 
     usedEmojiIds.add(emoji.id);
-    emojis.push(
-      `<tg-emoji emoji-id="${emoji.id}">${emoji.fallback}</tg-emoji>`,
-    );
+    emojis.push(`![${emoji.fallback}](tg://emoji?id=${emoji.id})`);
   }
 
   return emojis.join(" ");
 }
 
-function appendToolUsageEmojis(text: string, tools: ToolName[]): string {
-  const suffix = formatToolUsageEmojis(tools);
+function appendToolUsageMarkdown(text: string, tools: ToolName[]): string {
+  const suffix = formatToolUsageMarkdown(tools);
 
   if (!suffix) {
     return text;
@@ -665,18 +595,82 @@ function appendToolUsageEmojis(text: string, tools: ToolName[]): string {
   return trimmedText ? `${trimmedText}\n\n${suffix}` : suffix;
 }
 
+function formatToolUsageText(tools: ToolName[]): string {
+  const usedEmojiIds = new Set<string>();
+  const emojis: string[] = [];
+
+  for (const tool of tools) {
+    const emoji = TOOL_USAGE_EMOJIS[tool];
+
+    if (!emoji || usedEmojiIds.has(emoji.id)) {
+      continue;
+    }
+
+    usedEmojiIds.add(emoji.id);
+    emojis.push(emoji.fallback);
+  }
+
+  return emojis.join(" ");
+}
+
+function appendToolUsageText(text: string, tools: ToolName[]): string {
+  const suffix = formatToolUsageText(tools);
+
+  if (!suffix) {
+    return text;
+  }
+
+  const trimmedText = text.trimEnd();
+  return trimmedText ? `${trimmedText}\n\n${suffix}` : suffix;
+}
+
+function getResponseSourceLinks(llmResponse: LlmResponse): string[] {
+  const links: string[] = [];
+
+  for (const citation of getValidCitations(
+    llmResponse.response ?? "",
+    llmResponse.web_search.citations,
+  )) {
+    if (!links.includes(citation.link)) {
+      links.push(citation.link);
+    }
+  }
+
+  for (const source of llmResponse.web_search.sources) {
+    if (!links.includes(source.link)) {
+      links.push(source.link);
+    }
+  }
+
+  return links;
+}
+
+function appendMarkdownSources(text: string, llmResponse: LlmResponse): string {
+  const links = getResponseSourceLinks(llmResponse);
+
+  if (links.length === 0) {
+    return text;
+  }
+
+  const sources = links
+    .map((link, index) => `${index + 1}. ${link}`)
+    .join("\n");
+  const trimmedText = text.trimEnd();
+  return `${trimmedText}\n\nSources\n${sources}`;
+}
+
 function formatLlmResponse(llmResponse: LlmResponse): {
-  text: string;
-  parse_mode: "HTML";
+  richMarkdown: string;
+  captionText: string;
 } {
   const response = llmResponse.response ?? "";
-  const text = hasSearchInfo(llmResponse)
-    ? formatCitations(response, llmResponse.web_search.citations)
-    : sanitizeLlmHtml(response);
+  const richMarkdown = hasSearchInfo(llmResponse)
+    ? appendMarkdownSources(response, llmResponse)
+    : response;
 
   return {
-    text: appendToolUsageEmojis(text, llmResponse.tools),
-    parse_mode: "HTML",
+    richMarkdown: appendToolUsageMarkdown(richMarkdown, llmResponse.tools),
+    captionText: appendToolUsageText(response, llmResponse.tools),
   };
 }
 
@@ -753,8 +747,8 @@ async function sendReportResponse(
     prefix: "context-tg-report-",
     suffix: ".html",
   });
-  const captionChunks = splitHtmlMessage(
-    formattedResponse.text || "Report attached.",
+  const captionChunks = splitTextMessage(
+    formattedResponse.captionText || "Report attached.",
     TELEGRAM_CAPTION_CHUNK_SIZE,
   );
   const sentMessages = [];
@@ -766,7 +760,6 @@ async function sendReportResponse(
       new InputFile(tmpPath, filename),
       {
         caption: captionChunks[0],
-        parse_mode: formattedResponse.parse_mode,
         reply_parameters: {
           message_id: message.message_id,
         },
@@ -782,7 +775,6 @@ async function sendReportResponse(
   for (const chunk of captionChunks.slice(1)) {
     const sentMessage = await ctx.reply(chunk, {
       ...linkPreviewOptions,
-      parse_mode: formattedResponse.parse_mode,
       reply_parameters: {
         message_id: message.message_id,
       },
@@ -867,8 +859,8 @@ async function sendGeneratedImagesResponse(
   images: LlmGeneratedImage[],
   formattedResponse: ReturnType<typeof formatLlmResponse>,
 ): Promise<Array<{ message_id: number }>> {
-  const captionChunks = splitHtmlMessage(
-    formattedResponse.text || "Image attached.",
+  const captionChunks = splitTextMessage(
+    formattedResponse.captionText || "Image attached.",
     TELEGRAM_CAPTION_CHUNK_SIZE,
   );
   const sentMessages = [];
@@ -879,7 +871,6 @@ async function sendGeneratedImagesResponse(
     try {
       const sentPhoto = await ctx.replyWithPhoto(input, {
         caption: index === 0 ? captionChunks[0] : undefined,
-        parse_mode: index === 0 ? formattedResponse.parse_mode : undefined,
         reply_parameters: {
           message_id: message.message_id,
         },
@@ -893,7 +884,35 @@ async function sendGeneratedImagesResponse(
   for (const chunk of captionChunks.slice(1)) {
     const sentMessage = await ctx.reply(chunk, {
       ...linkPreviewOptions,
-      parse_mode: formattedResponse.parse_mode,
+      reply_parameters: {
+        message_id: message.message_id,
+      },
+    });
+
+    sentMessages.push(sentMessage);
+  }
+
+  return sentMessages;
+}
+
+async function sendRichMarkdownResponse(
+  ctx: Context,
+  message: TextMessage,
+  richMarkdown: string,
+): Promise<Array<{ message_id: number }>> {
+  if (!ctx.chat) {
+    return [];
+  }
+
+  const sentMessages = [];
+  const content = richMarkdown.trim() ? richMarkdown : "Done.";
+
+  for (const chunk of splitRichMarkdownMessage(content)) {
+    const sentMessage = await ctx.api.raw.sendRichMessage({
+      chat_id: ctx.chat.id,
+      rich_message: {
+        markdown: chunk,
+      },
       reply_parameters: {
         message_id: message.message_id,
       },
@@ -1142,17 +1161,13 @@ async function handleChatRequest(
           : [];
 
     if (!llmResponse.report && llmResponse.images.length === 0) {
-      for (const chunk of splitHtmlMessage(formattedResponse.text)) {
-        const sentMessage = await ctx.reply(chunk, {
-          ...linkPreviewOptions,
-          parse_mode: formattedResponse.parse_mode,
-          reply_parameters: {
-            message_id: message.message_id,
-          },
-        });
-
-        sentMessages.push(sentMessage);
-      }
+      sentMessages.push(
+        ...(await sendRichMarkdownResponse(
+          ctx,
+          message,
+          formattedResponse.richMarkdown,
+        )),
+      );
     }
 
     responseSent = true;

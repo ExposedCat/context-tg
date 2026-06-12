@@ -12,13 +12,5 @@ export function joinPromptSections(
 
 export function buildFormattingInstructions(): string {
   return `# Formatting
-This formatting limitation applies to normal chat responses and captions, not to report tool content.
-For regular responses, Markdown and HTML are NOT supported. You can ONLY use this small subset when needed:
-- <b> for bold
-- <code> for monospace snippets: literal names, values, etc.
-- <code lang=""> for monospace code snippets of a specific language
-- <a href=""> for links, but not citations
-- <blockquote> for quoted passages. Use <blockquote expandable> for longer citations.
-Do not nest blockquotes.
-Use regular dashes for lists.`;
+Write naturally in Markdown when formatting improves readability. Use headings, lists, tables, block quotes, links, inline code, and fenced code blocks as needed.`;
 }

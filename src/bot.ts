@@ -1,5 +1,11 @@
 import { createDebug } from "@grammyjs/debug";
-import { Bot, type Context as GrammyContext, type Transformer } from "grammy";
+import {
+  type Api,
+  Bot,
+  type Context as GrammyContext,
+  type RawApi,
+  type Transformer,
+} from "grammy";
 import { I18n, type I18nFlavor } from "grammy-i18n";
 import { run } from "grammy-runner";
 import { chatComposer } from "./features/chat.ts";
@@ -14,8 +20,32 @@ const TELEGRAM_RATE_LIMIT_MAX_RETRIES = 5;
 const logDebug = createDebug("app:bot:debug");
 const logError = createDebug("app:bot:error");
 
+type RichRawApi = RawApi & {
+  sendRichMessage(
+    args: {
+      chat_id: number | string;
+      rich_message: {
+        markdown?: string;
+        html?: string;
+        is_rtl?: boolean;
+        skip_entity_detection?: boolean;
+      };
+      reply_parameters?: {
+        message_id: number;
+      };
+      reply_markup?: unknown;
+    },
+    signal?: AbortSignal,
+  ): Promise<{ message_id: number }>;
+};
+
+export type RichApi = Api & {
+  raw: RichRawApi;
+};
+
 export type Context = GrammyContext &
   I18nFlavor & {
+    api: RichApi;
     database: Database;
   };
 
@@ -72,7 +102,7 @@ function createTelegramRateLimitRetryTransformer(): Transformer {
 }
 
 export function initBot(token: string, database: Database) {
-  const bot = new Bot<Context>(token);
+  const bot = new Bot<Context, RichApi>(token);
   bot.api.config.use(createTelegramRateLimitRetryTransformer());
 
   const i18n = new I18n<Context>({
