@@ -2,6 +2,7 @@ export type LlmToolContext = {
   chatId: number;
   messageId: number;
   replyMessageId?: number;
+  threadId?: number;
 };
 
 export type LlmGeneratedImage = {

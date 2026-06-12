@@ -7,6 +7,7 @@ import { startsWithCommandPrefix } from "./message-filter.ts";
 
 type TextMessage = {
   message_id: number;
+  message_thread_id?: number;
   date: number;
   text: string;
   entities?: MessageEntity[];
@@ -66,6 +67,7 @@ export type MessageMetadata = {
   sender_id: number;
   chat_id: number;
   message_id: number;
+  thread_id?: number;
 };
 
 export type MessageSearchOptions = {
@@ -345,6 +347,9 @@ async function indexMessage(
     sender_id: sender.id,
     chat_id: chatId,
     message_id: message.message_id,
+    ...(message.message_thread_id !== undefined
+      ? { thread_id: message.message_thread_id }
+      : {}),
   };
 
   await qdrantRequest(getCollectionPath("/points"), {

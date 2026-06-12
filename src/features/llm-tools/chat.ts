@@ -141,6 +141,7 @@ export const executeReadLastMessages: FunctionToolRunner = async (
   const messages = await readLastMessages(parseCount(args?.count), {
     chatId: context.chatId,
     messageId: anchorMessageId,
+    threadId: context.threadId,
   });
 
   return messages.length > 0

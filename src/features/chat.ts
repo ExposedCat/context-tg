@@ -45,6 +45,7 @@ import {
 
 type TextMessage = {
   message_id: number;
+  message_thread_id?: number;
   from?: TelegramUser;
   text?: string;
   caption?: string;
@@ -229,6 +230,8 @@ function getLlmToolContext(
     chatId,
     messageId: message.message_id,
     replyMessageId: message.reply_to_message?.message_id,
+    threadId:
+      message.message_thread_id ?? message.reply_to_message?.message_thread_id,
   };
 }
 
