@@ -543,12 +543,24 @@ function getValidCitations(
     });
 }
 
-function hasSearchInfo(llmResponse: LlmResponse): boolean {
-  return (
-    llmResponse.web_search.used ||
-    llmResponse.web_search.citations.length > 0 ||
-    llmResponse.web_search.sources.length > 0
-  );
+function escapeMarkdownLinkDestination(url: string): string {
+  return url.replaceAll("\\", "\\\\").replaceAll(")", "\\)");
+}
+
+function formatMarkdownCitations(
+  response: string,
+  citations: LlmCitation[],
+): string {
+  let cursor = 0;
+  let formatted = "";
+
+  for (const citation of getValidCitations(response, citations)) {
+    formatted += response.slice(cursor, citation.start_index);
+    formatted += `[ℹ️](${escapeMarkdownLinkDestination(citation.link)})`;
+    cursor = citation.end_index;
+  }
+
+  return formatted + response.slice(cursor);
 }
 
 const TOOL_USAGE_EMOJIS: Partial<
@@ -624,49 +636,15 @@ function appendToolUsageText(text: string, tools: ToolName[]): string {
   return trimmedText ? `${trimmedText}\n\n${suffix}` : suffix;
 }
 
-function getResponseSourceLinks(llmResponse: LlmResponse): string[] {
-  const links: string[] = [];
-
-  for (const citation of getValidCitations(
-    llmResponse.response ?? "",
-    llmResponse.web_search.citations,
-  )) {
-    if (!links.includes(citation.link)) {
-      links.push(citation.link);
-    }
-  }
-
-  for (const source of llmResponse.web_search.sources) {
-    if (!links.includes(source.link)) {
-      links.push(source.link);
-    }
-  }
-
-  return links;
-}
-
-function appendMarkdownSources(text: string, llmResponse: LlmResponse): string {
-  const links = getResponseSourceLinks(llmResponse);
-
-  if (links.length === 0) {
-    return text;
-  }
-
-  const sources = links
-    .map((link, index) => `${index + 1}. ${link}`)
-    .join("\n");
-  const trimmedText = text.trimEnd();
-  return `${trimmedText}\n\nSources\n${sources}`;
-}
-
 function formatLlmResponse(llmResponse: LlmResponse): {
   richMarkdown: string;
   captionText: string;
 } {
   const response = llmResponse.response ?? "";
-  const richMarkdown = hasSearchInfo(llmResponse)
-    ? appendMarkdownSources(response, llmResponse)
-    : response;
+  const richMarkdown = formatMarkdownCitations(
+    response,
+    llmResponse.web_search.citations,
+  );
 
   return {
     richMarkdown: appendToolUsageMarkdown(richMarkdown, llmResponse.tools),
