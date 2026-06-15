@@ -1,4 +1,5 @@
 import type { ToolName } from "../llm.ts";
+import { LLM_DEPLOYMENTS } from "../llm-deployments.ts";
 import {
   buildFormattingInstructions,
   formatAgentNames,
@@ -8,7 +9,7 @@ import type { AgentDefinition } from "./types.ts";
 
 export const id = "ultimate";
 export const name = ["дикий лейло", "ultimate laylo"];
-export const MODEL = "small";
+export const MODEL = LLM_DEPLOYMENTS.small;
 export const tools = ["web_search", "call_agent"] satisfies ToolName[];
 
 export function buildInstructions(): string {

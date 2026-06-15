@@ -3,13 +3,10 @@ import type { Context } from "../bot.ts";
 import { replyWithResumeTask } from "./chat.ts";
 import { APP_ENV } from "./env.ts";
 import {
-  getLlmModelNames,
-  getReasoningEfforts,
+  getReasoningEffort,
   getWebSearchSetting,
-  isLlmModelTier,
   isWebSearchSetting,
   parseReasoningSetting,
-  persistLlmModelName,
   persistReasoningEffort,
   persistWebSearchSetting,
 } from "./llm-models.ts";
@@ -25,39 +22,83 @@ import {
 
 export const stateComposer = new Composer<Context>();
 
-function getModelCommandUsage(): string {
-  return [
-    "Usage: /model small NAME",
-    "Usage: /model big NAME",
-    "",
-    `Current: small=${getLlmModelNames().small}, big=${getLlmModelNames().big}`,
-  ].join("\n");
-}
+const REASONING_OPTIONS = [
+  "null",
+  "none",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+] as const;
 
-function getReasoningCommandUsage(): string {
-  const reasoningEfforts = getReasoningEfforts();
+const WEB_SEARCH_OPTIONS = ["off", "low", "medium", "high"] as const;
 
-  return [
-    "Usage: /reasoning small null|none|minimal|low|medium|high|xhigh",
-    "Usage: /reasoning big null|none|minimal|low|medium|high|xhigh",
-    "",
-    `Current: small=${reasoningEfforts.small ?? "null"}, big=${
-      reasoningEfforts.big ?? "null"
-    }`,
-  ].join("\n");
-}
+type SettingsKeyboardButton = {
+  text: string;
+  callback_data: string;
+  style?: "success";
+};
 
-function getWebSearchCommandUsage(): string {
-  return [
-    "Usage: /websearch off|low|medium|high",
-    "",
-    `Current: websearch=${getWebSearchSetting()}`,
-  ].join("\n");
-}
+type SettingsKeyboardMarkup = {
+  inline_keyboard: SettingsKeyboardButton[][];
+};
 
 function getUsageCommandUsage(): string {
   return ["Usage: /usage", `Usage: /usage ${USAGE_KEYS.join("|")} QUOTA`].join(
     "\n",
+  );
+}
+
+function isAdmin(ctx: Context): boolean {
+  return ctx.from?.id === APP_ENV.ADMIN_ID;
+}
+
+function formatReasoningSettingLabel(value: string): string {
+  return value === "null" ? "null" : value;
+}
+
+function buildSettingsKeyboard(
+  options: readonly string[],
+  current: string,
+  callbackPrefix: string,
+): SettingsKeyboardMarkup {
+  const rows: SettingsKeyboardButton[][] = [];
+  let row: SettingsKeyboardButton[] = [];
+
+  for (const [index, option] of options.entries()) {
+    row.push({
+      text: formatReasoningSettingLabel(option),
+      callback_data: `${callbackPrefix}:${option}`,
+      ...(option === current ? { style: "success" } : {}),
+    });
+
+    if (index % 3 === 2) {
+      rows.push(row);
+      row = [];
+    }
+  }
+
+  if (row.length > 0) {
+    rows.push(row);
+  }
+
+  return { inline_keyboard: rows };
+}
+
+function buildReasoningKeyboard(): SettingsKeyboardMarkup {
+  return buildSettingsKeyboard(
+    REASONING_OPTIONS,
+    getReasoningEffort() ?? "null",
+    "reasoning",
+  );
+}
+
+function buildWebSearchKeyboard(): SettingsKeyboardMarkup {
+  return buildSettingsKeyboard(
+    WEB_SEARCH_OPTIONS,
+    getWebSearchSetting(),
+    "websearch",
   );
 }
 
@@ -131,76 +172,74 @@ stateComposer.on("message:text", async (ctx, next) => {
   await replyWithCancelTask(ctx, messageId);
 });
 
-stateComposer.command("model", async (ctx) => {
-  const args = typeof ctx.match === "string" ? ctx.match.trim() : "";
-
-  if (!args) {
-    await ctx.reply(getModelCommandUsage());
+stateComposer.hears(/^\/reasoning(?:@\w+)?(?:\s|$)/, async (ctx) => {
+  if (!isAdmin(ctx)) {
     return;
   }
 
-  const [tier, ...modelNameParts] = args.split(/\s+/);
-  const modelName = modelNameParts.join(" ").trim();
-
-  if (!isLlmModelTier(tier) || !modelName) {
-    await ctx.reply(getModelCommandUsage());
-    return;
-  }
-
-  const updatedModelName = await persistLlmModelName(
-    ctx.database,
-    tier,
-    modelName,
-  );
-
-  await ctx.reply(`Updated ${tier} model to ${updatedModelName}`);
+  await ctx.reply("Choose reasoning effort:", {
+    reply_markup: buildReasoningKeyboard(),
+  });
 });
 
-stateComposer.command("reasoning", async (ctx) => {
-  const args = typeof ctx.match === "string" ? ctx.match.trim() : "";
-
-  if (!args) {
-    await ctx.reply(getReasoningCommandUsage());
+stateComposer.callbackQuery(/^reasoning:(.+)$/, async (ctx) => {
+  if (!isAdmin(ctx)) {
+    await ctx.answerCallbackQuery({
+      text: "Only the admin can change reasoning.",
+      show_alert: true,
+    });
     return;
   }
 
-  const [tier, rawEffort, ...extraParts] = args.split(/\s+/);
-
-  if (!isLlmModelTier(tier) || !rawEffort || extraParts.length > 0) {
-    await ctx.reply(getReasoningCommandUsage());
-    return;
-  }
+  const rawEffort = ctx.match[1];
 
   const effort = parseReasoningSetting(rawEffort);
 
   if (effort === undefined) {
-    await ctx.reply(getReasoningCommandUsage());
+    await ctx.answerCallbackQuery({
+      text: "Unknown reasoning option.",
+      show_alert: true,
+    });
     return;
   }
 
-  const updatedEffort = await persistReasoningEffort(
-    ctx.database,
-    tier,
-    effort,
-  );
+  const updatedEffort = await persistReasoningEffort(ctx.database, effort);
 
-  await ctx.reply(`Updated ${tier} reasoning to ${updatedEffort ?? "null"}`);
+  await ctx.answerCallbackQuery();
+  await ctx.editMessageText(`Reasoning was set to ${updatedEffort ?? "null"}.`);
 });
 
-stateComposer.command("websearch", async (ctx) => {
-  const setting = typeof ctx.match === "string" ? ctx.match.trim() : "";
-
-  if (!setting) {
-    await ctx.reply(getWebSearchCommandUsage());
+stateComposer.hears(/^\/websearch(?:@\w+)?(?:\s|$)/, async (ctx) => {
+  if (!isAdmin(ctx)) {
     return;
   }
 
+  await ctx.reply("Choose web search setting:", {
+    reply_markup: buildWebSearchKeyboard(),
+  });
+});
+
+stateComposer.callbackQuery(/^websearch:(.+)$/, async (ctx) => {
+  if (!isAdmin(ctx)) {
+    await ctx.answerCallbackQuery({
+      text: "Only the admin can change web search.",
+      show_alert: true,
+    });
+    return;
+  }
+
+  const setting = ctx.match[1];
+
   if (!isWebSearchSetting(setting)) {
-    await ctx.reply(getWebSearchCommandUsage());
+    await ctx.answerCallbackQuery({
+      text: "Unknown web search option.",
+      show_alert: true,
+    });
     return;
   }
 
   const updatedSetting = await persistWebSearchSetting(ctx.database, setting);
 
-  await ctx.reply(`Updated websearch to ${updatedSetting}`);
+  await ctx.answerCallbackQuery();
+  await ctx.editMessageText(`Web search was set to ${updatedSetting}.`);
 });

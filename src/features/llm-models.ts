@@ -1,7 +1,5 @@
 import type { Database } from "./database.ts";
-import { APP_ENV } from "./env.ts";
 
-export type LlmModelTier = "small" | "big";
 export type ReasoningEffort =
   | "none"
   | "minimal"
@@ -18,38 +16,10 @@ export type LlmSettingsTable = {
 };
 
 type LlmSettingsDatabase = Database;
-type LlmSettingKey =
-  | "model.small"
-  | "model.big"
-  | "reasoning.small"
-  | "reasoning.big"
-  | "websearch";
+type LlmSettingKey = "reasoning" | "websearch";
 
-const MODEL_NAMES: Record<LlmModelTier, string> = {
-  small: APP_ENV.LLM_MODEL_SMALL,
-  big: APP_ENV.LLM_MODEL,
-};
-
-const REASONING_EFFORTS: Record<LlmModelTier, ReasoningSetting> = {
-  small: "high",
-  big: "high",
-};
-
+let reasoningEffort: ReasoningSetting = "high";
 let webSearchSetting: WebSearchSetting = "high";
-
-const MODEL_SETTING_KEYS: Record<LlmModelTier, LlmSettingKey> = {
-  small: "model.small",
-  big: "model.big",
-};
-
-const REASONING_SETTING_KEYS: Record<LlmModelTier, LlmSettingKey> = {
-  small: "reasoning.small",
-  big: "reasoning.big",
-};
-
-export function isLlmModelTier(value: string): value is LlmModelTier {
-  return value === "small" || value === "big";
-}
 
 export function isReasoningEffort(value: string): value is ReasoningEffort {
   return (
@@ -78,65 +48,21 @@ export function isWebSearchSetting(value: string): value is WebSearchSetting {
   );
 }
 
-export function getLlmModelName(tier: LlmModelTier): string {
-  return MODEL_NAMES[tier];
+export function getReasoningEffort(): ReasoningSetting {
+  return reasoningEffort;
 }
 
-export function getLlmModelNames(): Readonly<Record<LlmModelTier, string>> {
-  return MODEL_NAMES;
-}
-
-export function setLlmModelName(tier: LlmModelTier, name: string): string {
-  const modelName = name.trim();
-
-  if (!modelName) {
-    throw new Error("Model name must not be empty");
-  }
-
-  MODEL_NAMES[tier] = modelName;
-  return modelName;
-}
-
-export async function persistLlmModelName(
-  database: LlmSettingsDatabase,
-  tier: LlmModelTier,
-  name: string,
-): Promise<string> {
-  const modelName = name.trim();
-
-  if (!modelName) {
-    throw new Error("Model name must not be empty");
-  }
-
-  await persistLlmSetting(database, MODEL_SETTING_KEYS[tier], modelName);
-  return setLlmModelName(tier, modelName);
-}
-
-export function getReasoningEffort(tier: LlmModelTier): ReasoningSetting {
-  return REASONING_EFFORTS[tier];
-}
-
-export function getReasoningEfforts(): Readonly<
-  Record<LlmModelTier, ReasoningSetting>
-> {
-  return REASONING_EFFORTS;
-}
-
-export function setReasoningEffort(
-  tier: LlmModelTier,
-  effort: ReasoningSetting,
-): ReasoningSetting {
-  REASONING_EFFORTS[tier] = effort;
-  return REASONING_EFFORTS[tier];
+export function setReasoningEffort(effort: ReasoningSetting): ReasoningSetting {
+  reasoningEffort = effort;
+  return reasoningEffort;
 }
 
 export async function persistReasoningEffort(
   database: LlmSettingsDatabase,
-  tier: LlmModelTier,
   effort: ReasoningSetting,
 ): Promise<ReasoningSetting> {
-  await persistLlmSetting(database, REASONING_SETTING_KEYS[tier], effort);
-  return setReasoningEffort(tier, effort);
+  await persistLlmSetting(database, "reasoning", effort);
+  return setReasoningEffort(effort);
 }
 
 export function getWebSearchSetting(): WebSearchSetting {
@@ -197,21 +123,8 @@ async function persistLlmSetting(
 
 function loadLlmSetting(key: string, value: string | null) {
   switch (key) {
-    case "model.small":
-      if (value) {
-        setLlmModelName("small", value);
-      }
-      break;
-    case "model.big":
-      if (value) {
-        setLlmModelName("big", value);
-      }
-      break;
-    case "reasoning.small":
-      loadReasoningSetting("small", value);
-      break;
-    case "reasoning.big":
-      loadReasoningSetting("big", value);
+    case "reasoning":
+      loadReasoningSetting(value);
       break;
     case "websearch":
       if (value && isWebSearchSetting(value)) {
@@ -221,8 +134,8 @@ function loadLlmSetting(key: string, value: string | null) {
   }
 }
 
-function loadReasoningSetting(tier: LlmModelTier, value: string | null) {
+function loadReasoningSetting(value: string | null) {
   if (value === null || isReasoningEffort(value)) {
-    setReasoningEffort(tier, value);
+    setReasoningEffort(value);
   }
 }

@@ -28,6 +28,7 @@ export const APP_ENV = {
   SQLITE_PATH: getRequiredEnv("SQLITE_PATH"),
   LLM_MODEL: getRequiredEnv("LLM_MODEL"),
   LLM_MODEL_SMALL: getRequiredEnv("LLM_MODEL_SMALL"),
+  LLM_MODEL_OPENMINDED: getRequiredEnv("LLM_MODEL_OPENMINDED"),
   LLM_BASE_URL: getRequiredEnv("LLM_BASE_URL"),
   LLM_API_KEY: getRequiredEnv("LLM_API_KEY"),
   LLM_IMAGE_BASE_URL: getOptionalEnv("LLM_IMAGE_BASE_URL"),

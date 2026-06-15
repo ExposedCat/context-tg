@@ -1,4 +1,5 @@
 import type { ToolName } from "../llm.ts";
+import { LLM_DEPLOYMENTS } from "../llm-deployments.ts";
 import {
   buildFormattingInstructions,
   formatAgentNames,
@@ -8,7 +9,7 @@ import type { AgentDefinition } from "./types.ts";
 
 export const id = "trader";
 export const name = ["трейдер лейло", "трейдейло", "trader laylo"];
-export const MODEL = "big";
+export const MODEL = LLM_DEPLOYMENTS.big;
 export const tools = [
   "web_search",
   "fetch_ticker_price",

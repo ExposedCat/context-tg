@@ -6,11 +6,7 @@ import {
   normalAgent,
 } from "./agents/index.ts";
 import { APP_ENV } from "./env.ts";
-import {
-  getLlmModelName,
-  getReasoningEffort,
-  isWebSearchEnabled,
-} from "./llm-models.ts";
+import { getReasoningEffort, isWebSearchEnabled } from "./llm-models.ts";
 import * as agentTool from "./llm-tools/agent.ts";
 import {
   executeReadLastMessages,
@@ -662,12 +658,12 @@ async function createLlmResponse(
   instructions = getSystemInstructions(),
   signal?: AbortSignal,
 ): Promise<ApiResponse> {
-  const reasoningEffort = getReasoningEffort(model);
+  const reasoningEffort = getReasoningEffort();
   throwIfAborted(signal);
 
   return await client.responses.create(
     {
-      model: getLlmModelName(model),
+      model: model.deploymentName,
       input,
       instructions: withToolAvailabilityInstructions(instructions, tools),
       // temperature: APP_ENV.LLM_TEMPERATURE,
@@ -675,9 +671,9 @@ async function createLlmResponse(
       tool_choice: "auto",
       include: getResponseInclude(tools),
       previous_response_id: responseId == null ? undefined : responseId,
-      ...(reasoningEffort === null
-        ? {}
-        : { reasoning: { effort: reasoningEffort } }),
+      ...(model.withReasoning && reasoningEffort !== null
+        ? { reasoning: { effort: reasoningEffort } }
+        : {}),
     },
     { signal },
   );
