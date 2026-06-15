@@ -4,13 +4,13 @@ export const toolDefinition = {
   type: "function",
   name: "call_agent",
   description:
-    "Delegate a bounded subtask to another focused agent and return its result. Available agents are normal, trader, and researcher. Use this only when a focused agent is better suited for part of the user's request.",
+    "Delegate a bounded subtask to another focused agent and return its result. Available agents are normal, trader, researcher, and politician. Use this only when a focused agent is better suited for part of the user's request.",
   parameters: {
     type: "object",
     properties: {
       agent: {
         type: "string",
-        enum: ["normal", "trader", "researcher"],
+        enum: ["normal", "trader", "researcher", "politician"],
         description: "The focused agent to call.",
       },
       task: {
