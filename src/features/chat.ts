@@ -528,11 +528,115 @@ function splitRichMarkdownMessage(text: string): string[] {
   return chunks.length > 0 ? chunks : [text];
 }
 
+type MarkdownLinkRange = {
+  start: number;
+  end: number;
+};
+
+function isEscapedMarkdownCharacter(text: string, index: number): boolean {
+  let slashCount = 0;
+
+  for (let cursor = index - 1; cursor >= 0 && text[cursor] === "\\"; cursor--) {
+    slashCount++;
+  }
+
+  return slashCount % 2 === 1;
+}
+
+function findUnescapedMarkdownCharacter(
+  text: string,
+  character: string,
+  startIndex: number,
+): number {
+  for (let index = startIndex; index < text.length; index++) {
+    if (text[index] === character && !isEscapedMarkdownCharacter(text, index)) {
+      return index;
+    }
+  }
+
+  return -1;
+}
+
+function getMarkdownLinkRanges(text: string): MarkdownLinkRange[] {
+  const ranges: MarkdownLinkRange[] = [];
+  let cursor = 0;
+
+  while (cursor < text.length) {
+    const labelStart = findUnescapedMarkdownCharacter(text, "[", cursor);
+
+    if (labelStart === -1) {
+      break;
+    }
+
+    const labelEnd = findUnescapedMarkdownCharacter(text, "]", labelStart + 1);
+
+    if (labelEnd === -1) {
+      break;
+    }
+
+    if (text[labelEnd + 1] !== "(") {
+      cursor = labelEnd + 1;
+      continue;
+    }
+
+    const destinationEnd = findUnescapedMarkdownCharacter(
+      text,
+      ")",
+      labelEnd + 2,
+    );
+
+    if (destinationEnd === -1) {
+      break;
+    }
+
+    ranges.push({ start: labelStart, end: destinationEnd + 1 });
+    cursor = destinationEnd + 1;
+  }
+
+  return ranges;
+}
+
+function getCitationReplacementRange(
+  response: string,
+  citation: LlmCitation,
+  markdownLinks: MarkdownLinkRange[],
+): Pick<LlmCitation, "start_index" | "end_index"> {
+  const overlappingLinks = markdownLinks.filter(
+    (range) =>
+      citation.start_index < range.end && citation.end_index > range.start,
+  );
+  const link =
+    overlappingLinks.find((range) =>
+      response.slice(range.start, range.end).includes(citation.link),
+    ) ?? overlappingLinks[0];
+
+  const range = link
+    ? { start_index: link.start, end_index: link.end }
+    : citation;
+
+  const nextSourceText = ` (${citation.link})`;
+
+  if (response.startsWith(nextSourceText, range.end_index)) {
+    return {
+      start_index: range.start_index,
+      end_index: range.end_index + nextSourceText.length,
+    };
+  }
+
+  return range;
+}
+
 function getValidCitations(
   response: string,
   citations: LlmCitation[],
 ): LlmCitation[] {
+  const markdownLinks = getMarkdownLinkRanges(response);
+
   return citations
+    .map((citation) => ({
+      ...citation,
+      ...getCitationReplacementRange(response, citation, markdownLinks),
+    }))
     .filter(
       (citation) =>
         citation.start_index >= 0 &&
