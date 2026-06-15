@@ -85,7 +85,6 @@ const logError = createDebug("app:chat:error");
 
 export const chatComposer = new Composer<Context>();
 
-const TELEGRAM_CAPTION_CHUNK_SIZE = 1000;
 const TELEGRAM_RICH_MESSAGE_CHUNK_SIZE_BYTES = 30_000;
 const SLOW_RESPONSE_REACTION_DELAY_MS = 15_000;
 
@@ -480,26 +479,6 @@ function getUtf8ByteLength(text: string): number {
   return new TextEncoder().encode(text).length;
 }
 
-function splitTextMessage(text: string, maxLength: number): string[] {
-  const chunks: string[] = [];
-  let chunk = "";
-
-  for (const character of text) {
-    if (chunk.length >= maxLength) {
-      chunks.push(chunk);
-      chunk = "";
-    }
-
-    chunk += character;
-  }
-
-  if (chunk) {
-    chunks.push(chunk);
-  }
-
-  return chunks.length > 0 ? chunks : [text];
-}
-
 function splitRichMarkdownMessage(text: string): string[] {
   const chunks: string[] = [];
   let chunk = "";
@@ -714,38 +693,8 @@ function appendToolUsageMarkdown(text: string, tools: ToolName[]): string {
   return trimmedText ? `${trimmedText}\n\n${suffix}` : suffix;
 }
 
-function formatToolUsageText(tools: ToolName[]): string {
-  const usedEmojiIds = new Set<string>();
-  const emojis: string[] = [];
-
-  for (const tool of tools) {
-    const emoji = TOOL_USAGE_EMOJIS[tool];
-
-    if (!emoji || usedEmojiIds.has(emoji.id)) {
-      continue;
-    }
-
-    usedEmojiIds.add(emoji.id);
-    emojis.push(emoji.fallback);
-  }
-
-  return emojis.join(" ");
-}
-
-function appendToolUsageText(text: string, tools: ToolName[]): string {
-  const suffix = formatToolUsageText(tools);
-
-  if (!suffix) {
-    return text;
-  }
-
-  const trimmedText = text.trimEnd();
-  return trimmedText ? `${trimmedText}\n\n${suffix}` : suffix;
-}
-
 function formatLlmResponse(llmResponse: LlmResponse): {
   richMarkdown: string;
-  captionText: string;
 } {
   const response = llmResponse.response ?? "";
   const richMarkdown = formatMarkdownCitations(
@@ -755,7 +704,90 @@ function formatLlmResponse(llmResponse: LlmResponse): {
 
   return {
     richMarkdown: appendToolUsageMarkdown(richMarkdown, llmResponse.tools),
-    captionText: appendToolUsageText(response, llmResponse.tools),
+  };
+}
+
+function getHttpUrl(value: string | undefined): string | undefined {
+  if (!value) {
+    return undefined;
+  }
+
+  try {
+    const url = new URL(value);
+    return url.protocol === "http:" || url.protocol === "https:"
+      ? url.href
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function getImageFileExtension(mimeType: string | undefined): string {
+  switch (mimeType) {
+    case "image/jpeg":
+      return "jpg";
+    case "image/webp":
+      return "webp";
+    default:
+      return "png";
+  }
+}
+
+function decodeBase64(value: string): Uint8Array {
+  return Uint8Array.from(atob(value), (char) => char.charCodeAt(0));
+}
+
+function parseDataUrlImage(dataUrl: string): {
+  bytes: Uint8Array;
+  mimeType: string;
+} {
+  const match = /^data:([^;,]+);base64,(.*)$/i.exec(dataUrl);
+
+  if (!match) {
+    throw new Error("Generated image data URL is invalid.");
+  }
+
+  return {
+    mimeType: match[1],
+    bytes: decodeBase64(match[2]),
+  };
+}
+
+async function createGeneratedImageInputFile(
+  image: LlmGeneratedImage,
+): Promise<{ input: string | InputFile; cleanup: () => Promise<void> }> {
+  const url = getHttpUrl(image.url);
+
+  if (url) {
+    return {
+      input: url,
+      cleanup: async () => {},
+    };
+  }
+
+  if (!image.dataUrl) {
+    throw new Error("Generated image is missing image data.");
+  }
+
+  const parsed = parseDataUrlImage(image.dataUrl);
+  const extension = getImageFileExtension(image.mimeType ?? parsed.mimeType);
+  const tmpPath = await Deno.makeTempFile({
+    prefix: "context-tg-image-",
+    suffix: `.${extension}`,
+  });
+
+  await Deno.writeFile(tmpPath, parsed.bytes);
+
+  return {
+    input: new InputFile(tmpPath, `generated-image.${extension}`),
+    cleanup: async () => {
+      await Deno.remove(tmpPath).catch((error) =>
+        logError("Failed to delete temporary generated image:", {
+          tmpPath,
+          error,
+        }),
+      );
+    },
   };
 }
 
@@ -832,10 +864,6 @@ async function sendReportResponse(
     prefix: "context-tg-report-",
     suffix: ".html",
   });
-  const captionChunks = splitTextMessage(
-    formattedResponse.captionText || "Report attached.",
-    TELEGRAM_CAPTION_CHUNK_SIZE,
-  );
   const sentMessages = [];
 
   try {
@@ -844,7 +872,6 @@ async function sendReportResponse(
     const sentDocument = await ctx.replyWithDocument(
       new InputFile(tmpPath, filename),
       {
-        caption: captionChunks[0],
         reply_parameters: {
           message_id: message.message_id,
         },
@@ -857,105 +884,29 @@ async function sendReportResponse(
     );
   }
 
-  for (const chunk of captionChunks.slice(1)) {
-    const sentMessage = await ctx.reply(chunk, {
-      ...linkPreviewOptions,
-      reply_parameters: {
-        message_id: message.message_id,
-      },
-    });
-
-    sentMessages.push(sentMessage);
-  }
+  sentMessages.push(
+    ...(await sendRichMarkdownResponse(
+      ctx,
+      message,
+      formattedResponse.richMarkdown || "Report attached.",
+    )),
+  );
 
   return sentMessages;
 }
 
-function getImageFileExtension(mimeType: string | undefined): string {
-  switch (mimeType) {
-    case "image/jpeg":
-      return "jpg";
-    case "image/webp":
-      return "webp";
-    default:
-      return "png";
-  }
-}
-
-function decodeBase64(value: string): Uint8Array {
-  return Uint8Array.from(atob(value), (char) => char.charCodeAt(0));
-}
-
-function parseDataUrlImage(dataUrl: string): {
-  bytes: Uint8Array;
-  mimeType: string;
-} {
-  const match = /^data:([^;,]+);base64,(.*)$/i.exec(dataUrl);
-
-  if (!match) {
-    throw new Error("Generated image data URL is invalid.");
-  }
-
-  return {
-    mimeType: match[1],
-    bytes: decodeBase64(match[2]),
-  };
-}
-
-async function createImageInputFile(
-  image: LlmGeneratedImage,
-): Promise<{ input: string | InputFile; cleanup: () => Promise<void> }> {
-  if (image.url) {
-    return {
-      input: image.url,
-      cleanup: async () => {},
-    };
-  }
-
-  if (!image.dataUrl) {
-    throw new Error("Generated image is missing data.");
-  }
-
-  const parsed = parseDataUrlImage(image.dataUrl);
-  const extension = getImageFileExtension(image.mimeType ?? parsed.mimeType);
-  const tmpPath = await Deno.makeTempFile({
-    prefix: "context-tg-image-",
-    suffix: `.${extension}`,
-  });
-
-  await Deno.writeFile(tmpPath, parsed.bytes);
-
-  return {
-    input: new InputFile(tmpPath, `generated-image.${extension}`),
-    cleanup: async () => {
-      await Deno.remove(tmpPath).catch((error) =>
-        logError("Failed to delete temporary generated image:", {
-          tmpPath,
-          error,
-        }),
-      );
-    },
-  };
-}
-
-async function sendGeneratedImagesResponse(
+async function sendGeneratedImagePhotos(
   ctx: Context,
   message: TextMessage,
   images: LlmGeneratedImage[],
-  formattedResponse: ReturnType<typeof formatLlmResponse>,
 ): Promise<Array<{ message_id: number }>> {
-  const captionChunks = splitTextMessage(
-    formattedResponse.captionText || "Image attached.",
-    TELEGRAM_CAPTION_CHUNK_SIZE,
-  );
   const sentMessages = [];
 
-  for (const [index, image] of images.entries()) {
-    const { input, cleanup } = await createImageInputFile(image);
+  for (const image of images) {
+    const { input, cleanup } = await createGeneratedImageInputFile(image);
 
     try {
       const sentPhoto = await ctx.replyWithPhoto(input, {
-        caption: index === 0 ? captionChunks[0] : undefined,
         reply_parameters: {
           message_id: message.message_id,
         },
@@ -966,16 +917,24 @@ async function sendGeneratedImagesResponse(
     }
   }
 
-  for (const chunk of captionChunks.slice(1)) {
-    const sentMessage = await ctx.reply(chunk, {
-      ...linkPreviewOptions,
-      reply_parameters: {
-        message_id: message.message_id,
-      },
-    });
+  return sentMessages;
+}
 
-    sentMessages.push(sentMessage);
-  }
+async function sendGeneratedImagesResponse(
+  ctx: Context,
+  message: TextMessage,
+  images: LlmGeneratedImage[],
+  formattedResponse: ReturnType<typeof formatLlmResponse>,
+): Promise<Array<{ message_id: number }>> {
+  const sentMessages = await sendGeneratedImagePhotos(ctx, message, images);
+
+  sentMessages.push(
+    ...(await sendRichMarkdownResponse(
+      ctx,
+      message,
+      formattedResponse.richMarkdown || "Image attached.",
+    )),
+  );
 
   return sentMessages;
 }
