@@ -11,7 +11,7 @@ export const LLM_DEPLOYMENTS = {
   },
   openMinded: {
     deploymentName: APP_ENV.LLM_MODEL_OPENMINDED,
-    withReasoning: true,
+    withReasoning: false,
   },
 } as const;
 
