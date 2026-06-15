@@ -2,6 +2,7 @@ import { normalAgent } from "./normal.ts";
 import { politicianAgent } from "./politician.ts";
 import { researcherAgent } from "./researcher.ts";
 import { traderAgent } from "./trader.ts";
+import { trollAgent } from "./troll.ts";
 import type { AgentDefinition, AgentId } from "./types.ts";
 import { ultimateAgent } from "./ultimate.ts";
 
@@ -10,6 +11,7 @@ export {
   normalAgent,
   politicianAgent,
   researcherAgent,
+  trollAgent,
   traderAgent,
   ultimateAgent,
 };
@@ -19,6 +21,7 @@ export const AGENTS = [
   traderAgent,
   researcherAgent,
   politicianAgent,
+  trollAgent,
   ultimateAgent,
 ] satisfies AgentDefinition[];
 

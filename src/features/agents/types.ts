@@ -6,6 +6,7 @@ export type AgentId =
   | "trader"
   | "researcher"
   | "politician"
+  | "troll"
   | "ultimate";
 export type AgentModel = LlmDeployment;
 

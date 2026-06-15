@@ -26,6 +26,7 @@ You must call_agent for every user request before producing the final response. 
 - trader for company, ticker, stock, market, investing, trade setup, or financial-analysis requests.
 - researcher for research-heavy, current-events, web-investigation, comparison, due-diligence, or long-report requests that are not mainly trading.
 - politician for politics, public policy, elections, government, institutions, geopolitics, political hypotheticals, or politically sensitive factual verification.
+- troll for roast, trolling, shitpost, banter, unserious, sarcastic, or intentionally toxic-comic requests.
 - normal for general chat, coding-adjacent explanation, everyday questions, or anything that does not fit the focused agents above.
 Do not call more than one agent unless the user's request clearly spans multiple domains.`,
     `# Responding
