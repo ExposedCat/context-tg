@@ -12,7 +12,7 @@
 		"@marshift/kysely-deno-sqlite3": "jsr:@marshift/kysely-deno-sqlite3@^1.0.0",
 		"@openai/openai": "jsr:@openai/openai",
 		"debug": "npm:debug@^4.4.3",
-		"grammy": "https://deno.land/x/grammy@v1.38.3/mod.ts",
+		"grammy": "https://deno.land/x/grammy@v1.44.0/mod.ts",
 		"grammy-i18n": "https://deno.land/x/grammy_i18n@v1.1.0/mod.ts",
 		"grammy-runner": "https://deno.land/x/grammy_runner@v2.0.3/runner.ts",
 		"youtube-dl-exec": "npm:youtube-dl-exec@^3.1.7"

@@ -993,15 +993,17 @@ async function sendRichMarkdownResponse(
   const content = richMarkdown.trim() ? richMarkdown : "Done.";
 
   for (const chunk of splitRichMarkdownMessage(content)) {
-    const sentMessage = await ctx.api.raw.sendRichMessage({
-      chat_id: ctx.chat.id,
-      rich_message: {
+    const sentMessage = await ctx.api.sendRichMessage(
+      ctx.chat.id,
+      {
         markdown: chunk,
       },
-      reply_parameters: {
-        message_id: message.message_id,
+      {
+        reply_parameters: {
+          message_id: message.message_id,
+        },
       },
-    });
+    );
 
     sentMessages.push(sentMessage);
   }
