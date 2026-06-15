@@ -10,16 +10,18 @@ export type ReasoningEffort =
 export type ReasoningSetting = ReasoningEffort | null;
 export type WebSearchSetting = "off" | "low" | "medium" | "high";
 export type WebSearchContextSize = Exclude<WebSearchSetting, "off">;
+export type TrollingSetting = "off" | "on";
 export type LlmSettingsTable = {
   key: string;
   value: string | null;
 };
 
 type LlmSettingsDatabase = Database;
-type LlmSettingKey = "reasoning" | "websearch";
+type LlmSettingKey = "reasoning" | "websearch" | "trolling";
 
 let reasoningEffort: ReasoningSetting = "high";
 let webSearchSetting: WebSearchSetting = "high";
+let trollingSetting: TrollingSetting = "off";
 
 export function isReasoningEffort(value: string): value is ReasoningEffort {
   return (
@@ -46,6 +48,10 @@ export function isWebSearchSetting(value: string): value is WebSearchSetting {
   return (
     value === "off" || value === "low" || value === "medium" || value === "high"
   );
+}
+
+export function isTrollingSetting(value: string): value is TrollingSetting {
+  return value === "off" || value === "on";
 }
 
 export function getReasoningEffort(): ReasoningSetting {
@@ -92,6 +98,27 @@ export async function persistWebSearchSetting(
   return setWebSearchSetting(setting);
 }
 
+export function getTrollingSetting(): TrollingSetting {
+  return trollingSetting;
+}
+
+export function isTrollingEnabled(): boolean {
+  return trollingSetting === "on";
+}
+
+export function setTrollingSetting(setting: TrollingSetting): TrollingSetting {
+  trollingSetting = setting;
+  return trollingSetting;
+}
+
+export async function persistTrollingSetting(
+  database: LlmSettingsDatabase,
+  setting: TrollingSetting,
+): Promise<TrollingSetting> {
+  await persistLlmSetting(database, "trolling", setting);
+  return setTrollingSetting(setting);
+}
+
 export async function migrateLlmSettings(database: LlmSettingsDatabase) {
   await database.schema
     .createTable("llm_settings")
@@ -129,6 +156,11 @@ function loadLlmSetting(key: string, value: string | null) {
     case "websearch":
       if (value && isWebSearchSetting(value)) {
         setWebSearchSetting(value);
+      }
+      break;
+    case "trolling":
+      if (value && isTrollingSetting(value)) {
+        setTrollingSetting(value);
       }
       break;
   }

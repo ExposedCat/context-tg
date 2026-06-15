@@ -4,10 +4,13 @@ import { replyWithResumeTask } from "./chat.ts";
 import { APP_ENV } from "./env.ts";
 import {
   getReasoningEffort,
+  getTrollingSetting,
   getWebSearchSetting,
+  isTrollingSetting,
   isWebSearchSetting,
   parseReasoningSetting,
   persistReasoningEffort,
+  persistTrollingSetting,
   persistWebSearchSetting,
 } from "./llm-models.ts";
 import { replyWithCancelTask, replyWithRecentTasks } from "./tasks.ts";
@@ -33,6 +36,7 @@ const REASONING_OPTIONS = [
 ] as const;
 
 const WEB_SEARCH_OPTIONS = ["off", "low", "medium", "high"] as const;
+const TROLLING_OPTIONS = ["off", "on"] as const;
 
 type SettingsKeyboardButton = {
   text: string;
@@ -99,6 +103,14 @@ function buildWebSearchKeyboard(): SettingsKeyboardMarkup {
     WEB_SEARCH_OPTIONS,
     getWebSearchSetting(),
     "websearch",
+  );
+}
+
+function buildTrollingKeyboard(): SettingsKeyboardMarkup {
+  return buildSettingsKeyboard(
+    TROLLING_OPTIONS,
+    getTrollingSetting(),
+    "trolling",
   );
 }
 
@@ -242,4 +254,39 @@ stateComposer.callbackQuery(/^websearch:(.+)$/, async (ctx) => {
 
   await ctx.answerCallbackQuery();
   await ctx.editMessageText(`Web search was set to ${updatedSetting}.`);
+});
+
+stateComposer.hears(/^\/trolling(?:@\w+)?(?:\s|$)/, async (ctx) => {
+  if (!isAdmin(ctx)) {
+    return;
+  }
+
+  await ctx.reply("Choose trolling setting:", {
+    reply_markup: buildTrollingKeyboard(),
+  });
+});
+
+stateComposer.callbackQuery(/^trolling:(.+)$/, async (ctx) => {
+  if (!isAdmin(ctx)) {
+    await ctx.answerCallbackQuery({
+      text: "Only the admin can change trolling.",
+      show_alert: true,
+    });
+    return;
+  }
+
+  const setting = ctx.match[1];
+
+  if (!isTrollingSetting(setting)) {
+    await ctx.answerCallbackQuery({
+      text: "Unknown trolling option.",
+      show_alert: true,
+    });
+    return;
+  }
+
+  const updatedSetting = await persistTrollingSetting(ctx.database, setting);
+
+  await ctx.answerCallbackQuery();
+  await ctx.editMessageText(`Trolling was set to ${updatedSetting}.`);
 });

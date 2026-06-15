@@ -107,6 +107,15 @@ let setupVectorSize: number | undefined;
 
 export const messagesComposer = new Composer<Context>();
 
+type IndexedTextMessageHandler = (
+  ctx: Context,
+  message: TextMessage,
+  sender: Sender,
+  chatId: number,
+) => Promise<void>;
+
+let indexedTextMessageHandler: IndexedTextMessageHandler | undefined;
+
 function getEmbedderClient(): OpenAI {
   return new OpenAI({
     apiKey: APP_ENV.EMBEDDER_API_KEY,
@@ -475,7 +484,7 @@ async function handleIndexMessage(
   sender: Sender,
   chatId: number,
   action: "indexed" | "reindexed",
-): Promise<void> {
+): Promise<boolean> {
   if (shouldSkipIndexing(message)) {
     if (action === "reindexed") {
       try {
@@ -489,7 +498,7 @@ async function handleIndexMessage(
       }
     }
 
-    return;
+    return false;
   }
 
   try {
@@ -498,15 +507,39 @@ async function handleIndexMessage(
       chatId,
       messageId: message.message_id,
     });
+    return true;
   } catch (error) {
     logError(`Failed to ${action} text message`, { error });
+    return false;
   }
+}
+
+export function setIndexedTextMessageHandler(
+  handler: IndexedTextMessageHandler,
+) {
+  indexedTextMessageHandler = handler;
 }
 
 messagesComposer.on("message:text", async (ctx, next) => {
   await next();
 
-  void handleIndexMessage(ctx.message, ctx.from, ctx.chat.id, "indexed");
+  void (async () => {
+    const indexed = await handleIndexMessage(
+      ctx.message,
+      ctx.from,
+      ctx.chat.id,
+      "indexed",
+    );
+
+    if (indexed) {
+      await indexedTextMessageHandler?.(
+        ctx,
+        ctx.message,
+        ctx.from,
+        ctx.chat.id,
+      );
+    }
+  })();
 });
 
 messagesComposer.on("edited_message:text", async (ctx, next) => {

@@ -9,6 +9,7 @@ import {
 } from "./llm-models.ts";
 import { migrateTasks, type TasksTable } from "./tasks.ts";
 import { migrateThreads, type ThreadsTable } from "./threads.ts";
+import { type ChatTrollingTable, migrateTrolling } from "./trolling.ts";
 import {
   type ChatUsageLimitsTable,
   type ChatUsageTable,
@@ -21,6 +22,7 @@ export type DatabaseSchema = {
   tasks: TasksTable;
   chat_usage_limits: ChatUsageLimitsTable;
   chat_usage: ChatUsageTable;
+  chat_trolling: ChatTrollingTable;
 };
 
 export type Database = Kysely<DatabaseSchema>;
@@ -58,6 +60,7 @@ export function initDatabase() {
     await migrateLlmSettings(database);
     await migrateTasks(database);
     await migrateUsage(database);
+    await migrateTrolling(database);
     await loadLlmSettings(database);
 
     return database;

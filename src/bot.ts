@@ -4,8 +4,12 @@ import { I18n, type I18nFlavor } from "grammy-i18n";
 import { run } from "grammy-runner";
 import { chatComposer } from "./features/chat.ts";
 import type { Database } from "./features/database.ts";
-import { messagesComposer } from "./features/messages.ts";
+import {
+  messagesComposer,
+  setIndexedTextMessageHandler,
+} from "./features/messages.ts";
 import { stateComposer } from "./features/state.ts";
+import { safelyMaybeSendPeriodicTroll } from "./features/trolling.ts";
 
 const RUNNER_CONCURRENCY = 500;
 const TELEGRAM_RATE_LIMIT_RETRY_DELAY_MS = 3000;
@@ -74,6 +78,7 @@ function createTelegramRateLimitRetryTransformer(): Transformer {
 export function initBot(token: string, database: Database) {
   const bot = new Bot<Context>(token);
   bot.api.config.use(createTelegramRateLimitRetryTransformer());
+  setIndexedTextMessageHandler(safelyMaybeSendPeriodicTroll);
 
   const i18n = new I18n<Context>({
     directory: "locales",
