@@ -123,10 +123,10 @@ export const executeReadLastMessages: FunctionToolRunner = async (
     return missingContext ?? "";
   }
 
-  const anchorMessageId = context.replyMessageId ?? context.messageId;
+  const anchorMessageId = context.replyMessageId;
   const messages = await readLastMessages(parseCount(args?.count), {
     chatId: context.chatId,
-    messageId: anchorMessageId,
+    ...(anchorMessageId !== undefined ? { messageId: anchorMessageId } : {}),
     threadId: context.threadId,
   });
 

@@ -216,12 +216,6 @@ function hasImageAttachments(message: LlmContextMessage | undefined): boolean {
   return getMessageImageAttachments(message).length > 0;
 }
 
-function hasReplyContext(message: LlmContextMessage | undefined): boolean {
-  return (
-    getLlmContextText(message) !== undefined || hasImageAttachments(message)
-  );
-}
-
 function isAddressed(text: string, ownUsername: string): boolean {
   return Boolean(resolveMessageAgent(text, ownUsername));
 }
@@ -240,8 +234,7 @@ function isImplicitForumTopicReply(
   return (
     message.is_topic_message === true &&
     message.message_thread_id !== undefined &&
-    reply?.message_id === message.message_thread_id &&
-    !hasReplyContext(reply)
+    reply?.message_id === message.message_thread_id
   );
 }
 
@@ -249,6 +242,21 @@ function getActualReply(message: TextMessage): TextMessage | undefined {
   const reply = message.reply_to_message;
 
   return isImplicitForumTopicReply(message, reply) ? undefined : reply;
+}
+
+function getForumThreadId(
+  message: TextMessage,
+  reply: TextMessage | undefined,
+): number | undefined {
+  if (message.is_topic_message === true) {
+    return message.message_thread_id ?? reply?.message_thread_id;
+  }
+
+  if (reply?.is_topic_message === true) {
+    return reply.message_thread_id;
+  }
+
+  return undefined;
 }
 
 function getQuoteReplyContextText(message: TextMessage): string | undefined {
@@ -323,7 +331,7 @@ function getLlmToolContext(
     chatId,
     messageId: message.message_id,
     replyMessageId: reply?.message_id,
-    threadId: message.message_thread_id ?? reply?.message_thread_id,
+    threadId: getForumThreadId(message, reply),
   };
 }
 

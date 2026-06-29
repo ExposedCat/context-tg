@@ -8,7 +8,7 @@ import {
 
 export type LastMessagesContext = {
   chatId: number;
-  messageId: number;
+  messageId?: number;
   threadId?: number;
 };
 
@@ -43,12 +43,16 @@ function getLastMessagesFilter({
       ...(threadId !== undefined
         ? [{ key: "thread_id", match: { value: threadId } }]
         : []),
-      {
-        key: "message_id",
-        range: {
-          lte: messageId,
-        },
-      },
+      ...(messageId !== undefined
+        ? [
+            {
+              key: "message_id",
+              range: {
+                lte: messageId,
+              },
+            },
+          ]
+        : []),
     ],
   };
 }
@@ -76,6 +80,7 @@ export async function readLastMessages(
         order_by: {
           key: "message_id",
           direction: "desc",
+          ...(messageId !== undefined ? { start_from: messageId } : {}),
         },
       }),
     },
