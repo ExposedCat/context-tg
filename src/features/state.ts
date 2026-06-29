@@ -2,16 +2,26 @@ import { Composer } from "grammy";
 import type { Context } from "../bot.ts";
 import { replyWithResumeTask } from "./chat.ts";
 import { APP_ENV } from "./env.ts";
+import { LLM_DEPLOYMENT_OPTIONS } from "./llm-deployments.ts";
 import {
+  type ChatLlmSettingKey,
+  getChatReasoningEffort,
+  getChatWebSearchSetting,
   getReasoningEffort,
   getTrollingSetting,
   getWebSearchSetting,
+  isLlmSettingsDeployment,
   isTrollingSetting,
   isWebSearchSetting,
+  type LlmSettingsDeployment,
   parseReasoningSetting,
+  persistChatReasoningEffort,
+  persistChatWebSearchSetting,
   persistReasoningEffort,
   persistTrollingSetting,
   persistWebSearchSetting,
+  type ReasoningSetting,
+  type WebSearchSetting,
 } from "./llm-models.ts";
 import { replyWithCancelTask, replyWithRecentTasks } from "./tasks.ts";
 import {
@@ -37,6 +47,10 @@ const REASONING_OPTIONS = [
 
 const WEB_SEARCH_OPTIONS = ["off", "low", "medium", "high"] as const;
 const TROLLING_OPTIONS = ["off", "on"] as const;
+const CONFIGURE_KIND_LABELS = {
+  reasoning: "Reasoning",
+  websearch: "Web Search",
+} as const satisfies Record<ChatLlmSettingKey, string>;
 
 type SettingsKeyboardButton = {
   text: string;
@@ -60,6 +74,18 @@ function isAdmin(ctx: Context): boolean {
 
 function formatReasoningSettingLabel(value: string): string {
   return value === "null" ? "null" : value;
+}
+
+function isConfigureKind(value: string): value is ChatLlmSettingKey {
+  return value === "reasoning" || value === "websearch";
+}
+
+function formatConfigureValue(value: ReasoningSetting | WebSearchSetting) {
+  return value ?? "null";
+}
+
+function formatDeploymentLabel(deployment: LlmSettingsDeployment): string {
+  return deployment === "all" ? "All" : deployment;
 }
 
 function buildSettingsKeyboard(
@@ -114,6 +140,74 @@ function buildTrollingKeyboard(): SettingsKeyboardMarkup {
   );
 }
 
+function buildConfigureKeyboard(): SettingsKeyboardMarkup {
+  return {
+    inline_keyboard: [
+      [
+        {
+          text: CONFIGURE_KIND_LABELS.reasoning,
+          callback_data: "configure:reasoning",
+        },
+      ],
+      [
+        {
+          text: CONFIGURE_KIND_LABELS.websearch,
+          callback_data: "configure:websearch",
+        },
+      ],
+    ],
+  };
+}
+
+function buildConfigureDeploymentKeyboard(
+  kind: ChatLlmSettingKey,
+): SettingsKeyboardMarkup {
+  return {
+    inline_keyboard: [
+      LLM_DEPLOYMENT_OPTIONS.map((deployment) => ({
+        text: deployment.id,
+        callback_data: `configure:${kind}:deployment:${deployment.id}`,
+      })),
+      [{ text: "All", callback_data: `configure:${kind}:deployment:all` }],
+    ],
+  };
+}
+
+async function getConfigureValue(
+  ctx: Context,
+  kind: ChatLlmSettingKey,
+  deployment: LlmSettingsDeployment,
+): Promise<string> {
+  if (!ctx.chat) {
+    return "";
+  }
+
+  if (kind === "reasoning") {
+    return formatConfigureValue(
+      await getChatReasoningEffort(ctx.database, ctx.chat.id, deployment),
+    );
+  }
+
+  return formatConfigureValue(
+    await getChatWebSearchSetting(ctx.database, ctx.chat.id, deployment),
+  );
+}
+
+async function buildConfigureSettingKeyboard(
+  ctx: Context,
+  kind: ChatLlmSettingKey,
+  deployment: LlmSettingsDeployment,
+): Promise<SettingsKeyboardMarkup> {
+  const options = kind === "reasoning" ? REASONING_OPTIONS : WEB_SEARCH_OPTIONS;
+  const current = await getConfigureValue(ctx, kind, deployment);
+
+  return buildSettingsKeyboard(
+    options,
+    current,
+    `configure:${kind}:set:${deployment}`,
+  );
+}
+
 stateComposer.chatType("private").command("start", async (ctx) => {
   await ctx.reply(ctx.t("start", { name: ctx.from.first_name }));
 });
@@ -164,6 +258,21 @@ stateComposer.command("usage", async (ctx) => {
   await ctx.reply(`Updated ${status.key} quota to ${status.quota}`);
 });
 
+stateComposer.command("configure", async (ctx) => {
+  if (!ctx.chat) {
+    return;
+  }
+
+  if (!isAdmin(ctx)) {
+    await ctx.reply("Only the admin can configure this chat.");
+    return;
+  }
+
+  await ctx.reply("Configure this chat:", {
+    reply_markup: buildConfigureKeyboard(),
+  });
+});
+
 stateComposer.on("message:text", async (ctx, next) => {
   const match = ctx.message.text.match(
     /^\/(cancel|resume)_(\d+)(?:@\w+)?(?:\s|$)/,
@@ -183,6 +292,160 @@ stateComposer.on("message:text", async (ctx, next) => {
 
   await replyWithCancelTask(ctx, messageId);
 });
+
+stateComposer.callbackQuery(
+  /^configure:(reasoning|websearch)$/,
+  async (ctx) => {
+    if (!isAdmin(ctx)) {
+      await ctx.answerCallbackQuery({
+        text: "Only the admin can configure this chat.",
+        show_alert: true,
+      });
+      return;
+    }
+
+    const kind = ctx.match[1];
+
+    if (!isConfigureKind(kind)) {
+      await ctx.answerCallbackQuery({
+        text: "Unknown configuration option.",
+        show_alert: true,
+      });
+      return;
+    }
+
+    await ctx.answerCallbackQuery();
+    await ctx.editMessageText(
+      `Choose deployment for ${CONFIGURE_KIND_LABELS[kind]}:`,
+      {
+        reply_markup: buildConfigureDeploymentKeyboard(kind),
+      },
+    );
+  },
+);
+
+stateComposer.callbackQuery(
+  /^configure:(reasoning|websearch):deployment:(.+)$/,
+  async (ctx) => {
+    if (!ctx.chat) {
+      return;
+    }
+
+    if (!isAdmin(ctx)) {
+      await ctx.answerCallbackQuery({
+        text: "Only the admin can configure this chat.",
+        show_alert: true,
+      });
+      return;
+    }
+
+    const kind = ctx.match[1];
+    const deployment = ctx.match[2];
+
+    if (!isConfigureKind(kind) || !isLlmSettingsDeployment(deployment)) {
+      await ctx.answerCallbackQuery({
+        text: "Unknown configuration option.",
+        show_alert: true,
+      });
+      return;
+    }
+
+    await ctx.answerCallbackQuery();
+    await ctx.editMessageText(
+      `Choose ${CONFIGURE_KIND_LABELS[kind]} for ${formatDeploymentLabel(
+        deployment,
+      )}:`,
+      {
+        reply_markup: await buildConfigureSettingKeyboard(
+          ctx,
+          kind,
+          deployment,
+        ),
+      },
+    );
+  },
+);
+
+stateComposer.callbackQuery(
+  /^configure:(reasoning|websearch):set:(.+):(.+)$/,
+  async (ctx) => {
+    if (!ctx.chat) {
+      return;
+    }
+
+    if (!isAdmin(ctx)) {
+      await ctx.answerCallbackQuery({
+        text: "Only the admin can configure this chat.",
+        show_alert: true,
+      });
+      return;
+    }
+
+    const kind = ctx.match[1];
+    const deployment = ctx.match[2];
+    const value = ctx.match[3];
+
+    if (!isConfigureKind(kind) || !isLlmSettingsDeployment(deployment)) {
+      await ctx.answerCallbackQuery({
+        text: "Unknown configuration option.",
+        show_alert: true,
+      });
+      return;
+    }
+
+    let updatedValue: string;
+
+    if (kind === "reasoning") {
+      const effort = parseReasoningSetting(value);
+
+      if (effort === undefined) {
+        await ctx.answerCallbackQuery({
+          text: "Unknown reasoning option.",
+          show_alert: true,
+        });
+        return;
+      }
+
+      updatedValue = formatConfigureValue(
+        await persistChatReasoningEffort(
+          ctx.database,
+          ctx.chat.id,
+          deployment,
+          effort,
+        ),
+      );
+    } else {
+      if (!isWebSearchSetting(value)) {
+        await ctx.answerCallbackQuery({
+          text: "Unknown web search option.",
+          show_alert: true,
+        });
+        return;
+      }
+
+      updatedValue = await persistChatWebSearchSetting(
+        ctx.database,
+        ctx.chat.id,
+        deployment,
+        value,
+      );
+    }
+
+    await ctx.answerCallbackQuery();
+    await ctx.editMessageText(
+      `${CONFIGURE_KIND_LABELS[kind]} for ${formatDeploymentLabel(
+        deployment,
+      )} was set to ${updatedValue}.`,
+      {
+        reply_markup: await buildConfigureSettingKeyboard(
+          ctx,
+          kind,
+          deployment,
+        ),
+      },
+    );
+  },
+);
 
 stateComposer.hears(/^\/reasoning(?:@\w+)?(?:\s|$)/, async (ctx) => {
   if (!isAdmin(ctx)) {

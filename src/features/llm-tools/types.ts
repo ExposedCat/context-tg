@@ -1,3 +1,5 @@
+import type { Database } from "../database.ts";
+
 export type LlmToolContext = {
   chatId: number;
   messageId: number;
@@ -27,5 +29,6 @@ export type FunctionToolRunner = (
   context?: LlmToolContext,
   options?: {
     signal?: AbortSignal;
+    database?: Database;
   },
 ) => FunctionToolResult | string | Promise<FunctionToolResult | string>;

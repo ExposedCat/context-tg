@@ -5,8 +5,17 @@ import {
   getCallableAgentById,
   normalAgent,
 } from "./agents/index.ts";
+import type { Database } from "./database.ts";
 import { APP_ENV } from "./env.ts";
-import { getReasoningEffort, isWebSearchEnabled } from "./llm-models.ts";
+import {
+  getChatReasoningEffort,
+  getChatWebSearchSetting,
+  getReasoningEffort,
+  getWebSearchSetting,
+  isWebSearchEnabled,
+  type ReasoningSetting,
+  type WebSearchSetting,
+} from "./llm-models.ts";
 import * as agentTool from "./llm-tools/agent.ts";
 import {
   executeReadLastMessages,
@@ -73,6 +82,7 @@ export type LlmProgress = {
 };
 
 export type LlmRequestOptions = {
+  database?: Database;
   context?: LlmToolContext;
   onProgress?: (progress: LlmProgress) => void | Promise<void>;
   onWarning?: (details: string) => void | Promise<void>;
@@ -194,6 +204,11 @@ type FunctionToolCallResult = {
   toolOutput: FunctionCallOutput;
 };
 
+type LlmRuntimeSettings = {
+  reasoning: ReasoningSetting;
+  webSearch: WebSearchSetting;
+};
+
 const logDebug = createDebug("app:llm:debug");
 const logError = createDebug("app:llm:error");
 const MAX_LLM_RETRIES = 3;
@@ -218,10 +233,35 @@ function getClient(): OpenAI {
   });
 }
 
-function getExposedTools(tools: ToolName[]): ToolName[] {
+async function resolveRuntimeSettings(
+  model: AgentModel,
+  options: LlmRequestOptions,
+): Promise<LlmRuntimeSettings> {
+  const database = options.database;
+  const chatId = options.context?.chatId;
+
+  if (!database || chatId === undefined) {
+    return {
+      reasoning: getReasoningEffort(),
+      webSearch: getWebSearchSetting(),
+    };
+  }
+
+  const [reasoning, webSearch] = await Promise.all([
+    getChatReasoningEffort(database, chatId, model.id),
+    getChatWebSearchSetting(database, chatId, model.id),
+  ]);
+
+  return { reasoning, webSearch };
+}
+
+function getExposedTools(
+  tools: ToolName[],
+  settings: LlmRuntimeSettings,
+): ToolName[] {
   return tools.filter((tool) => {
     if (tool === "web_search") {
-      return isWebSearchEnabled();
+      return isWebSearchEnabled(settings.webSearch);
     }
 
     if (tool === "generate_image") {
@@ -232,12 +272,15 @@ function getExposedTools(tools: ToolName[]): ToolName[] {
   });
 }
 
-function getToolDefinitions(tools: ToolName[]): ToolDefinition[] {
+function getToolDefinitions(
+  tools: ToolName[],
+  settings: LlmRuntimeSettings,
+): ToolDefinition[] {
   const definitions: ToolDefinition[] = [];
 
-  for (const tool of getExposedTools(tools)) {
+  for (const tool of getExposedTools(tools, settings)) {
     if (tool === "web_search") {
-      definitions.push(webSearchTool.createToolDefinition());
+      definitions.push(webSearchTool.createToolDefinition(settings.webSearch));
       continue;
     }
 
@@ -247,8 +290,8 @@ function getToolDefinitions(tools: ToolName[]): ToolDefinition[] {
   return definitions;
 }
 
-function getResponseInclude(tools: ToolName[]) {
-  return getExposedTools(tools).includes("web_search")
+function getResponseInclude(tools: ToolName[], settings: LlmRuntimeSettings) {
+  return getExposedTools(tools, settings).includes("web_search")
     ? ["web_search_call.action.sources" as const]
     : undefined;
 }
@@ -256,8 +299,9 @@ function getResponseInclude(tools: ToolName[]) {
 function withToolAvailabilityInstructions(
   instructions: string,
   tools: ToolName[],
+  settings: LlmRuntimeSettings,
 ): string {
-  const exposedTools = getExposedTools(tools);
+  const exposedTools = getExposedTools(tools, settings);
   const toolList = exposedTools.length > 0 ? exposedTools.join(", ") : "none";
 
   return `${instructions}
@@ -625,6 +669,7 @@ async function runFunctionToolCall(
   call: FunctionToolCall,
   state: LlmRequestState,
   context?: LlmToolContext,
+  database?: Database,
   signal?: AbortSignal,
 ): Promise<FunctionToolCallResult> {
   throwIfAborted(signal);
@@ -632,7 +677,7 @@ async function runFunctionToolCall(
   logDebug("Running tool call", formatToolCallLog(call));
   const runner = FUNCTION_TOOL_RUNNERS[call.name];
   const result = normalizeFunctionToolResult(
-    await runner(args, context, { signal }),
+    await runner(args, context, { signal, database }),
   );
   throwIfAborted(signal);
 
@@ -656,23 +701,30 @@ async function createLlmResponse(
   responseId?: string | null,
   model: AgentModel = normalAgent.MODEL,
   instructions = getSystemInstructions(),
+  settings: LlmRuntimeSettings = {
+    reasoning: getReasoningEffort(),
+    webSearch: getWebSearchSetting(),
+  },
   signal?: AbortSignal,
 ): Promise<ApiResponse> {
-  const reasoningEffort = getReasoningEffort();
   throwIfAborted(signal);
 
   return await client.responses.create(
     {
       model: model.deploymentName,
       input,
-      instructions: withToolAvailabilityInstructions(instructions, tools),
+      instructions: withToolAvailabilityInstructions(
+        instructions,
+        tools,
+        settings,
+      ),
       // temperature: APP_ENV.LLM_TEMPERATURE,
-      tools: getToolDefinitions(tools),
+      tools: getToolDefinitions(tools, settings),
       tool_choice: "auto",
-      include: getResponseInclude(tools),
+      include: getResponseInclude(tools, settings),
       previous_response_id: responseId == null ? undefined : responseId,
-      ...(model.withReasoning && reasoningEffort !== null
-        ? { reasoning: { effort: reasoningEffort } }
+      ...(model.withReasoning && settings.reasoning !== null
+        ? { reasoning: { effort: settings.reasoning } }
         : {}),
     },
     { signal },
@@ -688,6 +740,10 @@ async function createLlmResponseWithRetries(
   options: LlmRequestOptions = {},
   model: AgentModel = normalAgent.MODEL,
   instructions = getSystemInstructions(),
+  settings: LlmRuntimeSettings = {
+    reasoning: getReasoningEffort(),
+    webSearch: getWebSearchSetting(),
+  },
 ): Promise<ApiResponse> {
   let lastError: unknown;
   let currentResponseId = responseId;
@@ -706,6 +762,7 @@ async function createLlmResponseWithRetries(
         currentResponseId,
         model,
         instructions,
+        settings,
         options.signal,
       );
       const responseError = getResponseError(response);
@@ -791,6 +848,10 @@ async function resolveFunctionToolCalls(
   state: LlmRequestState,
   model: AgentModel = normalAgent.MODEL,
   instructions = getSystemInstructions(),
+  settings: LlmRuntimeSettings = {
+    reasoning: getReasoningEffort(),
+    webSearch: getWebSearchSetting(),
+  },
 ): Promise<{
   response: ApiResponse;
   calledTools: ToolName[];
@@ -814,7 +875,13 @@ async function resolveFunctionToolCalls(
 
     const toolCallResults = await Promise.all(
       functionCalls.map((call) =>
-        runFunctionToolCall(call, state, options.context, options.signal),
+        runFunctionToolCall(
+          call,
+          state,
+          options.context,
+          options.database,
+          options.signal,
+        ),
       ),
     );
     await options.onProgress?.({
@@ -831,6 +898,7 @@ async function resolveFunctionToolCalls(
       options,
       model,
       instructions,
+      settings,
     );
 
     toolCallCount += getToolCallCount(response);
@@ -862,6 +930,7 @@ async function requestLlmWithInstructions(
 ): Promise<LlmResponse> {
   logDebug("Sending request to LLM", { tools, responseId, model });
   const client = getClient();
+  const settings = await resolveRuntimeSettings(model, options);
   const state: LlmRequestState = {
     lastResponseId: responseId ?? undefined,
     receivedResponse: false,
@@ -877,6 +946,7 @@ async function requestLlmWithInstructions(
     options,
     model,
     instructions,
+    settings,
   );
 
   const { response, calledTools, toolCallCount, lastResponseId } =
@@ -888,6 +958,7 @@ async function requestLlmWithInstructions(
       state,
       model,
       instructions,
+      settings,
     );
   logDebug("Received response from LLM", formatResponseSummary(response));
 
@@ -924,6 +995,7 @@ async function runAgent(
   task: string,
   context?: LlmToolContext,
   signal?: AbortSignal,
+  database?: Database,
 ): Promise<FunctionToolResult> {
   const agent = getCallableAgentById(agentId);
 
@@ -940,7 +1012,7 @@ async function runAgent(
     `Delegated task from ultimate agent:\n${task}\n\nReturn a concise result for the ultimate agent to synthesize.`,
     agent.tools,
     undefined,
-    { context, signal },
+    { context, database, signal },
     agent.buildInstructions(),
     agent.MODEL,
   );

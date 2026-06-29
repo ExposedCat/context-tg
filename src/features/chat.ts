@@ -1107,6 +1107,7 @@ async function handleChatRequest(
       try {
         return await withTypingAction(ctx, async () => {
           const requestOptions: LlmRequestOptions = {
+            database: ctx.database,
             context: toolContext,
             onProgress: async (progress) => {
               progressResponseId = progress.responseId ?? progressResponseId;

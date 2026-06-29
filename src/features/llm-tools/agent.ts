@@ -1,3 +1,4 @@
+import type { Database } from "../database.ts";
 import type { FunctionToolRunner, LlmToolContext } from "./types.ts";
 
 export const toolDefinition = {
@@ -31,6 +32,7 @@ export function createRunner(
     task: string,
     context?: LlmToolContext,
     signal?: AbortSignal,
+    database?: Database,
   ) => ReturnType<FunctionToolRunner>,
 ): FunctionToolRunner {
   return async (args, context, options) => {
@@ -41,6 +43,12 @@ export function createRunner(
       return JSON.stringify({ error: "agent and task must not be empty." });
     }
 
-    return await delegate(agentId, task, context, options?.signal);
+    return await delegate(
+      agentId,
+      task,
+      context,
+      options?.signal,
+      options?.database,
+    );
   };
 }

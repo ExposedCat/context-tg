@@ -3,6 +3,7 @@ import { Kysely } from "@kysely/kysely";
 import { DenoSqlite3Dialect } from "@marshift/kysely-deno-sqlite3";
 import { APP_ENV } from "./env.ts";
 import {
+  type ChatLlmSettingsTable,
   type LlmSettingsTable,
   loadLlmSettings,
   migrateLlmSettings,
@@ -19,6 +20,7 @@ import {
 export type DatabaseSchema = {
   threads: ThreadsTable;
   llm_settings: LlmSettingsTable;
+  chat_llm_settings: ChatLlmSettingsTable;
   tasks: TasksTable;
   chat_usage_limits: ChatUsageLimitsTable;
   chat_usage: ChatUsageTable;

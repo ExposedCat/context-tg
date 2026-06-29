@@ -133,6 +133,7 @@ export async function maybeSendPeriodicTroll(
     [],
     undefined,
     {
+      database: ctx.database,
       context: {
         chatId,
         messageId: message.message_id,
