@@ -1,6 +1,7 @@
 import { Database as SqliteDatabase } from "@db/sqlite";
 import { Kysely } from "@kysely/kysely";
 import { DenoSqlite3Dialect } from "@marshift/kysely-deno-sqlite3";
+import { type EmojiPacksTable, migrateEmojiPacks } from "./emoji-packs.ts";
 import { APP_ENV } from "./env.ts";
 import {
   type ChatLlmSettingsTable,
@@ -32,6 +33,7 @@ export type DatabaseSchema = {
   chat_usage_limits: ChatUsageLimitsTable;
   chat_usage: ChatUsageTable;
   chat_trolling: ChatTrollingTable;
+  emoji_packs: EmojiPacksTable;
 };
 
 export type Database = Kysely<DatabaseSchema>;
@@ -71,6 +73,7 @@ export function initDatabase() {
     await migrateSchedules(database);
     await migrateUsage(database);
     await migrateTrolling(database);
+    await migrateEmojiPacks(database);
     await loadLlmSettings(database);
 
     return database;

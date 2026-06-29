@@ -5,6 +5,10 @@ import { run } from "grammy-runner";
 import { chatComposer } from "./features/chat.ts";
 import type { Database } from "./features/database.ts";
 import {
+  createEmojiPackTransformer,
+  emojiPacksComposer,
+} from "./features/emoji-packs.ts";
+import {
   messagesComposer,
   setIndexedTextMessageHandler,
 } from "./features/messages.ts";
@@ -63,6 +67,7 @@ function createTelegramRateLimitRetryTransformer(): Transformer {
 export function initBot(token: string, database: Database) {
   const bot = new Bot<Context>(token);
   bot.api.config.use(createTelegramRateLimitRetryTransformer());
+  bot.api.config.use(createEmojiPackTransformer(database, bot.api));
   setIndexedTextMessageHandler(safelyMaybeSendPeriodicTroll);
 
   const i18n = new I18n<Context>({
@@ -77,6 +82,7 @@ export function initBot(token: string, database: Database) {
 
   bot.use(i18n);
 
+  bot.use(emojiPacksComposer);
   bot.use(stateComposer);
   bot.use(messagesComposer);
   bot.use(chatComposer);
