@@ -1,5 +1,6 @@
 import { createDebug } from "@grammyjs/debug";
 import type { FunctionToolRunner } from "./types.ts";
+import { getString } from "./utils.ts";
 
 const API_URL = "https://api.gdeltproject.org/api/v2/context/context";
 const REQUEST_TIMEOUT_MS = 20_000;
@@ -34,10 +35,6 @@ export const toolDefinition = {
   },
   strict: true,
 } as const;
-
-function getString(value: unknown): string {
-  return typeof value === "string" ? value.trim() : "";
-}
 
 function getQueryWordCount(query: string): number {
   return query.split(/\s+/).filter(Boolean).length;

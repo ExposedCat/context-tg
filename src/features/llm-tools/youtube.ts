@@ -1,5 +1,6 @@
 import { createDebug } from "@grammyjs/debug";
 import type { FunctionToolRunner } from "./types.ts";
+import { getJsonError, getString } from "./utils.ts";
 
 const REQUEST_TIMEOUT_MS = 60_000;
 const MAX_TRANSCRIPT_CHARS = 80_000;
@@ -26,10 +27,6 @@ export const toolDefinition = {
   },
   strict: true,
 } as const;
-
-function getString(value: unknown): string {
-  return typeof value === "string" ? value.trim() : "";
-}
 
 function isYouTubeUrl(value: string): boolean {
   try {
@@ -220,9 +217,9 @@ export const execute: FunctionToolRunner = async (args) => {
   const url = getString(args?.url);
 
   if (!url || !isYouTubeUrl(url)) {
-    return JSON.stringify({
-      error: "read_youtube_video requires a valid YouTube video URL.",
-    });
+    return getJsonError(
+      "read_youtube_video requires a valid YouTube video URL.",
+    );
   }
 
   const directory = await Deno.makeTempDir({ prefix: "youtube-captions-" });

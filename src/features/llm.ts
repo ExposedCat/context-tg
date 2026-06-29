@@ -1,5 +1,6 @@
 import { createDebug } from "@grammyjs/debug";
 import OpenAI from "@openai/openai";
+import { delay, throwIfAborted } from "../utils/async.ts";
 import {
   type AgentModel,
   getCallableAgentById,
@@ -527,31 +528,6 @@ function getErrorObject(error: unknown): Record<string, unknown> | undefined {
   }
 
   return error as Record<string, unknown>;
-}
-
-function throwIfAborted(signal?: AbortSignal): void {
-  if (signal?.aborted) {
-    throw signal.reason ?? new DOMException("Aborted", "AbortError");
-  }
-}
-
-function delay(ms: number, signal?: AbortSignal): Promise<void> {
-  throwIfAborted(signal);
-
-  return new Promise((resolve, reject) => {
-    const timeoutId = setTimeout(() => {
-      signal?.removeEventListener("abort", abort);
-      resolve();
-    }, ms);
-
-    const abort = () => {
-      clearTimeout(timeoutId);
-      signal?.removeEventListener("abort", abort);
-      reject(signal?.reason ?? new DOMException("Aborted", "AbortError"));
-    };
-
-    signal?.addEventListener("abort", abort, { once: true });
-  });
 }
 
 function isRateLimitError(error: unknown): boolean {

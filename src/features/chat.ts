@@ -2,6 +2,11 @@ import { createDebug } from "@grammyjs/debug";
 import { Composer, InputFile } from "grammy";
 import type { Context } from "../bot.ts";
 import {
+  escapeHtml,
+  escapeHtmlAttribute,
+  normalizeHtmlFilename,
+} from "../utils/text.ts";
+import {
   type AgentDefinition,
   getAgentById,
   normalAgent,
@@ -32,6 +37,7 @@ import {
   hasResumableTask,
   type TaskStatus,
 } from "./tasks.ts";
+import { disabledLinkPreviewOptions as linkPreviewOptions } from "./telegram.ts";
 import { createThread, getThread, saveThread, type Thread } from "./threads.ts";
 import {
   consumeUsage,
@@ -103,12 +109,6 @@ const UNSUPPORTED_CAPTIONED_MEDIA_TYPES = [
   key: keyof TextMessage;
   label: string;
 }>;
-
-const linkPreviewOptions = {
-  link_preview_options: {
-    is_disabled: true,
-  },
-};
 
 function getMessageText(message: TextMessage): string | undefined {
   return message.text ?? message.caption;
@@ -437,17 +437,6 @@ async function withTypingAction<T>(
 ): Promise<T> {
   await submitTypingAction(ctx);
   return await callback();
-}
-
-function escapeHtml(text: string): string {
-  return text
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;");
-}
-
-function escapeHtmlAttribute(text: string): string {
-  return escapeHtml(text).replaceAll('"', "&quot;");
 }
 
 function getAttributeValue(
@@ -895,24 +884,13 @@ function isAbortError(error: unknown): boolean {
   );
 }
 
-function normalizeReportFilename(filename: string): string {
-  const safeFilename = filename
-    .replaceAll(/[\\/]/g, "-")
-    .replaceAll(/[^a-z0-9._ -]/gi, "")
-    .replaceAll(/\s+/g, " ")
-    .trim();
-  const normalized = safeFilename || "research-report.html";
-
-  return /\.html?$/i.test(normalized) ? normalized : `${normalized}.html`;
-}
-
 async function sendReportResponse(
   ctx: Context,
   message: TextMessage,
   report: LlmReport,
   formattedResponse: ReturnType<typeof formatLlmResponse>,
 ): Promise<Array<{ message_id: number }>> {
-  const filename = normalizeReportFilename(report.filename);
+  const filename = normalizeHtmlFilename(report.filename);
   const tmpPath = await Deno.makeTempFile({
     prefix: "context-tg-report-",
     suffix: ".html",

@@ -1,5 +1,6 @@
 import type { Database } from "../database.ts";
 import type { FunctionToolRunner, LlmToolContext } from "./types.ts";
+import { getJsonError, getString } from "./utils.ts";
 
 export const toolDefinition = {
   type: "function",
@@ -36,11 +37,11 @@ export function createRunner(
   ) => ReturnType<FunctionToolRunner>,
 ): FunctionToolRunner {
   return async (args, context, options) => {
-    const agentId = typeof args?.agent === "string" ? args.agent : "";
-    const task = typeof args?.task === "string" ? args.task.trim() : "";
+    const agentId = getString(args?.agent);
+    const task = getString(args?.task);
 
     if (!agentId || !task) {
-      return JSON.stringify({ error: "agent and task must not be empty." });
+      return getJsonError("agent and task must not be empty.");
     }
 
     return await delegate(

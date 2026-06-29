@@ -6,7 +6,13 @@ import {
   formatScheduledAt,
   ScheduleValidationError,
 } from "../schedules.ts";
-import type { FunctionToolRunner, LlmToolContext } from "./types.ts";
+import type { FunctionToolRunner } from "./types.ts";
+import {
+  getFiniteNumber,
+  getMissingContextResponse,
+  getMissingDatabaseResponse,
+  getString,
+} from "./utils.ts";
 
 export const scheduleMessageToolDefinition = {
   type: "function",
@@ -86,30 +92,6 @@ export const cronMessageToolDefinition = {
   strict: false,
 } as const;
 
-function getMissingContextResponse(tool: string, context?: LlmToolContext) {
-  return context
-    ? undefined
-    : `Cannot ${tool}: current chat context is unavailable.`;
-}
-
-function getMissingDatabaseResponse(tool: string, database: unknown) {
-  return database ? undefined : `Cannot ${tool}: database is unavailable.`;
-}
-
-function parseMessage(value: unknown): string {
-  return typeof value === "string" ? value : "";
-}
-
-function parseRequiredDate(value: unknown): string {
-  return typeof value === "string" ? value : "";
-}
-
-function parseNullableNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value)
-    ? value
-    : undefined;
-}
-
 function getCronInterval(
   args: Record<string, unknown> | null,
 ): { intervalUnit: CronIntervalUnit; intervalValue: number } | string {
@@ -117,27 +99,27 @@ function getCronInterval(
     {
       key: "every_dayOfWeek",
       intervalUnit: "dayOfWeek",
-      intervalValue: parseNullableNumber(args?.every_dayOfWeek),
+      intervalValue: getFiniteNumber(args?.every_dayOfWeek),
     },
     {
       key: "every_month",
       intervalUnit: "month",
-      intervalValue: parseNullableNumber(args?.every_month),
+      intervalValue: getFiniteNumber(args?.every_month),
     },
     {
       key: "every_dayOfMonth",
       intervalUnit: "dayOfMonth",
-      intervalValue: parseNullableNumber(args?.every_dayOfMonth),
+      intervalValue: getFiniteNumber(args?.every_dayOfMonth),
     },
     {
       key: "every_hour",
       intervalUnit: "hour",
-      intervalValue: parseNullableNumber(args?.every_hour),
+      intervalValue: getFiniteNumber(args?.every_hour),
     },
     {
       key: "every_minute",
       intervalUnit: "minute",
-      intervalValue: parseNullableNumber(args?.every_minute),
+      intervalValue: getFiniteNumber(args?.every_minute),
     },
   ] as const;
   const selected = intervals.filter(
@@ -190,8 +172,8 @@ export const executeScheduleMessage: FunctionToolRunner = async (
     const scheduledMessage = await createScheduledMessage(options.database, {
       chatId: context.chatId,
       threadId: context.threadId,
-      message: parseMessage(args?.message),
-      at: parseRequiredDate(args?.at),
+      message: getString(args?.message),
+      at: getString(args?.at),
     });
 
     return `Scheduled message ${scheduledMessage.id} for ${formatScheduledAt(
@@ -232,7 +214,7 @@ export const executeCronMessage: FunctionToolRunner = async (
     const cronMessage = await createCronMessage(options.database, {
       chatId: context.chatId,
       threadId: context.threadId,
-      message: parseMessage(args?.message),
+      message: getString(args?.message),
       intervalUnit: interval.intervalUnit,
       intervalValue: interval.intervalValue,
     });

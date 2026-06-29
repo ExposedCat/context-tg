@@ -1,8 +1,9 @@
 import type { ToolName } from "../llm.ts";
 import { LLM_DEPLOYMENTS } from "../llm-deployments.ts";
 import {
+  buildAgentIdentity,
   buildFormattingInstructions,
-  formatAgentNames,
+  buildToolInstructions,
   joinPromptSections,
 } from "./builders.ts";
 import type { AgentDefinition } from "./types.ts";
@@ -14,15 +15,15 @@ export const tools = ["web_search", "send_report"] satisfies ToolName[];
 
 export function buildInstructions(): string {
   return joinPromptSections([
-    `# You
-You are an assistant named ${formatAgentNames(
+    buildAgentIdentity(
+      "an assistant",
       name,
-    )} with a goal to provide meaningful context in a chat.`,
+      "provide meaningful context in a chat",
+    ),
     `# Role
 You are the researcher agent. Search the web, gather intel, connect evidence, and turn messy information into useful insight.
 Work as an investigator and advisor, not just a summarizer.`,
-    `# Tools
-You have tools at your disposal. Whenever you need one, call the tool by name with proper parameters. Do not write tool parameters in a normal response.`,
+    buildToolInstructions(),
     `# Responding
 - Be evidence-led and specific.
 - Separate facts, interpretation, and uncertainty.

@@ -1,6 +1,12 @@
+import { normalizeWhitespace } from "../../utils/text.ts";
 import { MAX_LAST_MESSAGES_COUNT, readLastMessages } from "../last-messages.ts";
 import { search as searchMessages } from "../messages.ts";
-import type { FunctionToolRunner, LlmToolContext } from "./types.ts";
+import type { FunctionToolRunner } from "./types.ts";
+import {
+  getFiniteNumber,
+  getMissingContextResponse,
+  getOptionalDate,
+} from "./utils.ts";
 
 export const searchChatToolDefinition = {
   type: "function",
@@ -62,29 +68,14 @@ export const readLastMessagesToolDefinition = {
   strict: true,
 } as const;
 
-function parseOptionalDate(value: unknown): Date | undefined {
-  if (typeof value !== "string" || !value.trim()) {
-    return undefined;
-  }
-
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? undefined : date;
-}
-
-function parseOptionalNumber(value: unknown): number | undefined {
-  if (typeof value !== "number" || !Number.isFinite(value)) {
-    return undefined;
-  }
-
-  return value;
-}
-
 function parseCount(value: unknown): number {
-  if (typeof value !== "number" || !Number.isFinite(value)) {
+  const count = getFiniteNumber(value);
+
+  if (count === undefined) {
     return 1;
   }
 
-  return Math.max(1, Math.min(MAX_LAST_MESSAGES_COUNT, Math.floor(value)));
+  return Math.max(1, Math.min(MAX_LAST_MESSAGES_COUNT, Math.floor(count)));
 }
 
 function formatMessageLine(message: {
@@ -92,14 +83,8 @@ function formatMessageLine(message: {
   sender_name: string;
   text: string;
 }): string {
-  const content = message.text.replaceAll(/\s+/g, " ").trim();
+  const content = normalizeWhitespace(message.text);
   return `[${message.date}] ${message.sender_name}: ${JSON.stringify(content)}`;
-}
-
-function getMissingContextResponse(tool: string, context?: LlmToolContext) {
-  return context
-    ? undefined
-    : `Cannot ${tool}: current chat context is unavailable.`;
 }
 
 export const executeSearchChat: FunctionToolRunner = async (args, context) => {
@@ -113,11 +98,11 @@ export const executeSearchChat: FunctionToolRunner = async (args, context) => {
     : [];
   const results = await searchMessages({
     queries,
-    from: parseOptionalDate(args?.from),
-    to: parseOptionalDate(args?.to),
+    from: getOptionalDate(args?.from),
+    to: getOptionalDate(args?.to),
     chatId: context.chatId,
     threadId: context.threadId,
-    senderId: parseOptionalNumber(args?.sender_id),
+    senderId: getFiniteNumber(args?.sender_id),
     limit: 20,
   });
 

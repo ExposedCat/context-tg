@@ -1,5 +1,6 @@
 import { fetchTickerPrice } from "../stocks.ts";
 import type { FunctionToolRunner } from "./types.ts";
+import { getString } from "./utils.ts";
 
 export const toolDefinition = {
   type: "function",
@@ -21,7 +22,7 @@ export const toolDefinition = {
 } as const;
 
 export const execute: FunctionToolRunner = async (args) => {
-  const ticker = typeof args?.ticker === "string" ? args.ticker.trim() : "";
+  const ticker = getString(args?.ticker);
   const priceDetails = ticker ? await fetchTickerPrice(ticker) : null;
 
   return JSON.stringify({ ticker, priceDetails });

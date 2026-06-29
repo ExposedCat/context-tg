@@ -1,4 +1,15 @@
+import {
+  escapeHtml,
+  escapeHtmlAttribute,
+  normalizeHtmlFilename,
+} from "../../utils/text.ts";
 import type { FunctionToolRunner } from "./types.ts";
+import {
+  asRecord,
+  getString as asString,
+  getStringArray as asStringArray,
+  getJsonError,
+} from "./utils.ts";
 
 type ReportScore = {
   label: string;
@@ -115,6 +126,22 @@ const subsectionSchema = {
   additionalProperties: false,
 } as const;
 
+const sourceSchema = {
+  type: "object",
+  properties: {
+    title: {
+      type: "string",
+      description: "Source label or title.",
+    },
+    url: {
+      type: "string",
+      description: "Source URL.",
+    },
+  },
+  required: ["title", "url"],
+  additionalProperties: false,
+} as const;
+
 export const toolDefinition = {
   type: "function",
   name: "send_report",
@@ -171,21 +198,7 @@ export const toolDefinition = {
         type: "array",
         description:
           "Source links used in the report. Use [] if sources are already covered by chat citations or no source links are needed.",
-        items: {
-          type: "object",
-          properties: {
-            title: {
-              type: "string",
-              description: "Source label or title.",
-            },
-            url: {
-              type: "string",
-              description: "Source URL.",
-            },
-          },
-          required: ["title", "url"],
-          additionalProperties: false,
-        },
+        items: sourceSchema,
       },
     },
     required: ["title", "filename", "sections", "sources"],
@@ -376,21 +389,7 @@ export const tradingToolDefinition = {
         type: "array",
         description:
           "Source links used in the report. Use [] if sources are already covered by chat citations or no source links are needed.",
-        items: {
-          type: "object",
-          properties: {
-            title: {
-              type: "string",
-              description: "Source label or title.",
-            },
-            url: {
-              type: "string",
-              description: "Source URL.",
-            },
-          },
-          required: ["title", "url"],
-          additionalProperties: false,
-        },
+        items: sourceSchema,
       },
     },
     required: [
@@ -408,34 +407,6 @@ export const tradingToolDefinition = {
   },
   strict: true,
 } as const;
-
-function normalizeReportFilename(value: unknown): string {
-  const rawFilename = typeof value === "string" ? value.trim() : "";
-  const safeFilename = rawFilename
-    .replaceAll(/[\\/]/g, "-")
-    .replaceAll(/[^a-z0-9._ -]/gi, "")
-    .replaceAll(/\s+/g, " ")
-    .trim();
-  const filename = safeFilename || "research-report.html";
-
-  return /\.html?$/i.test(filename) ? filename : `${filename}.html`;
-}
-
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
-
-function asString(value: unknown): string {
-  return typeof value === "string" ? value.trim() : "";
-}
-
-function asStringArray(value: unknown): string[] {
-  return Array.isArray(value)
-    ? value.map(asString).filter((item) => item.length > 0)
-    : [];
-}
 
 function parseScore(value: unknown): ReportScore {
   const score = asRecord(value);
@@ -514,7 +485,7 @@ function parseCompanyData(value: unknown): ReportCompanyData {
 function parseReport(args: Record<string, unknown> | null): StructuredReport {
   return {
     title: asString(args?.title) || "Report",
-    filename: normalizeReportFilename(args?.filename),
+    filename: normalizeHtmlFilename(args?.filename),
     sections: Array.isArray(args?.sections)
       ? args.sections.flatMap((item) => {
           const parsed = parseSection(item);
@@ -583,7 +554,7 @@ function parseTradingReport(
 
   return {
     title: asString(args?.title) || "Trading Report",
-    filename: normalizeReportFilename(args?.filename),
+    filename: normalizeHtmlFilename(args?.filename),
     companyData: parseCompanyData(args?.company_data),
     sections: [
       {
@@ -705,17 +676,6 @@ function parseTradingReport(
         })
       : [],
   };
-}
-
-function escapeHtml(text: string): string {
-  return text
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;");
-}
-
-function escapeHtmlAttribute(text: string): string {
-  return escapeHtml(text).replaceAll('"', "&quot;");
 }
 
 function renderParagraphs(content: string): string {
@@ -1140,9 +1100,7 @@ export const execute: FunctionToolRunner = (args) => {
   const report = parseReport(args);
 
   if (report.sections.length === 0) {
-    return JSON.stringify({
-      error: "sections must include at least one item.",
-    });
+    return getJsonError("sections must include at least one item.");
   }
 
   return {
@@ -1187,8 +1145,7 @@ export const executeTrading: FunctionToolRunner = (args) => {
   const missing = getMissingTradingFields(report);
 
   if (missing.length > 0) {
-    return JSON.stringify({
-      error: "Trading report is missing required content.",
+    return getJsonError("Trading report is missing required content.", {
       missing,
     });
   }

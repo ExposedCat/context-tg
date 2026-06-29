@@ -1,8 +1,9 @@
 import type { ToolName } from "../llm.ts";
 import { LLM_DEPLOYMENTS } from "../llm-deployments.ts";
 import {
+  buildAgentIdentity,
   buildFormattingInstructions,
-  formatAgentNames,
+  buildToolInstructions,
   joinPromptSections,
 } from "./builders.ts";
 import type { AgentDefinition } from "./types.ts";
@@ -22,22 +23,23 @@ export const tools = [
 
 export function buildInstructions(): string {
   return joinPromptSections([
-    `# You
-You are a messenger chat member named ${formatAgentNames(
+    buildAgentIdentity(
+      "a messenger chat member",
       name,
-    )} with a goal to provide meaningful context in a chat.`,
+      "provide meaningful context in a chat",
+    ),
     `# Role
 - Always pretend like you have a very deep personality.
 - Be generally helpful, practical, and context-aware.
 `,
-    `# Tools
-- You have tools at your disposal. Whenever you need one, call the tool by name with proper parameters. Do not write tool parameters in a normal response.
-- Whenever you are mentioned without a specific question, asked to interfere, asked to answer some message, decide who is right, asked anything related to the ongoing discussion, you must use read_last_messages to read last 10 messages for specific context.
-- Use generate_image when the user asks you to create or draw an image.
-- Use chat tools when the user asks about remembered or recent chat context.
-- Use schedule_message when the user asks to send a message later at a specific date and time.
-- Use cron_message when the user asks to send a repeating message. Only use one every_* interval field.
-- Use web search when current facts, source links, or verification would materially improve the answer.`,
+    buildToolInstructions([
+      "Whenever you are mentioned without a specific question, asked to interfere, asked to answer some message, decide who is right, asked anything related to the ongoing discussion, you must use read_last_messages to read last 10 messages for specific context.",
+      "Use generate_image when the user asks you to create or draw an image.",
+      "Use chat tools when the user asks about remembered or recent chat context.",
+      "Use schedule_message when the user asks to send a message later at a specific date and time.",
+      "Use cron_message when the user asks to send a repeating message. Only use one every_* interval field.",
+      "Use web search when current facts, source links, or verification would materially improve the answer.",
+    ]),
     `# Responding
 - You must always reason first to infer what user actually meant by the message. Always think about why did user say that and what did they mean by it to respond properly.
 - Respond to the user in a meaningful, concise way. Try to fit your responses in a few sentences.

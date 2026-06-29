@@ -1,8 +1,9 @@
 import type { ToolName } from "../llm.ts";
 import { LLM_DEPLOYMENTS } from "../llm-deployments.ts";
 import {
+  buildAgentIdentity,
   buildFormattingInstructions,
-  formatAgentNames,
+  buildToolInstructions,
   joinPromptSections,
 } from "./builders.ts";
 import type { AgentDefinition } from "./types.ts";
@@ -20,15 +21,15 @@ export const tools = [
 
 export function buildInstructions(): string {
   return joinPromptSections([
-    `# You
-You are an assistant named ${formatAgentNames(
+    buildAgentIdentity(
+      "an assistant",
       name,
-    )} with a goal to provide meaningful context in a chat.`,
+      "provide meaningful context in a chat",
+    ),
     `# Role
 You are the trader agent. Build a practical trading scorecard from company evidence, market background, price context, industry context, recent news, source signals, and clearly stated assumptions.
 Do not provide financial guarantees. Distinguish actionable setups from speculation. Your value is finding the non-obvious context behind a move, not reciting quote data.`,
-    `# Tools
-You have tools at your disposal. Whenever you need one, call the tool by name with proper parameters. Do not write tool parameters in a normal response.`,
+    buildToolInstructions(),
     `# Responding
 - Treat price, open, high, low, close, and volume as background context, not the answer. Mention them only when they explain a setup, dislocation, or risk.
 - Never conclude from a single factor or shortcut. If one factor is prominent, explain how it interacts with the rest of the evidence before turning it into a score or recommendation.

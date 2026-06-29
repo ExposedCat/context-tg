@@ -6,7 +6,10 @@ import {
   sql,
 } from "@kysely/kysely";
 import type { Context } from "../bot.ts";
+import { padDatePart } from "../utils/date.ts";
+import { normalizeWhitespace, truncateCodePoints } from "../utils/text.ts";
 import type { Database } from "./database.ts";
+import { disabledLinkPreviewOptions as linkPreviewOptions } from "./telegram.ts";
 
 export type ScheduledMessageStatus =
   | "scheduled"
@@ -117,11 +120,6 @@ const MAX_ACTIVE_SCHEDULED_MESSAGES_PER_CHAT = 5;
 const MAX_ACTIVE_CRON_MESSAGES_PER_CHAT = 10;
 const MAX_TELEGRAM_MESSAGE_LENGTH = 4096;
 const SCHEDULE_PREVIEW_LENGTH = 80;
-const linkPreviewOptions = {
-  link_preview_options: {
-    is_disabled: true,
-  },
-};
 const scheduledMessageControllers = new Map<string, AbortController>();
 const cronMessageControllers = new Map<string, AbortController>();
 
@@ -852,10 +850,6 @@ export async function listActiveCronMessages(
   return await query.orderBy("created_at", "asc").execute();
 }
 
-function padDatePart(value: number): string {
-  return String(value).padStart(2, "0");
-}
-
 export function formatScheduledAt(value: string): string {
   const date = new Date(value);
 
@@ -890,10 +884,8 @@ export function formatCronInterval(
 }
 
 function truncateMessage(text: string): string {
-  const normalized = text.replaceAll(/\s+/g, " ").trim();
-  const truncated = Array.from(normalized)
-    .slice(0, SCHEDULE_PREVIEW_LENGTH)
-    .join("");
+  const normalized = normalizeWhitespace(text);
+  const truncated = truncateCodePoints(normalized, SCHEDULE_PREVIEW_LENGTH);
 
   return truncated.length < normalized.length ? `${truncated}...` : truncated;
 }

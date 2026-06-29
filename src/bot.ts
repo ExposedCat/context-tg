@@ -11,6 +11,7 @@ import {
 import { startScheduleDispatcher } from "./features/schedules.ts";
 import { stateComposer } from "./features/state.ts";
 import { safelyMaybeSendPeriodicTroll } from "./features/trolling.ts";
+import { delay } from "./utils/async.ts";
 
 const RUNNER_CONCURRENCY = 500;
 const TELEGRAM_RATE_LIMIT_RETRY_DELAY_MS = 3000;
@@ -23,27 +24,6 @@ export type Context = GrammyContext &
   I18nFlavor & {
     database: Database;
   };
-
-function delay(ms: number, signal?: AbortSignal): Promise<void> {
-  if (signal?.aborted) {
-    return Promise.reject(new Error("Telegram API retry aborted"));
-  }
-
-  return new Promise((resolve, reject) => {
-    const timeoutId = setTimeout(() => {
-      signal?.removeEventListener("abort", abort);
-      resolve();
-    }, ms);
-
-    const abort = () => {
-      clearTimeout(timeoutId);
-      signal?.removeEventListener("abort", abort);
-      reject(new Error("Telegram API retry aborted"));
-    };
-
-    signal?.addEventListener("abort", abort, { once: true });
-  });
-}
 
 function createTelegramRateLimitRetryTransformer(): Transformer {
   return async (prev, method, payload, signal) => {
@@ -69,7 +49,11 @@ function createTelegramRateLimitRetryTransformer(): Transformer {
         delayMs: TELEGRAM_RATE_LIMIT_RETRY_DELAY_MS,
       });
 
-      await delay(TELEGRAM_RATE_LIMIT_RETRY_DELAY_MS, signal);
+      await delay(
+        TELEGRAM_RATE_LIMIT_RETRY_DELAY_MS,
+        signal,
+        new Error("Telegram API retry aborted"),
+      );
     }
 
     throw new Error("Telegram API retry loop exited unexpectedly");

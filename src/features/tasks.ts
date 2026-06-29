@@ -5,7 +5,15 @@ import {
   sql,
 } from "@kysely/kysely";
 import type { Context } from "../bot.ts";
+import { padDatePart } from "../utils/date.ts";
+import {
+  escapeHtml,
+  escapeHtmlAttribute,
+  normalizeWhitespace,
+  truncateCodePoints,
+} from "../utils/text.ts";
 import type { Database } from "./database.ts";
+import { disabledLinkPreviewOptions as linkPreviewOptions } from "./telegram.ts";
 
 export type TasksTable = {
   chat_id: number;
@@ -49,11 +57,6 @@ const STATUS_EMOJI_IDS = {
     fallback: "❌",
   },
 } satisfies Record<TaskStatus, { id: string; fallback: string }>;
-const linkPreviewOptions = {
-  link_preview_options: {
-    is_disabled: true,
-  },
-};
 const activeTaskControllers = new Map<string, AbortController>();
 
 type CancelTaskResult =
@@ -242,28 +245,11 @@ export async function listRecentTasks(
     .execute();
 }
 
-function escapeHtml(text: string): string {
-  return text
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;");
-}
-
-function escapeHtmlAttribute(text: string): string {
-  return escapeHtml(text).replaceAll('"', "&quot;");
-}
-
 function truncateTaskText(text: string): string {
-  const trimmedText = text.replaceAll(/\s+/g, " ").trim();
-  const truncatedText = Array.from(trimmedText)
-    .slice(0, TASK_LABEL_LENGTH)
-    .join("");
+  const trimmedText = normalizeWhitespace(text);
+  const truncatedText = truncateCodePoints(trimmedText, TASK_LABEL_LENGTH);
 
   return truncatedText || "Task";
-}
-
-function padDatePart(value: number): string {
-  return String(value).padStart(2, "0");
 }
 
 function normalizeLegacyTimestamp(value: number): number | undefined {

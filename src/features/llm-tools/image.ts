@@ -1,5 +1,6 @@
 import { APP_ENV } from "../env.ts";
 import type { FunctionToolRunner } from "./types.ts";
+import { getJsonError, getString } from "./utils.ts";
 
 type ImageGenerationData = {
   b64_json?: unknown;
@@ -49,10 +50,6 @@ export function isConfigured(): boolean {
       APP_ENV.LLM_IMAGE_MODEL &&
       APP_ENV.LLM_IMAGE_API_KEY,
   );
-}
-
-function getString(value: unknown): string {
-  return typeof value === "string" ? value.trim() : "";
 }
 
 function getFirstImageData(response: ImageGenerationResponse) {
@@ -120,11 +117,11 @@ export const execute: FunctionToolRunner = async (args, _context, options) => {
   const prompt = getString(args?.prompt);
 
   if (!prompt) {
-    return JSON.stringify({ error: "Missing image prompt." });
+    return getJsonError("Missing image prompt.");
   }
 
   if (!isConfigured()) {
-    return JSON.stringify({ error: "Image generation is not configured." });
+    return getJsonError("Image generation is not configured.");
   }
 
   const image = await createImage(prompt, options?.signal);
