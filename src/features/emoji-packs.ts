@@ -42,8 +42,15 @@ type EmojiReplacement = {
   id: string;
 };
 
+type EmojiReplacementCandidate = Omit<EmojiReplacement, "emoji">;
+
+type EmojiReplacementGroup = {
+  candidates: EmojiReplacementCandidate[];
+  emoji: string;
+};
+
 type EmojiRegistry = {
-  replacements: EmojiReplacement[];
+  replacements: EmojiReplacementGroup[];
 };
 
 type MarkdownLinkMatch = {
@@ -254,8 +261,7 @@ async function loadEmojiRegistry(
   database: EmojiPacksDatabase,
   api: StickerSetReader,
 ): Promise<EmojiRegistry> {
-  const replacements: EmojiReplacement[] = [];
-  const seenEmoji = new Set<string>();
+  const replacementGroups = new Map<string, EmojiReplacementCandidate[]>();
   const packs = await listEmojiPacks(database);
 
   for (const pack of packs) {
@@ -276,18 +282,27 @@ async function loadEmojiRegistry(
         }
 
         for (const emoji of getEmojiAliases(fallback)) {
-          if (seenEmoji.has(emoji)) {
+          const candidates = replacementGroups.get(emoji) ?? [];
+
+          if (!replacementGroups.has(emoji)) {
+            replacementGroups.set(emoji, candidates);
+          }
+
+          if (candidates.some((candidate) => candidate.id === id)) {
             continue;
           }
 
-          seenEmoji.add(emoji);
-          replacements.push({ emoji, fallback, id });
+          candidates.push({ fallback, id });
         }
       }
     } catch (error) {
       logError("Failed to load emoji pack", { name: pack.name, error });
     }
   }
+
+  const replacements = Array.from(replacementGroups.entries()).map(
+    ([emoji, candidates]) => ({ emoji, candidates }),
+  );
 
   replacements.sort((left, right) => right.emoji.length - left.emoji.length);
   return { replacements };
@@ -312,9 +327,17 @@ function findEmojiReplacementAt(
   index: number,
   registry: EmojiRegistry,
 ): EmojiReplacement | undefined {
-  return registry.replacements.find((replacement) =>
+  const group = registry.replacements.find((replacement) =>
     text.startsWith(replacement.emoji, index),
   );
+
+  if (!group || group.candidates.length === 0) {
+    return undefined;
+  }
+
+  const candidate =
+    group.candidates[Math.floor(Math.random() * group.candidates.length)];
+  return { emoji: group.emoji, ...candidate };
 }
 
 function findExactEmojiReplacement(
