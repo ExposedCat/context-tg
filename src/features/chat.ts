@@ -251,18 +251,59 @@ function getActualReply(message: TextMessage): TextMessage | undefined {
   return isImplicitForumTopicReply(message, reply) ? undefined : reply;
 }
 
+function getForumThreadId(
+  message: TextMessage,
+  reply: TextMessage | undefined,
+): number | undefined {
+  if (message.is_topic_message === true) {
+    return message.message_thread_id ?? reply?.message_thread_id;
+  }
+
+  if (reply?.is_topic_message === true) {
+    return reply.message_thread_id;
+  }
+
+  return undefined;
+}
+
+function getQuoteReplyContextText(message: TextMessage): string | undefined {
+  const quote = message.quote?.text.trim();
+
+  return quote && !startsWithCommandPrefix(quote) ? quote : undefined;
+}
+
+function getReplyContext(
+  message: TextMessage,
+  reply: TextMessage | undefined,
+): LlmContextMessage | undefined {
+  const quoteText = getQuoteReplyContextText(message);
+
+  if (reply) {
+    return reply;
+  }
+
+  if (message.external_reply) {
+    return quoteText
+      ? { ...message.external_reply, text: quoteText }
+      : message.external_reply;
+  }
+
+  return quoteText ? { text: quoteText } : undefined;
+}
+
 function buildReplyContextText(
   reply: LlmContextMessage | undefined,
 ): string | undefined {
+  const repliedPrefix = "Replying to the message";
   const replyText = getLlmContextText(reply);
   const imagePrefix = hasImageAttachments(reply) ? "[Attached image]\n" : "";
 
   if (replyText) {
-    return `Replied message:\n${imagePrefix}${replyText}`;
+    return `${repliedPrefix}:\n${imagePrefix}${replyText}`;
   }
 
   if (imagePrefix) {
-    return `Replied message:\n${imagePrefix.trimEnd()}`;
+    return `${repliedPrefix}:\n${imagePrefix.trimEnd()}`;
   }
 
   return undefined;
@@ -297,7 +338,7 @@ function getLlmToolContext(
     chatId,
     messageId: message.message_id,
     replyMessageId: reply?.message_id,
-    threadId: message.message_thread_id ?? reply?.message_thread_id,
+    threadId: getForumThreadId(message, reply),
   };
 }
 
@@ -1419,7 +1460,7 @@ chatComposer.on("message", async (ctx, next) => {
   const message = ctx.message as TextMessage;
   const text = getMessageText(message);
   const reply = getActualReply(message);
-  const replyContext = reply ?? message.external_reply;
+  const replyContext = getReplyContext(message, reply);
   const isDirectBotReply = isDirectReplyToBot(reply, ctx.me.id);
   const addressed = text ? isAddressed(text, ctx.me.username) : false;
   const thread = reply
