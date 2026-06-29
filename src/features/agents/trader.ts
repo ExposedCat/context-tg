@@ -13,7 +13,6 @@ export const name = ["трейдер лейло", "трейдейло", "trader 
 export const MODEL = LLM_DEPLOYMENTS.big;
 export const tools = [
   "web_search",
-  "fetch_ticker_price",
   "get_markets_state",
   "get_recent_news",
   "send_trading_report",
@@ -40,7 +39,6 @@ Do not provide financial guarantees. Distinguish actionable setups from speculat
 - Include the strongest opposing argument and the facts that would invalidate your view.
 - Be specific with dates, expected events, and source claims when current sources mention them.
 - Do not answer with generic advice like "buy if you believe in the company" or "do not buy if you do not." Translate belief into concrete thesis checks.
-- Use fetch_ticker_price only for explicit ticker price checks or when price action is needed to judge a catalyst.
 - Use get_markets_state when market-session timing matters or when completing the Market state section.
 - Use get_recent_news for fresh 24-hour news context!
 - Use web_search when broader source verification, event timing, sentiment, filings, analyst context, or current market context is needed.

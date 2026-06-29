@@ -700,7 +700,6 @@ const TOOL_USAGE_EMOJIS: Partial<
   send_report: { id: "5877597667231534929", fallback: "📄" },
   send_trading_report: { id: "5877597667231534929", fallback: "📄" },
   get_markets_state: { id: "5900104897885376843", fallback: "📈" },
-  fetch_ticker_price: { id: "5974217466270716579", fallback: "💵" },
   get_recent_news: { id: "6008090211181923982", fallback: "📰" },
   read_youtube_video: { id: "6005986106703613755", fallback: "▶️" },
   generate_image: { id: "5766879414704935108", fallback: "🖼️" },

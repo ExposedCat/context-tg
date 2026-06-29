@@ -1,5 +1,3 @@
-const API_URL = "https://stooq.com";
-
 export type MarketSessionState =
   | "after-hours (morning)"
   | "overnight"
@@ -7,14 +5,6 @@ export type MarketSessionState =
   | "open"
   | "postmarket"
   | "after-hours (night)";
-
-export type TickerPriceDetails = {
-  open: number;
-  high: number;
-  low: number;
-  close: number;
-  volume: number;
-};
 
 export type ResponseTimeZone = "Europe/Prague" | "Europe/Kyiv";
 
@@ -439,28 +429,4 @@ export function getMarketsState(date = new Date()): MarketsState {
       "Schedules do not account for exchange holidays or half-days.",
     ],
   };
-}
-
-export async function fetchTickerPrice(
-  ticker: string,
-): Promise<TickerPriceDetails | null> {
-  try {
-    const response = await fetch(
-      `${API_URL}/q/l/?s=${encodeURIComponent(ticker.trim())}`,
-    );
-    const data = await response.text();
-    const parts = data.split(",");
-    const details = {
-      open: Number(parts.at(3)),
-      high: Number(parts.at(4)),
-      low: Number(parts.at(5)),
-      close: Number(parts.at(6)),
-      volume: Number(parts.at(7)),
-    };
-
-    return Object.values(details).every(Number.isFinite) ? details : null;
-  } catch (error) {
-    console.error(error);
-    return null;
-  }
 }

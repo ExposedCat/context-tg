@@ -30,7 +30,6 @@ import * as marketTool from "./llm-tools/market.ts";
 import type { LlmReport } from "./llm-tools/reports.ts";
 import * as reportsTool from "./llm-tools/reports.ts";
 import * as scheduleTool from "./llm-tools/schedule.ts";
-import * as tickerPriceTool from "./llm-tools/ticker-price.ts";
 import type {
   FunctionToolResult,
   FunctionToolRunner,
@@ -44,7 +43,6 @@ export type { LlmReport } from "./llm-tools/reports.ts";
 export type { LlmGeneratedImage, LlmToolContext } from "./llm-tools/types.ts";
 
 export const TOOL_DEFINITIONS = {
-  fetch_ticker_price: tickerPriceTool.toolDefinition,
   get_markets_state: marketTool.toolDefinition,
   search_chat: searchChatToolDefinition,
   read_last_messages: readLastMessagesToolDefinition,
@@ -61,7 +59,6 @@ export const TOOL_DEFINITIONS = {
 export type ToolName = "web_search" | keyof typeof TOOL_DEFINITIONS;
 
 const FUNCTION_TOOL_RUNNERS = {
-  fetch_ticker_price: tickerPriceTool.execute,
   get_markets_state: marketTool.execute,
   search_chat: executeSearchChat,
   read_last_messages: executeReadLastMessages,
