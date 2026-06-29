@@ -54,10 +54,7 @@ type EmojiRegistry = {
 };
 
 type MarkdownLinkMatch = {
-  destination: string;
   end: number;
-  isImage: boolean;
-  label: string;
 };
 
 type MessageEntity = {
@@ -340,14 +337,6 @@ function findEmojiReplacementAt(
   return { emoji: group.emoji, ...candidate };
 }
 
-function findExactEmojiReplacement(
-  text: string,
-  registry: EmojiRegistry,
-): EmojiReplacement | undefined {
-  const replacement = findEmojiReplacementAt(text, 0, registry);
-  return replacement?.emoji.length === text.length ? replacement : undefined;
-}
-
 function hasReplacementCandidates(payload: ApiPayload): boolean {
   if (typeof payload.text === "string" || typeof payload.caption === "string") {
     return true;
@@ -439,30 +428,8 @@ function withCustomEmojiEntities(
     return payload;
   }
 
-  let existingEntitiesChanged = false;
   const existingEntities = Array.isArray(payload[entityField])
-    ? payload[entityField].map((entity) => {
-        if (
-          !isRecord(entity) ||
-          entity.type !== "custom_emoji" ||
-          typeof entity.offset !== "number" ||
-          typeof entity.length !== "number"
-        ) {
-          return entity;
-        }
-
-        const replacement = findExactEmojiReplacement(
-          text.slice(entity.offset, entity.offset + entity.length),
-          registry,
-        );
-
-        if (!replacement || entity.custom_emoji_id === replacement.id) {
-          return entity;
-        }
-
-        existingEntitiesChanged = true;
-        return { ...entity, custom_emoji_id: replacement.id };
-      })
+    ? payload[entityField]
     : [];
   const addedEntities = getCustomEmojiEntities(
     text,
@@ -470,7 +437,7 @@ function withCustomEmojiEntities(
     existingEntities,
   );
 
-  if (addedEntities.length === 0 && !existingEntitiesChanged) {
+  if (addedEntities.length === 0) {
     return payload;
   }
 
@@ -502,20 +469,8 @@ function replaceHtmlEmoji(text: string, registry: EmojiRegistry): string {
         const closeIndex = lowerRest.indexOf("</tg-emoji>");
 
         if (closeIndex >= 0) {
-          const tagEnd = text.indexOf(">", index + 1);
           const end = index + closeIndex + "</tg-emoji>".length;
-
-          if (tagEnd >= 0 && tagEnd < end) {
-            const fallback = text.slice(tagEnd + 1, index + closeIndex);
-            const replacement = findExactEmojiReplacement(fallback, registry);
-
-            result += replacement
-              ? formatHtmlCustomEmoji(replacement)
-              : text.slice(index, end);
-          } else {
-            result += text.slice(index, end);
-          }
-
+          result += text.slice(index, end);
           index = end;
           continue;
         }
@@ -577,7 +532,6 @@ function findMarkdownLinkMatch(
   text: string,
   index: number,
 ): MarkdownLinkMatch | undefined {
-  const isImage = text[index] === "!";
   const labelStart = text[index] === "!" ? index + 1 : index;
 
   if (text[labelStart] !== "[") {
@@ -603,8 +557,6 @@ function findMarkdownLinkMatch(
     return undefined;
   }
 
-  const label = text.slice(labelStart + 1, cursor);
-  const destinationStart = cursor + 2;
   cursor += 2;
 
   while (cursor < text.length) {
@@ -615,10 +567,7 @@ function findMarkdownLinkMatch(
 
     if (text[cursor] === ")") {
       return {
-        destination: text.slice(destinationStart, cursor),
         end: cursor + 1,
-        isImage,
-        label,
       };
     }
 
@@ -626,10 +575,6 @@ function findMarkdownLinkMatch(
   }
 
   return undefined;
-}
-
-function isCustomEmojiMarkdownLink(match: MarkdownLinkMatch): boolean {
-  return match.isImage && /^tg:\/\/emoji\?id=\d+$/.test(match.destination);
 }
 
 function formatMarkdownCustomEmoji(replacement: EmojiReplacement): string {
@@ -667,13 +612,7 @@ function replaceMarkdownEmoji(text: string, registry: EmojiRegistry): string {
         : undefined;
 
     if (linkMatch !== undefined) {
-      const replacement = isCustomEmojiMarkdownLink(linkMatch)
-        ? findExactEmojiReplacement(linkMatch.label, registry)
-        : undefined;
-
-      result += replacement
-        ? formatMarkdownCustomEmoji(replacement)
-        : text.slice(index, linkMatch.end);
+      result += text.slice(index, linkMatch.end);
       index = linkMatch.end;
       continue;
     }

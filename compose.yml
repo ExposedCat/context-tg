@@ -23,6 +23,7 @@ services:
       DENO_DIR: /deno-dir
       DEBUG: app:*:warn,app:*:error
       QDRANT_URL: http://qdrant:6333
+      TZ: Europe/Prague
     volumes:
       - .:/app:Z
       - deno_cache:/deno-dir

@@ -25,7 +25,9 @@ import {
 } from "./llm-models.ts";
 import {
   replyWithCancelCronMessage,
+  replyWithCancelCronMessageByNumber,
   replyWithCancelScheduledMessage,
+  replyWithCancelScheduledMessageByNumber,
   replyWithSchedules,
 } from "./schedules.ts";
 import { replyWithCancelTask, replyWithRecentTasks } from "./tasks.ts";
@@ -283,6 +285,22 @@ stateComposer.command("configure", async (ctx) => {
 });
 
 stateComposer.on("message:text", async (ctx, next) => {
+  const numberedScheduleMatch = ctx.message.text.match(
+    /^\/cancel_([sc])(\d+)(?:@\w+)?(?:\s|$)/,
+  );
+
+  if (numberedScheduleMatch) {
+    const number = Number(numberedScheduleMatch[2]);
+
+    if (numberedScheduleMatch[1] === "s") {
+      await replyWithCancelScheduledMessageByNumber(ctx, number);
+      return;
+    }
+
+    await replyWithCancelCronMessageByNumber(ctx, number);
+    return;
+  }
+
   const scheduleMatch = ctx.message.text.match(
     /^\/cancel_(schedule|cron)_([a-zA-Z0-9_-]+)(?:@\w+)?(?:\s|$)/,
   );

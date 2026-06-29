@@ -49,10 +49,7 @@ import {
   type UsageKey,
 } from "./usage.ts";
 
-type TextMessage = {
-  message_id: number;
-  message_thread_id?: number;
-  from?: TelegramUser;
+type LlmContextMessage = {
   text?: string;
   caption?: string;
   animation?: unknown;
@@ -60,12 +57,20 @@ type TextMessage = {
   photo?: PhotoSize[];
   document?: TelegramDocument;
   paid_media?: unknown;
+  video?: unknown;
+  voice?: unknown;
+};
+
+type TextMessage = LlmContextMessage & {
+  message_id: number;
+  message_thread_id?: number;
+  is_topic_message?: boolean;
+  from?: TelegramUser;
   quote?: {
     text: string;
   };
   reply_to_message?: TextMessage;
-  video?: unknown;
-  voice?: unknown;
+  external_reply?: LlmContextMessage;
 };
 
 type TelegramUser = {
@@ -110,12 +115,12 @@ const UNSUPPORTED_CAPTIONED_MEDIA_TYPES = [
   label: string;
 }>;
 
-function getMessageText(message: TextMessage): string | undefined {
+function getMessageText(message: LlmContextMessage): string | undefined {
   return message.text ?? message.caption;
 }
 
 function getUnsupportedCaptionedMediaLabel(
-  message: TextMessage,
+  message: LlmContextMessage,
 ): string | undefined {
   if (hasImageAttachments(message)) {
     return undefined;
@@ -126,14 +131,14 @@ function getUnsupportedCaptionedMediaLabel(
   )?.label;
 }
 
-function buildLlmMessageText(message: TextMessage, text: string): string {
+function buildLlmMessageText(message: LlmContextMessage, text: string): string {
   const label = getUnsupportedCaptionedMediaLabel(message);
 
   return label ? `[Unsupported ${label} media]\n${text}` : text;
 }
 
 function getLlmContextText(
-  message: TextMessage | undefined,
+  message: LlmContextMessage | undefined,
 ): string | undefined {
   const text = message && getMessageText(message);
   return message && text && !startsWithCommandPrefix(text)
@@ -182,7 +187,7 @@ function isImageDocument(document: TelegramDocument): boolean {
 }
 
 function getMessageImageAttachments(
-  message: TextMessage | undefined,
+  message: LlmContextMessage | undefined,
 ): TelegramImageAttachment[] {
   if (!message) {
     return [];
@@ -207,8 +212,14 @@ function getMessageImageAttachments(
   return attachments;
 }
 
-function hasImageAttachments(message: TextMessage | undefined): boolean {
+function hasImageAttachments(message: LlmContextMessage | undefined): boolean {
   return getMessageImageAttachments(message).length > 0;
+}
+
+function hasReplyContext(message: LlmContextMessage | undefined): boolean {
+  return (
+    getLlmContextText(message) !== undefined || hasImageAttachments(message)
+  );
 }
 
 function isAddressed(text: string, ownUsername: string): boolean {
@@ -227,8 +238,10 @@ function isImplicitForumTopicReply(
   reply: TextMessage | undefined,
 ): boolean {
   return (
+    message.is_topic_message === true &&
     message.message_thread_id !== undefined &&
-    reply?.message_id === message.message_thread_id
+    reply?.message_id === message.message_thread_id &&
+    !hasReplyContext(reply)
   );
 }
 
@@ -238,29 +251,30 @@ function getActualReply(message: TextMessage): TextMessage | undefined {
   return isImplicitForumTopicReply(message, reply) ? undefined : reply;
 }
 
-function buildRootRequest(text: string, replyText?: string): string {
-  return replyText ? `${replyText}\n\n${text}` : text;
+function buildReplyContextText(
+  reply: LlmContextMessage | undefined,
+): string | undefined {
+  const replyText = getLlmContextText(reply);
+  const imagePrefix = hasImageAttachments(reply) ? "[Attached image]\n" : "";
+
+  if (replyText) {
+    return `Replied message:\n${imagePrefix}${replyText}`;
+  }
+
+  if (imagePrefix) {
+    return `Replied message:\n${imagePrefix.trimEnd()}`;
+  }
+
+  return undefined;
 }
 
 function buildRootRequestText(
   text: string,
-  reply: TextMessage | undefined,
+  reply: LlmContextMessage | undefined,
 ): string {
-  const replyText = getLlmContextText(reply);
+  const replyContextText = buildReplyContextText(reply);
 
-  if (replyText && hasImageAttachments(reply)) {
-    return `Replied message:\n${replyText}\n\nUser: ${text}`;
-  }
-
-  if (replyText) {
-    return buildRootRequest(text, replyText);
-  }
-
-  if (hasImageAttachments(reply)) {
-    return `User is replying to the attached image.\n\nUser: ${text}`;
-  }
-
-  return text;
+  return replyContextText ? `${replyContextText}\n\nUser: ${text}` : text;
 }
 
 function buildThreadRequest(text: string, quoteText?: string): string {
@@ -352,7 +366,7 @@ async function downloadImageDataUrl(
 async function buildLlmRequestInput(
   ctx: Context,
   text: string,
-  messages: Array<TextMessage | undefined>,
+  messages: Array<LlmContextMessage | undefined>,
   signal?: AbortSignal,
 ): Promise<LlmRequestInput> {
   const attachments = messages.flatMap(getMessageImageAttachments);
@@ -703,6 +717,8 @@ const TOOL_USAGE_EMOJIS: Partial<
   get_recent_news: { id: "6008090211181923982", fallback: "📰" },
   read_youtube_video: { id: "6005986106703613755", fallback: "▶️" },
   generate_image: { id: "5766879414704935108", fallback: "🖼️" },
+  schedule_message: { id: "5967412305338568701", fallback: "⏰" },
+  cron_message: { id: "5967412305338568701", fallback: "⏰" },
 };
 
 function formatToolUsageMarkdown(tools: ToolName[]): string {
@@ -1051,6 +1067,7 @@ async function saveResumableTaskThread(
 
 type HandleChatRequestOptions = {
   reply?: TextMessage;
+  replyContext?: LlmContextMessage;
   thread?: Thread;
   threadId?: number;
   taskText?: string;
@@ -1069,6 +1086,7 @@ async function handleChatRequest(
 
   const chatId = ctx.chat.id;
   const reply = options.reply;
+  const replyContext = options.replyContext ?? reply;
   const thread = options.thread;
   const threadId =
     thread?.thread_id ??
@@ -1177,8 +1195,8 @@ async function handleChatRequest(
 
           const request = await buildLlmRequestInput(
             ctx,
-            buildRootRequestText(promptText, reply),
-            [reply, message],
+            buildRootRequestText(promptText, replyContext),
+            [replyContext, message],
             taskAbortController.signal,
           );
 
@@ -1401,6 +1419,7 @@ chatComposer.on("message", async (ctx, next) => {
   const message = ctx.message as TextMessage;
   const text = getMessageText(message);
   const reply = getActualReply(message);
+  const replyContext = reply ?? message.external_reply;
   const isDirectBotReply = isDirectReplyToBot(reply, ctx.me.id);
   const addressed = text ? isAddressed(text, ctx.me.username) : false;
   const thread = reply
@@ -1433,6 +1452,7 @@ chatComposer.on("message", async (ctx, next) => {
 
   await handleChatRequest(ctx, message, requestText, {
     reply,
+    replyContext,
     thread,
     threadId: repliedTask?.thread_id ?? message.message_thread_id,
     onUnhandledError: next,

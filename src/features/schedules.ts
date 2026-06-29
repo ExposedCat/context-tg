@@ -7,7 +7,7 @@ import {
 } from "@kysely/kysely";
 import type { Context } from "../bot.ts";
 import { padDatePart } from "../utils/date.ts";
-import { normalizeWhitespace, truncateCodePoints } from "../utils/text.ts";
+import { escapeHtml, normalizeWhitespace } from "../utils/text.ts";
 import type { Database } from "./database.ts";
 import { disabledLinkPreviewOptions as linkPreviewOptions } from "./telegram.ts";
 
@@ -34,6 +34,11 @@ export type ScheduledMessagesTable = {
     number | null
   >;
   message: string;
+  short_elaboration: ColumnType<
+    string | null,
+    string | null | undefined,
+    string | null
+  >;
   scheduled_at: string;
   created_at: ColumnType<string, string | undefined, string>;
   status: ColumnType<
@@ -63,6 +68,11 @@ export type CronMessagesTable = {
     number | null
   >;
   message: string;
+  short_elaboration: ColumnType<
+    string | null,
+    string | null | undefined,
+    string | null
+  >;
   interval_unit: CronIntervalUnit;
   interval_value: number;
   schedule_key: string;
@@ -100,6 +110,7 @@ type CreateScheduledMessageInput = {
   chatId: number;
   threadId?: number;
   message: string;
+  shortElaboration: string;
   at: string;
 };
 
@@ -107,6 +118,7 @@ type CreateCronMessageInput = {
   chatId: number;
   threadId?: number;
   message: string;
+  shortElaboration: string;
   intervalUnit: CronIntervalUnit;
   intervalValue: number;
 };
@@ -119,7 +131,11 @@ const logError = createDebug("app:schedules:error");
 const MAX_ACTIVE_SCHEDULED_MESSAGES_PER_CHAT = 5;
 const MAX_ACTIVE_CRON_MESSAGES_PER_CHAT = 10;
 const MAX_TELEGRAM_MESSAGE_LENGTH = 4096;
-const SCHEDULE_PREVIEW_LENGTH = 80;
+const MAX_SHORT_ELABORATION_LENGTH = 80;
+const SCHEDULE_EMOJI_ID = "5967412305338568701";
+const SCHEDULE_EMOJI_FALLBACK = "\u23f0";
+const LOCAL_DATE_TIME_PATTERN =
+  /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})(?::(\d{2})(?:\.\d{1,3})?)?$/;
 const scheduledMessageControllers = new Map<string, AbortController>();
 const cronMessageControllers = new Map<string, AbortController>();
 
@@ -145,6 +161,7 @@ export async function migrateSchedules(database: Database): Promise<void> {
     .addColumn("chat_id", "integer", (column) => column.notNull())
     .addColumn("thread_id", "integer")
     .addColumn("message", "text", (column) => column.notNull())
+    .addColumn("short_elaboration", "text")
     .addColumn("scheduled_at", "text", (column) => column.notNull())
     .addColumn("created_at", "text", (column) => column.notNull())
     .addColumn("status", "text", (column) =>
@@ -162,6 +179,7 @@ export async function migrateSchedules(database: Database): Promise<void> {
     .addColumn("chat_id", "integer", (column) => column.notNull())
     .addColumn("thread_id", "integer")
     .addColumn("message", "text", (column) => column.notNull())
+    .addColumn("short_elaboration", "text")
     .addColumn("interval_unit", "text", (column) => column.notNull())
     .addColumn("interval_value", "integer", (column) => column.notNull())
     .addColumn("schedule_key", "text", (column) => column.notNull())
@@ -173,6 +191,24 @@ export async function migrateSchedules(database: Database): Promise<void> {
     .addColumn("canceled_at", "text")
     .addColumn("last_error", "text")
     .execute();
+
+  try {
+    await database.schema
+      .alterTable("scheduled_messages")
+      .addColumn("short_elaboration", "text")
+      .execute();
+  } catch {
+    // Column already exists on fresh or previously migrated databases.
+  }
+
+  try {
+    await database.schema
+      .alterTable("cron_messages")
+      .addColumn("short_elaboration", "text")
+      .execute();
+  } catch {
+    // Column already exists on fresh or previously migrated databases.
+  }
 
   await sql`
     CREATE UNIQUE INDEX IF NOT EXISTS scheduled_messages_active_chat_at_index
@@ -225,17 +261,77 @@ function normalizeMessage(message: string): string {
   return normalized;
 }
 
+function normalizeShortElaboration(
+  shortElaboration: string,
+  message: string,
+): string {
+  const normalized = normalizeWhitespace(shortElaboration);
+
+  if (!normalized) {
+    throw new ScheduleValidationError("Short elaboration cannot be empty.");
+  }
+
+  if (normalized.length > MAX_SHORT_ELABORATION_LENGTH) {
+    throw new ScheduleValidationError(
+      `Short elaboration is too long: maximum is ${MAX_SHORT_ELABORATION_LENGTH} characters.`,
+    );
+  }
+
+  const words = normalized.split(" ");
+
+  if (words.length > 3) {
+    throw new ScheduleValidationError("Short elaboration must be 1-3 words.");
+  }
+
+  if (
+    normalized.toLocaleLowerCase() ===
+    normalizeWhitespace(message).toLocaleLowerCase()
+  ) {
+    throw new ScheduleValidationError(
+      "Short elaboration cannot be the message itself.",
+    );
+  }
+
+  return normalized;
+}
+
+function parseScheduleInputDate(value: string): Date {
+  const trimmed = value.trim();
+  const match = trimmed.match(LOCAL_DATE_TIME_PATTERN);
+
+  if (!match) {
+    return new Date(trimmed);
+  }
+
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const hour = Number(match[4]);
+  const minute = Number(match[5]);
+  const second = Number(match[6] ?? 0);
+  const date = new Date(year, month - 1, day, hour, minute, second, 0);
+
+  return date.getFullYear() === year &&
+    date.getMonth() === month - 1 &&
+    date.getDate() === day &&
+    date.getHours() === hour &&
+    date.getMinutes() === minute &&
+    date.getSeconds() === second
+    ? date
+    : new Date(Number.NaN);
+}
+
 function normalizeScheduledAt(value: string): string {
-  const date = new Date(value);
+  const date = parseScheduleInputDate(value);
 
   if (Number.isNaN(date.getTime())) {
     throw new ScheduleValidationError("Invalid schedule date.");
   }
 
-  date.setUTCSeconds(0, 0);
+  date.setSeconds(0, 0);
 
   const currentMinute = new Date();
-  currentMinute.setUTCSeconds(0, 0);
+  currentMinute.setSeconds(0, 0);
 
   if (date.getTime() <= currentMinute.getTime()) {
     throw new ScheduleValidationError(
@@ -620,12 +716,17 @@ export async function createScheduledMessage(
   input: CreateScheduledMessageInput,
 ): Promise<ScheduledMessage> {
   const message = normalizeMessage(input.message);
+  const shortElaboration = normalizeShortElaboration(
+    input.shortElaboration,
+    message,
+  );
   const scheduledAt = normalizeScheduledAt(input.at);
   const row: CreateScheduledMessage = {
     id: createId(),
     chat_id: input.chatId,
     thread_id: normalizeThreadId(input.threadId),
     message,
+    short_elaboration: shortElaboration,
     scheduled_at: scheduledAt,
     created_at: nowIso(),
     status: "scheduled",
@@ -690,12 +791,17 @@ export async function createCronMessage(
   validateCronInterval(input.intervalUnit, input.intervalValue);
 
   const message = normalizeMessage(input.message);
+  const shortElaboration = normalizeShortElaboration(
+    input.shortElaboration,
+    message,
+  );
   const scheduleKey = getScheduleKey(input.intervalUnit, intervalValue);
   const row: CreateCronMessage = {
     id: createId(),
     chat_id: input.chatId,
     thread_id: normalizeThreadId(input.threadId),
     message,
+    short_elaboration: shortElaboration,
     interval_unit: input.intervalUnit,
     interval_value: intervalValue,
     schedule_key: scheduleKey,
@@ -783,6 +889,24 @@ export async function cancelScheduledMessage(
   return "canceled";
 }
 
+export async function cancelScheduledMessageByNumber(
+  database: Database,
+  chatId: number,
+  number: number,
+): Promise<CancelScheduleResult> {
+  if (!Number.isInteger(number) || number < 1) {
+    return "not_found";
+  }
+
+  const row = (await listActiveScheduledMessages(database, chatId))[number - 1];
+
+  if (!row) {
+    return "not_found";
+  }
+
+  return await cancelScheduledMessage(database, chatId, row.id);
+}
+
 export async function cancelCronMessage(
   database: Database,
   chatId: number,
@@ -813,6 +937,24 @@ export async function cancelCronMessage(
 
   stopCronMessageCron(id);
   return "canceled";
+}
+
+export async function cancelCronMessageByNumber(
+  database: Database,
+  chatId: number,
+  number: number,
+): Promise<CancelScheduleResult> {
+  if (!Number.isInteger(number) || number < 1) {
+    return "not_found";
+  }
+
+  const row = (await listActiveCronMessages(database, chatId))[number - 1];
+
+  if (!row) {
+    return "not_found";
+  }
+
+  return await cancelCronMessage(database, chatId, row.id);
 }
 
 export async function listActiveScheduledMessages(
@@ -857,78 +999,80 @@ export function formatScheduledAt(value: string): string {
     return value;
   }
 
-  const year = date.getUTCFullYear();
-  const month = padDatePart(date.getUTCMonth() + 1);
-  const day = padDatePart(date.getUTCDate());
-  const hours = padDatePart(date.getUTCHours());
-  const minutes = padDatePart(date.getUTCMinutes());
+  const year = date.getFullYear();
+  const month = padDatePart(date.getMonth() + 1);
+  const day = padDatePart(date.getDate());
+  const hours = padDatePart(date.getHours());
+  const minutes = padDatePart(date.getMinutes());
 
-  return `${year}-${month}-${day} ${hours}:${minutes} UTC`;
+  return `${year}-${month}-${day} ${hours}:${minutes}`;
 }
 
 export function formatCronInterval(
   row: Pick<CronMessage, "interval_unit" | "interval_value">,
 ): string {
   const unitLabels = {
-    minute: "minute",
-    hour: "hour",
-    dayOfWeek: "day-of-week step",
-    dayOfMonth: "day",
-    month: "month",
+    minute: "min",
+    hour: "h",
+    dayOfWeek: "w",
+    dayOfMonth: "d",
+    month: "mo",
   } as const satisfies Record<CronIntervalUnit, string>;
-  const label = unitLabels[row.interval_unit];
-  const suffix = row.interval_value === 1 ? label : `${label}s`;
-  const cadence = `every ${row.interval_value === 1 ? "" : `${row.interval_value} `}${suffix}`;
 
-  return row.interval_unit === "minute" ? cadence : `${cadence} at 00:00 UTC`;
+  return `Every ${row.interval_value}${unitLabels[row.interval_unit]}`;
 }
 
-function truncateMessage(text: string): string {
-  const normalized = normalizeWhitespace(text);
-  const truncated = truncateCodePoints(normalized, SCHEDULE_PREVIEW_LENGTH);
+function formatScheduleHeading(label: string, useCustomEmoji: boolean): string {
+  const emoji = useCustomEmoji
+    ? `<tg-emoji emoji-id="${SCHEDULE_EMOJI_ID}">${SCHEDULE_EMOJI_FALLBACK}</tg-emoji>`
+    : SCHEDULE_EMOJI_FALLBACK;
 
-  return truncated.length < normalized.length ? `${truncated}...` : truncated;
+  return `${emoji} ${label}`;
 }
 
-function formatScheduledMessageLine(row: ScheduledMessage): string {
-  return [
-    `${formatScheduledAt(row.scheduled_at)} - ${JSON.stringify(
-      truncateMessage(row.message),
-    )}`,
-    `/cancel_schedule_${row.id}`,
-  ].join("\n");
+function formatScheduleLabel(
+  row: Pick<ScheduledMessage | CronMessage, "short_elaboration">,
+  fallback: string,
+): string {
+  const label =
+    typeof row.short_elaboration === "string" && row.short_elaboration.trim()
+      ? row.short_elaboration
+      : fallback;
+
+  return escapeHtml(label);
 }
 
-function formatCronMessageLine(row: CronMessage): string {
-  const lastSent = row.last_sent_at
-    ? ` - last sent ${formatScheduledAt(row.last_sent_at)}`
-    : "";
+function formatScheduledMessageLine(
+  row: ScheduledMessage,
+  index: number,
+): string {
+  const number = index + 1;
+  const label = formatScheduleLabel(row, "Scheduled message");
 
-  return [
-    `${formatCronInterval(row)}${lastSent} - ${JSON.stringify(
-      truncateMessage(row.message),
-    )}`,
-    `/cancel_cron_${row.id}`,
-  ].join("\n");
+  return `${number}. ${label}\n${formatScheduledAt(row.scheduled_at)} /cancel_s${number}`;
+}
+
+function formatCronMessageLine(row: CronMessage, index: number): string {
+  const number = index + 1;
+  const label = formatScheduleLabel(row, "Repeating message");
+
+  return `${number}. ${label}\n${formatCronInterval(row)} /cancel_c${number}`;
 }
 
 export function formatScheduleList(
   scheduledMessages: ScheduledMessage[],
   cronMessages: CronMessage[],
+  useCustomEmoji = true,
 ): string {
-  if (scheduledMessages.length === 0 && cronMessages.length === 0) {
-    return "No scheduled or cron messages in this chat.";
-  }
-
   return [
-    "Scheduled messages",
+    formatScheduleHeading("Scheduled", useCustomEmoji),
     scheduledMessages.length > 0
-      ? scheduledMessages.map(formatScheduledMessageLine).join("\n\n")
+      ? scheduledMessages.map(formatScheduledMessageLine).join("\n")
       : "None.",
     "",
-    "Cron messages",
+    formatScheduleHeading("Repeating", useCustomEmoji),
     cronMessages.length > 0
-      ? cronMessages.map(formatCronMessageLine).join("\n\n")
+      ? cronMessages.map(formatCronMessageLine).join("\n")
       : "None.",
   ].join("\n");
 }
@@ -943,9 +1087,20 @@ export async function replyWithSchedules(ctx: Context): Promise<void> {
     listActiveCronMessages(ctx.database, ctx.chat.id),
   ]);
 
-  await ctx.reply(formatScheduleList(scheduledMessages, cronMessages), {
-    ...linkPreviewOptions,
-  });
+  try {
+    await ctx.reply(formatScheduleList(scheduledMessages, cronMessages), {
+      ...linkPreviewOptions,
+      parse_mode: "HTML",
+    });
+  } catch {
+    await ctx.reply(
+      formatScheduleList(scheduledMessages, cronMessages, false),
+      {
+        ...linkPreviewOptions,
+        parse_mode: "HTML",
+      },
+    );
+  }
 }
 
 export async function replyWithCancelScheduledMessage(
@@ -967,6 +1122,29 @@ export async function replyWithCancelScheduledMessage(
   await ctx.reply(response);
 }
 
+export async function replyWithCancelScheduledMessageByNumber(
+  ctx: Context,
+  number: number,
+): Promise<void> {
+  if (!ctx.chat) {
+    return;
+  }
+
+  const result = await cancelScheduledMessageByNumber(
+    ctx.database,
+    ctx.chat.id,
+    number,
+  );
+  const response =
+    result === "canceled"
+      ? "Canceled scheduled message."
+      : result === "not_active"
+        ? "Scheduled message is not active."
+        : "Scheduled message not found.";
+
+  await ctx.reply(response);
+}
+
 export async function replyWithCancelCronMessage(
   ctx: Context,
   id: string,
@@ -976,6 +1154,29 @@ export async function replyWithCancelCronMessage(
   }
 
   const result = await cancelCronMessage(ctx.database, ctx.chat.id, id);
+  const response =
+    result === "canceled"
+      ? "Canceled cron message."
+      : result === "not_active"
+        ? "Cron message is not active."
+        : "Cron message not found.";
+
+  await ctx.reply(response);
+}
+
+export async function replyWithCancelCronMessageByNumber(
+  ctx: Context,
+  number: number,
+): Promise<void> {
+  if (!ctx.chat) {
+    return;
+  }
+
+  const result = await cancelCronMessageByNumber(
+    ctx.database,
+    ctx.chat.id,
+    number,
+  );
   const response =
     result === "canceled"
       ? "Canceled cron message."

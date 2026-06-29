@@ -26,13 +26,18 @@ export const scheduleMessageToolDefinition = {
         type: "string",
         description: "The exact Telegram message text to send later.",
       },
+      short_elaboration: {
+        type: "string",
+        description:
+          "Provide a 1-3 word concise elaboration of what this message is. Do not write the message itself here.",
+      },
       at: {
         type: "string",
         description:
-          "ISO 8601 date string for when to send the message. Include a timezone when possible. Seconds are ignored.",
+          "ISO 8601 local date string for when to send the message. If the user gives a local time, omit a timezone suffix so the bot interprets it locally; include a timezone only when the user explicitly provides one. Seconds are ignored.",
       },
     },
-    required: ["message"],
+    required: ["message", "short_elaboration"],
     additionalProperties: false,
   },
   strict: false,
@@ -50,24 +55,29 @@ export const cronMessageToolDefinition = {
         type: "string",
         description: "The exact Telegram message text to send repeatedly.",
       },
+      short_elaboration: {
+        type: "string",
+        description:
+          "Provide a 1-3 word concise elaboration of what this message is. Do not write the message itself here.",
+      },
       every_dayOfWeek: {
         type: ["number", "null"],
         description:
-          "Repeat on every Nth day-of-week cron step at 00:00 UTC. Use null unless this is the single chosen interval.",
+          "Repeat every N weeks. Use null unless this is the single chosen interval.",
         minimum: 1,
         maximum: 6,
       },
       every_month: {
         type: ["number", "null"],
         description:
-          "Repeat every N months on day 1 at 00:00 UTC. Use null unless this is the single chosen interval.",
+          "Repeat every N months. Use null unless this is the single chosen interval.",
         minimum: 1,
         maximum: 12,
       },
       every_dayOfMonth: {
         type: ["number", "null"],
         description:
-          "Repeat every N days of month at 00:00 UTC. Use null unless this is the single chosen interval.",
+          "Repeat every N days. Use null unless this is the single chosen interval.",
         minimum: 1,
         maximum: 31,
       },
@@ -86,7 +96,7 @@ export const cronMessageToolDefinition = {
         maximum: 59,
       },
     },
-    required: ["message"],
+    required: ["message", "short_elaboration"],
     additionalProperties: false,
   },
   strict: false,
@@ -150,6 +160,10 @@ function formatScheduleError(error: unknown, action: string): string {
   return `Cannot ${action}: ${details}`;
 }
 
+function getShortElaboration(args: Record<string, unknown> | null): string {
+  return getString(args?.short_elaboration ?? args?.["short elaboration"]);
+}
+
 export const executeScheduleMessage: FunctionToolRunner = async (
   args,
   context,
@@ -173,6 +187,7 @@ export const executeScheduleMessage: FunctionToolRunner = async (
       chatId: context.chatId,
       threadId: context.threadId,
       message: getString(args?.message),
+      shortElaboration: getShortElaboration(args),
       at: getString(args?.at),
     });
 
@@ -215,6 +230,7 @@ export const executeCronMessage: FunctionToolRunner = async (
       chatId: context.chatId,
       threadId: context.threadId,
       message: getString(args?.message),
+      shortElaboration: getShortElaboration(args),
       intervalUnit: interval.intervalUnit,
       intervalValue: interval.intervalValue,
     });
