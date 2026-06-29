@@ -23,6 +23,11 @@ import {
   type ReasoningSetting,
   type WebSearchSetting,
 } from "./llm-models.ts";
+import {
+  replyWithCancelCronMessage,
+  replyWithCancelScheduledMessage,
+  replyWithSchedules,
+} from "./schedules.ts";
 import { replyWithCancelTask, replyWithRecentTasks } from "./tasks.ts";
 import {
   formatUsageSnapshot,
@@ -220,6 +225,10 @@ stateComposer.command("tasks", async (ctx) => {
   await replyWithRecentTasks(ctx);
 });
 
+stateComposer.command("schedule", async (ctx) => {
+  await replyWithSchedules(ctx);
+});
+
 stateComposer.command("usage", async (ctx) => {
   if (!ctx.chat) {
     return;
@@ -274,6 +283,20 @@ stateComposer.command("configure", async (ctx) => {
 });
 
 stateComposer.on("message:text", async (ctx, next) => {
+  const scheduleMatch = ctx.message.text.match(
+    /^\/cancel_(schedule|cron)_([a-zA-Z0-9_-]+)(?:@\w+)?(?:\s|$)/,
+  );
+
+  if (scheduleMatch) {
+    if (scheduleMatch[1] === "schedule") {
+      await replyWithCancelScheduledMessage(ctx, scheduleMatch[2]);
+      return;
+    }
+
+    await replyWithCancelCronMessage(ctx, scheduleMatch[2]);
+    return;
+  }
+
   const match = ctx.message.text.match(
     /^\/(cancel|resume)_(\d+)(?:@\w+)?(?:\s|$)/,
   );

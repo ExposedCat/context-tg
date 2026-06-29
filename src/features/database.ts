@@ -8,6 +8,11 @@ import {
   loadLlmSettings,
   migrateLlmSettings,
 } from "./llm-models.ts";
+import {
+  type CronMessagesTable,
+  migrateSchedules,
+  type ScheduledMessagesTable,
+} from "./schedules.ts";
 import { migrateTasks, type TasksTable } from "./tasks.ts";
 import { migrateThreads, type ThreadsTable } from "./threads.ts";
 import { type ChatTrollingTable, migrateTrolling } from "./trolling.ts";
@@ -22,6 +27,8 @@ export type DatabaseSchema = {
   llm_settings: LlmSettingsTable;
   chat_llm_settings: ChatLlmSettingsTable;
   tasks: TasksTable;
+  scheduled_messages: ScheduledMessagesTable;
+  cron_messages: CronMessagesTable;
   chat_usage_limits: ChatUsageLimitsTable;
   chat_usage: ChatUsageTable;
   chat_trolling: ChatTrollingTable;
@@ -61,6 +68,7 @@ export function initDatabase() {
     await migrateThreads(database);
     await migrateLlmSettings(database);
     await migrateTasks(database);
+    await migrateSchedules(database);
     await migrateUsage(database);
     await migrateTrolling(database);
     await loadLlmSettings(database);

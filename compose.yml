@@ -15,6 +15,7 @@ services:
       - --allow-sys
       - --allow-write
       - --allow-import=cdn.skypack.dev,jsr.io,deno.land,registry.npmjs.org
+      - --unstable-cron
       - src/app.ts
     env_file:
       - .env

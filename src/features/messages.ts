@@ -5,7 +5,7 @@ import type { Context } from "../bot.ts";
 import { APP_ENV } from "./env.ts";
 import { startsWithCommandPrefix } from "./message-filter.ts";
 
-type TextMessage = {
+type RememberedMessage = {
   message_id: number;
   message_thread_id?: number;
   reply_to_message?: {
@@ -13,8 +13,11 @@ type TextMessage = {
     message_thread_id?: number;
   };
   date: number;
-  text: string;
+  text?: string;
+  caption?: string;
   entities?: MessageEntity[];
+  caption_entities?: MessageEntity[];
+  photo?: unknown[];
   via_bot?: unknown;
   forward_origin?: ForwardOrigin;
   forward_from?: Sender;
@@ -116,6 +119,7 @@ const logDebug = createDebug("app:messages:debug");
 const logError = createDebug("app:messages:error");
 
 const DEFAULT_SEARCH_LIMIT = 20;
+const PHOTO_ATTACHMENT_MARKER = "[photo attachment]";
 const MESSAGE_PAYLOAD_INDEXES = [
   { fieldName: "chat_id", fieldSchema: "integer" },
   { fieldName: "thread_id", fieldSchema: "integer" },
@@ -132,7 +136,7 @@ export const messagesComposer = new Composer<Context>();
 
 type IndexedTextMessageHandler = (
   ctx: Context,
-  message: TextMessage,
+  message: RememberedMessage,
   sender: Sender,
   chatId: number,
 ) => Promise<void>;
@@ -331,7 +335,7 @@ async function embed(texts: string[]): Promise<number[][]> {
   return vectors;
 }
 
-function getMessageThreadId(message: TextMessage): number | undefined {
+function getMessageThreadId(message: RememberedMessage): number | undefined {
   return (
     message.message_thread_id ?? message.reply_to_message?.message_thread_id
   );
@@ -382,7 +386,7 @@ function getForwardChatName(chat: ForwardChat): string {
   return chat.username ? `@${chat.username}` : String(chat.id ?? "");
 }
 
-function getForwardedFromName(message: TextMessage): string | undefined {
+function getForwardedFromName(message: RememberedMessage): string | undefined {
   const origin = message.forward_origin;
 
   if (origin?.type === "user") {
@@ -418,35 +422,73 @@ function getForwardedFromName(message: TextMessage): string | undefined {
   return undefined;
 }
 
-function getIndexableText(message: TextMessage): string {
+function getMessageText(message: RememberedMessage): string | undefined {
+  return message.text ?? message.caption;
+}
+
+function hasPhotoAttachment(message: RememberedMessage): boolean {
+  return message.photo !== undefined && message.photo.length > 0;
+}
+
+function getMessageContent(message: RememberedMessage): string | undefined {
+  const text = getMessageText(message);
+  const parts = [
+    hasPhotoAttachment(message) ? PHOTO_ATTACHMENT_MARKER : undefined,
+    text,
+  ].filter((part): part is string => part !== undefined && part.trim() !== "");
+
+  return parts.length > 0 ? parts.join("\n") : undefined;
+}
+
+function getIndexableText(message: RememberedMessage): string | undefined {
+  const content = getMessageContent(message);
+
+  if (!content) {
+    return undefined;
+  }
+
   const forwardedFromName = getForwardedFromName(message);
 
   if (!forwardedFromName) {
-    return message.text;
+    return content;
   }
 
-  return `Forwarded from ${JSON.stringify(forwardedFromName)}\n${message.text}`;
+  return `Forwarded from ${JSON.stringify(forwardedFromName)}\n${content}`;
 }
 
-function shouldSkipIndexing(message: TextMessage): boolean {
+function hasCommandEntity(message: RememberedMessage): boolean {
+  return [
+    ...(message.entities ?? []),
+    ...(message.caption_entities ?? []),
+  ].some((entity) => entity.type === "bot_command" && entity.offset === 0);
+}
+
+function shouldSkipIndexing(message: RememberedMessage): boolean {
   if (message.via_bot) {
     return true;
   }
 
-  const hasCommandEntity = message.entities?.some(
-    (entity) => entity.type === "bot_command" && entity.offset === 0,
-  );
+  if (
+    hasCommandEntity(message) ||
+    startsWithCommandPrefix(getMessageText(message))
+  ) {
+    return true;
+  }
 
-  return hasCommandEntity === true || startsWithCommandPrefix(message.text);
+  return getIndexableText(message) === undefined;
 }
 
 async function indexMessage(
-  message: TextMessage,
+  message: RememberedMessage,
   sender: Sender,
   chatId: number,
 ): Promise<void> {
   const senderName = getSenderName(sender);
   const text = getIndexableText(message);
+  if (!text) {
+    return;
+  }
+
   const vectors = await embed([`${senderName}: ${text}`]);
   const vector = vectors[0];
 
@@ -590,7 +632,7 @@ export async function search(
 }
 
 async function handleIndexMessage(
-  message: TextMessage,
+  message: RememberedMessage,
   sender: Sender,
   chatId: number,
   action: "indexed" | "reindexed",
@@ -599,12 +641,12 @@ async function handleIndexMessage(
     if (action === "reindexed") {
       try {
         await deleteIndexedMessage(chatId, message.message_id);
-        logDebug("Text message removed from index", {
+        logDebug("Message removed from index", {
           chatId,
           messageId: message.message_id,
         });
       } catch (error) {
-        logError("Failed to remove skipped text message from index", { error });
+        logError("Failed to remove skipped message from index", { error });
       }
     }
 
@@ -613,13 +655,13 @@ async function handleIndexMessage(
 
   try {
     await indexMessage(message, sender, chatId);
-    logDebug(`Text message ${action}`, {
+    logDebug(`Message ${action}`, {
       chatId,
       messageId: message.message_id,
     });
     return true;
   } catch (error) {
-    logError(`Failed to ${action} text message`, { error });
+    logError(`Failed to ${action} message`, { error });
     return false;
   }
 }
@@ -630,12 +672,16 @@ export function setIndexedTextMessageHandler(
   indexedTextMessageHandler = handler;
 }
 
-messagesComposer.on("message:text", async (ctx, next) => {
+messagesComposer.on("message", async (ctx, next) => {
   await next();
 
   void (async () => {
+    if (!ctx.from || !ctx.chat) {
+      return;
+    }
+
     const indexed = await handleIndexMessage(
-      ctx.message,
+      ctx.message as RememberedMessage,
       ctx.from,
       ctx.chat.id,
       "indexed",
@@ -644,7 +690,7 @@ messagesComposer.on("message:text", async (ctx, next) => {
     if (indexed) {
       await indexedTextMessageHandler?.(
         ctx,
-        ctx.message,
+        ctx.message as RememberedMessage,
         ctx.from,
         ctx.chat.id,
       );
@@ -652,11 +698,15 @@ messagesComposer.on("message:text", async (ctx, next) => {
   })();
 });
 
-messagesComposer.on("edited_message:text", async (ctx, next) => {
+messagesComposer.on("edited_message", async (ctx, next) => {
   await next();
 
+  if (!ctx.from || !ctx.chat) {
+    return;
+  }
+
   void handleIndexMessage(
-    ctx.editedMessage,
+    ctx.editedMessage as RememberedMessage,
     ctx.from,
     ctx.chat.id,
     "reindexed",

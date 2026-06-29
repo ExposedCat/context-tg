@@ -49,12 +49,17 @@ type TextMessage = {
   from?: TelegramUser;
   text?: string;
   caption?: string;
+  animation?: unknown;
+  audio?: unknown;
   photo?: PhotoSize[];
   document?: TelegramDocument;
+  paid_media?: unknown;
   quote?: {
     text: string;
   };
   reply_to_message?: TextMessage;
+  video?: unknown;
+  voice?: unknown;
 };
 
 type TelegramUser = {
@@ -87,6 +92,17 @@ export const chatComposer = new Composer<Context>();
 
 const TELEGRAM_RICH_MESSAGE_CHUNK_SIZE_BYTES = 30_000;
 const SLOW_RESPONSE_REACTION_DELAY_MS = 15_000;
+const UNSUPPORTED_CAPTIONED_MEDIA_TYPES = [
+  { key: "animation", label: "animation" },
+  { key: "audio", label: "audio" },
+  { key: "document", label: "document" },
+  { key: "paid_media", label: "paid" },
+  { key: "video", label: "video" },
+  { key: "voice", label: "voice" },
+] as const satisfies ReadonlyArray<{
+  key: keyof TextMessage;
+  label: string;
+}>;
 
 const linkPreviewOptions = {
   link_preview_options: {
@@ -98,11 +114,31 @@ function getMessageText(message: TextMessage): string | undefined {
   return message.text ?? message.caption;
 }
 
+function getUnsupportedCaptionedMediaLabel(
+  message: TextMessage,
+): string | undefined {
+  if (hasImageAttachments(message)) {
+    return undefined;
+  }
+
+  return UNSUPPORTED_CAPTIONED_MEDIA_TYPES.find(
+    ({ key }) => message[key] !== undefined,
+  )?.label;
+}
+
+function buildLlmMessageText(message: TextMessage, text: string): string {
+  const label = getUnsupportedCaptionedMediaLabel(message);
+
+  return label ? `[Unsupported ${label} media]\n${text}` : text;
+}
+
 function getLlmContextText(
   message: TextMessage | undefined,
 ): string | undefined {
   const text = message && getMessageText(message);
-  return startsWithCommandPrefix(text) ? undefined : text;
+  return message && text && !startsWithCommandPrefix(text)
+    ? buildLlmMessageText(message, text)
+    : undefined;
 }
 
 function getLargestPhoto(
@@ -1122,6 +1158,7 @@ async function handleChatRequest(
       (!explicitAgent || explicitAgent.id === threadAgent.id)
         ? thread.response_id
         : undefined;
+    const promptText = buildLlmMessageText(message, text);
     const toolContext = getLlmToolContext(chatId, message);
     const slowResponseReaction = createSlowResponseReactionTracker(ctx);
     const llmResponse = await (async () => {
@@ -1142,7 +1179,7 @@ async function handleChatRequest(
             const request = await buildLlmRequestInput(
               ctx,
               buildThreadRequest(
-                text,
+                promptText,
                 startsWithCommandPrefix(message.quote?.text)
                   ? undefined
                   : message.quote?.text,
@@ -1163,7 +1200,7 @@ async function handleChatRequest(
 
           const request = await buildLlmRequestInput(
             ctx,
-            buildRootRequestText(text, reply),
+            buildRootRequestText(promptText, reply),
             [reply, message],
             taskAbortController.signal,
           );

@@ -28,6 +28,7 @@ import * as imageTool from "./llm-tools/image.ts";
 import * as marketTool from "./llm-tools/market.ts";
 import type { LlmReport } from "./llm-tools/reports.ts";
 import * as reportsTool from "./llm-tools/reports.ts";
+import * as scheduleTool from "./llm-tools/schedule.ts";
 import * as tickerPriceTool from "./llm-tools/ticker-price.ts";
 import type {
   FunctionToolResult,
@@ -52,6 +53,8 @@ export const TOOL_DEFINITIONS = {
   send_report: reportsTool.toolDefinition,
   send_trading_report: reportsTool.tradingToolDefinition,
   call_agent: agentTool.toolDefinition,
+  schedule_message: scheduleTool.scheduleMessageToolDefinition,
+  cron_message: scheduleTool.cronMessageToolDefinition,
 } as const;
 
 export type ToolName = "web_search" | keyof typeof TOOL_DEFINITIONS;
@@ -67,6 +70,8 @@ const FUNCTION_TOOL_RUNNERS = {
   send_report: reportsTool.execute,
   send_trading_report: reportsTool.executeTrading,
   call_agent: agentTool.createRunner(runAgent),
+  schedule_message: scheduleTool.executeScheduleMessage,
+  cron_message: scheduleTool.executeCronMessage,
 } satisfies Record<string, FunctionToolRunner>;
 
 type FunctionToolName = keyof typeof FUNCTION_TOOL_RUNNERS;

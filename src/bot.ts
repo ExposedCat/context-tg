@@ -8,6 +8,7 @@ import {
   messagesComposer,
   setIndexedTextMessageHandler,
 } from "./features/messages.ts";
+import { startScheduleDispatcher } from "./features/schedules.ts";
 import { stateComposer } from "./features/state.ts";
 import { safelyMaybeSendPeriodicTroll } from "./features/trolling.ts";
 
@@ -100,6 +101,7 @@ export function initBot(token: string, database: Database) {
 
   return async () => {
     await bot.init();
+    await startScheduleDispatcher(database, bot.api);
     await bot.api.deleteWebhook({ drop_pending_updates: true });
 
     run(bot, {

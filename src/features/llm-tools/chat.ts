@@ -6,7 +6,7 @@ export const searchChatToolDefinition = {
   type: "function",
   name: "search_chat",
   description:
-    "Search remembered text messages in the current Telegram chat or forum topic. The sender_id and date filters are optional; only use them when the user explicitly needs a sender or date range filter. Prefer using only queries.",
+    "Search remembered messages in the current Telegram chat or forum topic. Telegram photos are represented as [photo attachment], followed by their caption when present. The sender_id and date filters are optional; only use them when the user explicitly needs a sender or date range filter. Prefer using only queries.",
   parameters: {
     type: "object",
     properties: {
@@ -147,5 +147,5 @@ export const executeReadLastMessages: FunctionToolRunner = async (
 
   return messages.length > 0
     ? messages.map(formatMessageLine).join("\n")
-    : "No remembered text messages found in that message range.";
+    : "No remembered messages found in that message range.";
 };
