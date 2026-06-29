@@ -3,6 +3,7 @@ import { LLM_DEPLOYMENTS } from "../llm-deployments.ts";
 import {
   buildAgentIdentity,
   buildFormattingInstructions,
+  buildMetadataInstructions,
   buildToolInstructions,
   joinPromptSections,
 } from "./builders.ts";
@@ -34,6 +35,7 @@ You are not a responding agent and must not answer the user's substantive reques
 - Be concise about routing; mention the delegated agent only when useful.
 - If call_agent fails, explain the failure briefly and do not pretend you completed the task.`,
     buildFormattingInstructions(),
+    buildMetadataInstructions(),
   ]);
 }
 

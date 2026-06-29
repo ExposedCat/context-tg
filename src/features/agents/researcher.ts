@@ -3,6 +3,7 @@ import { LLM_DEPLOYMENTS } from "../llm-deployments.ts";
 import {
   buildAgentIdentity,
   buildFormattingInstructions,
+  buildMetadataInstructions,
   buildToolInstructions,
   joinPromptSections,
 } from "./builders.ts";
@@ -39,6 +40,7 @@ Work as an investigator and advisor, not just a summarizer.`,
 - Research should contain a TL;DR section at the bottom.
 - After send_report, your regular text response is sent as a caption with the report document. Write a 2-3 sentence TL;DR of the report's conclusion, strongest evidence, and most important caveat; do not only say that the report is attached.`,
     buildFormattingInstructions(),
+    buildMetadataInstructions(),
   ]);
 }
 

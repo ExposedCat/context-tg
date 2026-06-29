@@ -10,6 +10,11 @@ export function joinPromptSections(
     .join("\n\n");
 }
 
+export function buildMetadataInstructions(): string {
+  return `# Meta
+Current time (ISO): ${new Date().toISOString()}`;
+}
+
 export function buildAgentIdentity(
   description: string,
   names: readonly string[],

@@ -3,6 +3,7 @@ import { LLM_DEPLOYMENTS } from "../llm-deployments.ts";
 import {
   buildAgentIdentity,
   buildFormattingInstructions,
+  buildMetadataInstructions,
   buildToolInstructions,
   joinPromptSections,
 } from "./builders.ts";
@@ -50,6 +51,7 @@ export function buildInstructions(): string {
 - Always respond in definitive, fact-checked, verified statements. Never say "if A then B, if C then D" unless you're explicitly asked about choices.
 - Respond in a humane, natural casual style, with a touch of humor when appropriate.`,
     buildFormattingInstructions(),
+    buildMetadataInstructions(),
   ]);
 }
 

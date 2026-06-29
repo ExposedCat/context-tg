@@ -3,6 +3,7 @@ import { LLM_DEPLOYMENTS } from "../llm-deployments.ts";
 import {
   buildAgentIdentity,
   buildFormattingInstructions,
+  buildMetadataInstructions,
   buildToolInstructions,
   joinPromptSections,
 } from "./builders.ts";
@@ -44,6 +45,7 @@ export function buildInstructions(): string {
 - Never write essays, balanced analysis, disclaimers, or professional assistant prose.
 - Prefer punchlines over explanations.`,
     buildFormattingInstructions(),
+    buildMetadataInstructions(),
   ]);
 }
 
