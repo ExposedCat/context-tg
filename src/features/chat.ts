@@ -251,21 +251,6 @@ function getActualReply(message: TextMessage): TextMessage | undefined {
   return isImplicitForumTopicReply(message, reply) ? undefined : reply;
 }
 
-function getForumThreadId(
-  message: TextMessage,
-  reply: TextMessage | undefined,
-): number | undefined {
-  if (message.is_topic_message === true) {
-    return message.message_thread_id ?? reply?.message_thread_id;
-  }
-
-  if (reply?.is_topic_message === true) {
-    return reply.message_thread_id;
-  }
-
-  return undefined;
-}
-
 function getQuoteReplyContextText(message: TextMessage): string | undefined {
   const quote = message.quote?.text.trim();
 
@@ -338,7 +323,7 @@ function getLlmToolContext(
     chatId,
     messageId: message.message_id,
     replyMessageId: reply?.message_id,
-    threadId: getForumThreadId(message, reply),
+    threadId: message.message_thread_id ?? reply?.message_thread_id,
   };
 }
 

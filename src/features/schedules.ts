@@ -27,7 +27,7 @@ export type CronIntervalUnit =
 
 export type ScheduledMessagesTable = {
   id: string;
-  chat_id: number;
+  chat_id: string;
   thread_id: ColumnType<
     number | null,
     number | null | undefined,
@@ -61,7 +61,7 @@ export type ScheduledMessagesTable = {
 
 export type CronMessagesTable = {
   id: string;
-  chat_id: number;
+  chat_id: string;
   thread_id: ColumnType<
     number | null,
     number | null | undefined,
@@ -139,6 +139,35 @@ const LOCAL_DATE_TIME_PATTERN =
 const scheduledMessageControllers = new Map<string, AbortController>();
 const cronMessageControllers = new Map<string, AbortController>();
 
+const scheduledMessageSelect = [
+  "id",
+  sql<string>`CAST(chat_id AS TEXT)`.as("chat_id"),
+  "thread_id",
+  "message",
+  "short_elaboration",
+  "scheduled_at",
+  "created_at",
+  "status",
+  "sent_at",
+  "canceled_at",
+  "last_error",
+] as const;
+const cronMessageSelect = [
+  "id",
+  sql<string>`CAST(chat_id AS TEXT)`.as("chat_id"),
+  "thread_id",
+  "message",
+  "short_elaboration",
+  "interval_unit",
+  "interval_value",
+  "schedule_key",
+  "created_at",
+  "status",
+  "last_sent_at",
+  "canceled_at",
+  "last_error",
+] as const;
+
 let dispatcher:
   | {
       database: Database;
@@ -158,7 +187,7 @@ export async function migrateSchedules(database: Database): Promise<void> {
     .createTable("scheduled_messages")
     .ifNotExists()
     .addColumn("id", "text", (column) => column.primaryKey().notNull())
-    .addColumn("chat_id", "integer", (column) => column.notNull())
+    .addColumn("chat_id", "text", (column) => column.notNull())
     .addColumn("thread_id", "integer")
     .addColumn("message", "text", (column) => column.notNull())
     .addColumn("short_elaboration", "text")
@@ -176,7 +205,7 @@ export async function migrateSchedules(database: Database): Promise<void> {
     .createTable("cron_messages")
     .ifNotExists()
     .addColumn("id", "text", (column) => column.primaryKey().notNull())
-    .addColumn("chat_id", "integer", (column) => column.notNull())
+    .addColumn("chat_id", "text", (column) => column.notNull())
     .addColumn("thread_id", "integer")
     .addColumn("message", "text", (column) => column.notNull())
     .addColumn("short_elaboration", "text")
@@ -243,6 +272,10 @@ function nowIso(): string {
 
 function normalizeThreadId(threadId: number | undefined): number | null {
   return threadId ?? null;
+}
+
+function normalizeChatId(chatId: number): string {
+  return String(chatId);
 }
 
 function normalizeMessage(message: string): string {
@@ -422,7 +455,7 @@ async function countActiveScheduledMessages(
   const row = await database
     .selectFrom("scheduled_messages")
     .select(({ fn }) => fn.countAll<number>().as("count"))
-    .where("chat_id", "=", chatId)
+    .where("chat_id", "=", normalizeChatId(chatId))
     .where("status", "in", ["scheduled", "sending"])
     .executeTakeFirst();
 
@@ -436,7 +469,7 @@ async function countActiveCronMessages(
   const row = await database
     .selectFrom("cron_messages")
     .select(({ fn }) => fn.countAll<number>().as("count"))
-    .where("chat_id", "=", chatId)
+    .where("chat_id", "=", normalizeChatId(chatId))
     .where("status", "=", "active")
     .executeTakeFirst();
 
@@ -450,8 +483,8 @@ async function getScheduledMessageAt(
 ): Promise<ScheduledMessage | undefined> {
   return await database
     .selectFrom("scheduled_messages")
-    .selectAll()
-    .where("chat_id", "=", chatId)
+    .select(scheduledMessageSelect)
+    .where("chat_id", "=", normalizeChatId(chatId))
     .where("scheduled_at", "=", scheduledAt)
     .where("status", "in", ["scheduled", "sending"])
     .executeTakeFirst();
@@ -464,8 +497,8 @@ async function getCronMessageAt(
 ): Promise<CronMessage | undefined> {
   return await database
     .selectFrom("cron_messages")
-    .selectAll()
-    .where("chat_id", "=", chatId)
+    .select(cronMessageSelect)
+    .where("chat_id", "=", normalizeChatId(chatId))
     .where("schedule_key", "=", scheduleKey)
     .where("status", "=", "active")
     .executeTakeFirst();
@@ -525,7 +558,7 @@ async function getScheduledMessage(
 ): Promise<ScheduledMessage | undefined> {
   return await database
     .selectFrom("scheduled_messages")
-    .selectAll()
+    .select(scheduledMessageSelect)
     .where("id", "=", id)
     .executeTakeFirst();
 }
@@ -536,7 +569,7 @@ async function getCronMessage(
 ): Promise<CronMessage | undefined> {
   return await database
     .selectFrom("cron_messages")
-    .selectAll()
+    .select(cronMessageSelect)
     .where("id", "=", id)
     .executeTakeFirst();
 }
@@ -723,7 +756,7 @@ export async function createScheduledMessage(
   const scheduledAt = normalizeScheduledAt(input.at);
   const row: CreateScheduledMessage = {
     id: createId(),
-    chat_id: input.chatId,
+    chat_id: normalizeChatId(input.chatId),
     thread_id: normalizeThreadId(input.threadId),
     message,
     short_elaboration: shortElaboration,
@@ -798,7 +831,7 @@ export async function createCronMessage(
   const scheduleKey = getScheduleKey(input.intervalUnit, intervalValue);
   const row: CreateCronMessage = {
     id: createId(),
-    chat_id: input.chatId,
+    chat_id: normalizeChatId(input.chatId),
     thread_id: normalizeThreadId(input.threadId),
     message,
     short_elaboration: shortElaboration,
@@ -864,9 +897,9 @@ export async function cancelScheduledMessage(
 ): Promise<CancelScheduleResult> {
   const row = await database
     .selectFrom("scheduled_messages")
-    .selectAll()
+    .select(scheduledMessageSelect)
     .where("id", "=", id)
-    .where("chat_id", "=", chatId)
+    .where("chat_id", "=", normalizeChatId(chatId))
     .executeTakeFirst();
 
   if (!row) {
@@ -881,7 +914,7 @@ export async function cancelScheduledMessage(
     .updateTable("scheduled_messages")
     .set({ status: "canceled", canceled_at: nowIso() })
     .where("id", "=", id)
-    .where("chat_id", "=", chatId)
+    .where("chat_id", "=", normalizeChatId(chatId))
     .where("status", "=", "scheduled")
     .execute();
 
@@ -914,9 +947,9 @@ export async function cancelCronMessage(
 ): Promise<CancelScheduleResult> {
   const row = await database
     .selectFrom("cron_messages")
-    .selectAll()
+    .select(cronMessageSelect)
     .where("id", "=", id)
-    .where("chat_id", "=", chatId)
+    .where("chat_id", "=", normalizeChatId(chatId))
     .executeTakeFirst();
 
   if (!row) {
@@ -931,7 +964,7 @@ export async function cancelCronMessage(
     .updateTable("cron_messages")
     .set({ status: "canceled", canceled_at: nowIso() })
     .where("id", "=", id)
-    .where("chat_id", "=", chatId)
+    .where("chat_id", "=", normalizeChatId(chatId))
     .where("status", "=", "active")
     .execute();
 
@@ -963,11 +996,11 @@ export async function listActiveScheduledMessages(
 ): Promise<ScheduledMessage[]> {
   let query = database
     .selectFrom("scheduled_messages")
-    .selectAll()
+    .select(scheduledMessageSelect)
     .where("status", "=", "scheduled");
 
   if (chatId !== undefined) {
-    query = query.where("chat_id", "=", chatId);
+    query = query.where("chat_id", "=", normalizeChatId(chatId));
   }
 
   return await query
@@ -982,11 +1015,11 @@ export async function listActiveCronMessages(
 ): Promise<CronMessage[]> {
   let query = database
     .selectFrom("cron_messages")
-    .selectAll()
+    .select(cronMessageSelect)
     .where("status", "=", "active");
 
   if (chatId !== undefined) {
-    query = query.where("chat_id", "=", chatId);
+    query = query.where("chat_id", "=", normalizeChatId(chatId));
   }
 
   return await query.orderBy("created_at", "asc").execute();
