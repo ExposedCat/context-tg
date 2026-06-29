@@ -62,6 +62,7 @@ export async function readLastMessages(
   context: LastMessagesContext,
 ): Promise<MessageMetadata[]> {
   const limit = clampCount(count);
+  const { messageId } = context;
   const messages = new Map<number, MessageMetadata>();
 
   if (!(await ensureMessagePayloadIndexes())) {

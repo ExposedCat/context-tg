@@ -545,13 +545,9 @@ stateComposer.callbackQuery(
     await ctx.editMessageText(
       `${CONFIGURE_KIND_LABELS[kind]} for ${formatDeploymentLabel(
         deployment,
-      )} was set to ${updatedValue}.`,
+      )} was set to ${updatedValue}.\n\nConfigure this chat:`,
       {
-        reply_markup: await buildConfigureSettingKeyboard(
-          ctx,
-          kind,
-          deployment,
-        ),
+        reply_markup: buildConfigureKeyboard(),
       },
     );
   },
