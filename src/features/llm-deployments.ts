@@ -1,27 +1,27 @@
-import { APP_ENV } from "./env.ts";
-
 export type LlmDeploymentId = "small" | "big" | "openminded";
+export type LlmDeployment = {
+  readonly id: LlmDeploymentId;
+  deploymentName: string;
+  readonly withReasoning: boolean;
+};
 
 export const LLM_DEPLOYMENTS = {
   small: {
     id: "small",
-    deploymentName: APP_ENV.LLM_MODEL_SMALL,
+    deploymentName: "",
     withReasoning: true,
   },
   big: {
     id: "big",
-    deploymentName: APP_ENV.LLM_MODEL,
+    deploymentName: "",
     withReasoning: true,
   },
   openMinded: {
     id: "openminded",
-    deploymentName: APP_ENV.LLM_MODEL_OPENMINDED,
+    deploymentName: "",
     withReasoning: false,
   },
-} as const;
-
-export type LlmDeployment =
-  (typeof LLM_DEPLOYMENTS)[keyof typeof LLM_DEPLOYMENTS];
+} satisfies Record<string, LlmDeployment>;
 
 export const LLM_DEPLOYMENT_OPTIONS = [
   LLM_DEPLOYMENTS.small,
@@ -29,6 +29,25 @@ export const LLM_DEPLOYMENT_OPTIONS = [
   LLM_DEPLOYMENTS.openMinded,
 ] as const satisfies readonly LlmDeployment[];
 
+const LLM_DEPLOYMENT_BY_ID = {
+  small: LLM_DEPLOYMENTS.small,
+  big: LLM_DEPLOYMENTS.big,
+  openminded: LLM_DEPLOYMENTS.openMinded,
+} as const satisfies Record<LlmDeploymentId, LlmDeployment>;
+
 export function isLlmDeploymentId(value: string): value is LlmDeploymentId {
   return LLM_DEPLOYMENT_OPTIONS.some((deployment) => deployment.id === value);
+}
+
+export function getLlmDeployment(id: LlmDeploymentId): LlmDeployment {
+  return LLM_DEPLOYMENT_BY_ID[id];
+}
+
+export function setLlmDeploymentName(
+  id: LlmDeploymentId,
+  deploymentName: string,
+): LlmDeployment {
+  const deployment = getLlmDeployment(id);
+  deployment.deploymentName = deploymentName;
+  return deployment;
 }

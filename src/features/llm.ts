@@ -240,6 +240,16 @@ function getClient(): OpenAI {
   });
 }
 
+function getConfiguredDeploymentName(model: AgentModel): string {
+  if (model.deploymentName) {
+    return model.deploymentName;
+  }
+
+  throw new Error(
+    `LLM model "${model.id}" is not configured. Admin must run /model ${model.id} DEPLOYMENT_NAME.`,
+  );
+}
+
 async function resolveRuntimeSettings(
   model: AgentModel,
   options: LlmRequestOptions,
@@ -694,7 +704,7 @@ async function createLlmResponse(
 
   return await client.responses.create(
     {
-      model: model.deploymentName,
+      model: getConfiguredDeploymentName(model),
       input,
       instructions: withToolAvailabilityInstructions(
         instructions,

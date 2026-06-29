@@ -1,5 +1,9 @@
 import type { Database } from "./database.ts";
-import { isLlmDeploymentId, type LlmDeploymentId } from "./llm-deployments.ts";
+import {
+  isLlmDeploymentId,
+  type LlmDeploymentId,
+  setLlmDeploymentName,
+} from "./llm-deployments.ts";
 
 export type ReasoningEffort =
   | "none"
@@ -26,7 +30,12 @@ export type ChatLlmSettingsTable = {
 };
 
 type LlmSettingsDatabase = Database;
-type LlmSettingKey = "reasoning" | "websearch" | "trolling";
+type LlmModelSettingKey = `model:${LlmDeploymentId}`;
+type LlmSettingKey =
+  | "reasoning"
+  | "websearch"
+  | "trolling"
+  | LlmModelSettingKey;
 
 let reasoningEffort: ReasoningSetting = "high";
 let webSearchSetting: WebSearchSetting = "high";
@@ -136,6 +145,16 @@ export async function persistTrollingSetting(
 ): Promise<TrollingSetting> {
   await persistLlmSetting(database, "trolling", setting);
   return setTrollingSetting(setting);
+}
+
+export async function persistLlmDeploymentName(
+  database: LlmSettingsDatabase,
+  id: LlmDeploymentId,
+  deploymentName: string,
+): Promise<string> {
+  await persistLlmSetting(database, getLlmModelSettingKey(id), deploymentName);
+  setLlmDeploymentName(id, deploymentName);
+  return deploymentName;
 }
 
 export async function migrateLlmSettings(database: LlmSettingsDatabase) {
@@ -334,6 +353,13 @@ export async function persistChatWebSearchSetting(
 }
 
 function loadLlmSetting(key: string, value: string | null) {
+  const deploymentId = parseLlmModelSettingKey(key);
+
+  if (deploymentId) {
+    setLlmDeploymentName(deploymentId, value ?? "");
+    return;
+  }
+
   switch (key) {
     case "reasoning":
       loadReasoningSetting(value);
@@ -355,4 +381,17 @@ function loadReasoningSetting(value: string | null) {
   if (value === null || isReasoningEffort(value)) {
     setReasoningEffort(value);
   }
+}
+
+function getLlmModelSettingKey(id: LlmDeploymentId): LlmModelSettingKey {
+  return `model:${id}`;
+}
+
+function parseLlmModelSettingKey(key: string): LlmDeploymentId | undefined {
+  if (!key.startsWith("model:")) {
+    return undefined;
+  }
+
+  const id = key.slice("model:".length);
+  return isLlmDeploymentId(id) ? id : undefined;
 }

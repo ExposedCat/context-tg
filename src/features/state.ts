@@ -2,7 +2,10 @@ import { Composer } from "grammy";
 import type { Context } from "../bot.ts";
 import { replyWithResumeTask } from "./chat.ts";
 import { APP_ENV } from "./env.ts";
-import { LLM_DEPLOYMENT_OPTIONS } from "./llm-deployments.ts";
+import {
+  isLlmDeploymentId,
+  LLM_DEPLOYMENT_OPTIONS,
+} from "./llm-deployments.ts";
 import {
   type ChatLlmSettingKey,
   getChatReasoningEffort,
@@ -17,6 +20,7 @@ import {
   parseReasoningSetting,
   persistChatReasoningEffort,
   persistChatWebSearchSetting,
+  persistLlmDeploymentName,
   persistReasoningEffort,
   persistTrollingSetting,
   persistWebSearchSetting,
@@ -75,6 +79,11 @@ function getUsageCommandUsage(): string {
   );
 }
 
+function getModelCommandUsage(): string {
+  const options = LLM_DEPLOYMENT_OPTIONS.map(({ id }) => id).join("|");
+  return `Usage: /model ${options} DEPLOYMENT_NAME`;
+}
+
 function isAdmin(ctx: Context): boolean {
   return ctx.from?.id === APP_ENV.ADMIN_ID;
 }
@@ -93,6 +102,32 @@ function formatConfigureValue(value: ReasoningSetting | WebSearchSetting) {
 
 function formatDeploymentLabel(deployment: LlmSettingsDeployment): string {
   return deployment === "all" ? "All" : deployment;
+}
+
+function formatModelDisplayName(id: string): string {
+  switch (id) {
+    case "small":
+      return "Small";
+    case "big":
+      return "Big";
+    case "openminded":
+      return "Open-Minded";
+    default:
+      return id;
+  }
+}
+
+function formatModelCommandStatus(): string {
+  return [
+    "Current models:",
+    ...LLM_DEPLOYMENT_OPTIONS.map(
+      (deployment) =>
+        `${formatModelDisplayName(deployment.id)} - ${
+          deployment.deploymentName || "(not set)"
+        }`,
+    ),
+    getModelCommandUsage(),
+  ].join("\n");
 }
 
 function buildSettingsKeyboard(
@@ -267,6 +302,40 @@ stateComposer.command("usage", async (ctx) => {
   const status = await setUsageQuota(ctx.database, ctx.chat.id, key, quota);
 
   await ctx.reply(`Updated ${status.key} quota to ${status.quota}`);
+});
+
+stateComposer.command("model", async (ctx) => {
+  if (!isAdmin(ctx)) {
+    await ctx.reply("Only the admin can change models.");
+    return;
+  }
+
+  const args = typeof ctx.match === "string" ? ctx.match.trim() : "";
+
+  if (!args) {
+    await ctx.reply(formatModelCommandStatus());
+    return;
+  }
+
+  const [rawName, deploymentName, ...extraParts] = args.split(/\s+/);
+
+  if (
+    !rawName ||
+    !isLlmDeploymentId(rawName) ||
+    !deploymentName ||
+    extraParts.length > 0
+  ) {
+    await ctx.reply(getModelCommandUsage());
+    return;
+  }
+
+  const updatedName = await persistLlmDeploymentName(
+    ctx.database,
+    rawName,
+    deploymentName,
+  );
+
+  await ctx.reply(`Global ${rawName} model was set to ${updatedName}.`);
 });
 
 stateComposer.command("configure", async (ctx) => {
