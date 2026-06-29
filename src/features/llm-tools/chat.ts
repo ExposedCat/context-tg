@@ -44,7 +44,7 @@ export const readLastMessagesToolDefinition = {
   type: "function",
   name: "read_last_messages",
   description:
-    "Read recent remembered text messages from the current Telegram chat or forum topic. Use this when the user asks about the latest or surrounding chat context rather than semantic search. The count is capped at 300. If the user message is an actual reply, messages are read back from the replied-to message id; otherwise, from the current message id.",
+    "Read recent remembered text messages from the current Telegram chat. Use this when the user asks about the latest or surrounding chat context rather than semantic search. Only quote messages when you are asked to do so. If you are tasked to do a summary or help with ongoing discussion, you must read messages as an extra context, do not just list recite entire discussion uneless explicitly requested to do so.",
   parameters: {
     type: "object",
     properties: {
