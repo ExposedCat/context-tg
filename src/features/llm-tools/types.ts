@@ -1,3 +1,4 @@
+import type { AgentId } from "../agents/index.ts";
 import type { Database } from "../database.ts";
 
 export type LlmToolContext = {
@@ -18,6 +19,7 @@ export type LlmGeneratedImage = {
 export type FunctionToolResult = {
   output: string;
   image?: LlmGeneratedImage;
+  handoffAgentId?: AgentId;
   report?: {
     documentHtml: string;
     filename: string;

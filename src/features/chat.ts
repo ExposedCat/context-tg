@@ -1302,12 +1302,14 @@ async function handleChatRequest(
       return;
     }
 
+    const responseAgent = getAgentById(llmResponse.handoff_agent_id) ?? agent;
+
     await saveThread(ctx.database, {
       chat_id: chatId,
       message_id: message.message_id,
       thread_id: threadId,
       response_id: llmResponse.response_id,
-      agent_id: agent.id,
+      agent_id: responseAgent.id,
     });
 
     for (const sentMessage of sentMessages) {
@@ -1316,7 +1318,7 @@ async function handleChatRequest(
         message_id: sentMessage.message_id,
         thread_id: threadId,
         response_id: llmResponse.response_id,
-        agent_id: agent.id,
+        agent_id: responseAgent.id,
       });
     }
   } catch (error) {

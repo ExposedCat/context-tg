@@ -2,6 +2,7 @@ import { createDebug } from "@grammyjs/debug";
 import OpenAI from "@openai/openai";
 import { delay, throwIfAborted } from "../utils/async.ts";
 import {
+  type AgentId,
   type AgentModel,
   getCallableAgentById,
   normalAgent,
@@ -116,6 +117,7 @@ export type LlmSource = {
 
 export type LlmResponse = {
   response_id?: string;
+  handoff_agent_id?: AgentId;
   response?: string;
   report?: LlmReport;
   images: LlmGeneratedImage[];
@@ -205,6 +207,7 @@ type LlmApiInput = string | UserInputMessage[] | FunctionCallOutput[];
 
 type FunctionToolCallResult = {
   toolOutput: FunctionCallOutput;
+  handoffAgentId?: AgentId;
 };
 
 type LlmRuntimeSettings = {
@@ -219,6 +222,7 @@ const LLM_RATE_LIMIT_RETRY_DELAY_MS = 3000;
 const LLM_RATE_LIMIT_MAX_RETRIES = 5;
 type LlmRequestState = {
   lastResponseId?: string;
+  handoffAgentId?: AgentId;
   receivedResponse: boolean;
   sentImmediateContentFilterWarning: boolean;
   report?: LlmReport;
@@ -669,6 +673,7 @@ async function runFunctionToolCall(
 
   return {
     toolOutput: createToolOutput(call, result.output),
+    handoffAgentId: result.handoffAgentId,
   };
 }
 
@@ -862,6 +867,11 @@ async function resolveFunctionToolCalls(
         ),
       ),
     );
+    for (const result of toolCallResults) {
+      if (result.handoffAgentId) {
+        state.handoffAgentId = result.handoffAgentId;
+      }
+    }
     await options.onProgress?.({
       toolCallCount,
       responseId: response.id ?? state.lastResponseId,
@@ -955,6 +965,7 @@ async function requestLlmWithInstructions(
 
   return {
     response_id: response.id ?? lastResponseId,
+    handoff_agent_id: state.handoffAgentId,
     response: responseText,
     report: state.report,
     images: state.images,
@@ -1007,11 +1018,12 @@ async function runAgent(
   if (result.report) {
     return {
       output,
+      handoffAgentId: agent.id,
       report: result.report,
     };
   }
 
-  return { output };
+  return { output, handoffAgentId: agent.id };
 }
 
 export async function requestLlm(
