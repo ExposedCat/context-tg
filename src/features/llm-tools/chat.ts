@@ -6,7 +6,7 @@ export const searchChatToolDefinition = {
   type: "function",
   name: "search_chat",
   description:
-    "Search remembered text messages in the current Telegram chat. The sender_id and date filters are optional; only use them when the user explicitly needs a sender or date range filter. Prefer using only queries.",
+    "Search remembered text messages in the current Telegram chat or forum topic. The sender_id and date filters are optional; only use them when the user explicitly needs a sender or date range filter. Prefer using only queries.",
   parameters: {
     type: "object",
     properties: {
@@ -44,14 +44,14 @@ export const readLastMessagesToolDefinition = {
   type: "function",
   name: "read_last_messages",
   description:
-    "Read recent remembered text messages from the current Telegram chat. Use this when the user asks about the latest or surrounding chat context rather than semantic search. The count is capped at 300. If the user message is a reply, messages are read back from the replied-to message id; otherwise, from the current message id.",
+    "Read recent remembered text messages from the current Telegram chat or forum topic. Use this when the user asks about the latest or surrounding chat context rather than semantic search. The count is capped at 300. If the user message is an actual reply, messages are read back from the replied-to message id; otherwise, from the current message id.",
   parameters: {
     type: "object",
     properties: {
       count: {
         type: "number",
         description:
-          "How many message ids to look back from the anchor message. Maximum is 300.",
+          "How many recent messages to read back from the anchor message. Maximum is 300.",
         minimum: 1,
         maximum: MAX_LAST_MESSAGES_COUNT,
       },
@@ -116,6 +116,7 @@ export const executeSearchChat: FunctionToolRunner = async (args, context) => {
     from: parseOptionalDate(args?.from),
     to: parseOptionalDate(args?.to),
     chatId: context.chatId,
+    threadId: context.threadId,
     senderId: parseOptionalNumber(args?.sender_id),
     limit: 20,
   });

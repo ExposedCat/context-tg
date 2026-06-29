@@ -8,6 +8,10 @@ import { startsWithCommandPrefix } from "./message-filter.ts";
 type TextMessage = {
   message_id: number;
   message_thread_id?: number;
+  reply_to_message?: {
+    message_id: number;
+    message_thread_id?: number;
+  };
   date: number;
   text: string;
   entities?: MessageEntity[];
@@ -75,6 +79,7 @@ export type MessageSearchOptions = {
   from?: Date;
   to?: Date;
   chatId?: number;
+  threadId?: number;
   senderId?: number;
   limit?: number;
 };
@@ -97,13 +102,31 @@ type QdrantPoint = {
   payload?: Partial<MessageMetadata>;
 };
 
+type QdrantCollectionInfo = {
+  payload_schema?: Record<
+    string,
+    | string
+    | {
+        data_type?: string;
+      }
+  >;
+};
+
 const logDebug = createDebug("app:messages:debug");
 const logError = createDebug("app:messages:error");
 
 const DEFAULT_SEARCH_LIMIT = 20;
+const MESSAGE_PAYLOAD_INDEXES = [
+  { fieldName: "chat_id", fieldSchema: "integer" },
+  { fieldName: "thread_id", fieldSchema: "integer" },
+  { fieldName: "message_id", fieldSchema: "integer" },
+  { fieldName: "sender_id", fieldSchema: "integer" },
+  { fieldName: "date_timestamp", fieldSchema: "integer" },
+] as const;
 
 let setupPromise: Promise<void> | undefined;
 let setupVectorSize: number | undefined;
+let payloadIndexesPromise: Promise<boolean> | undefined;
 
 export const messagesComposer = new Composer<Context>();
 
@@ -128,7 +151,9 @@ function getQdrantUrl(path: string): string {
 }
 
 export function getCollectionPath(suffix = ""): string {
-  return `/collections/${encodeURIComponent(APP_ENV.QDRANT_COLLECTION)}${suffix}`;
+  return `/collections/${encodeURIComponent(
+    APP_ENV.QDRANT_COLLECTION,
+  )}${suffix}`;
 }
 
 function getQdrantHeaders(): HeadersInit {
@@ -177,6 +202,79 @@ async function collectionExists(): Promise<boolean> {
   return true;
 }
 
+async function getCollectionInfo(): Promise<QdrantCollectionInfo | undefined> {
+  const response = await fetch(getQdrantUrl(getCollectionPath()), {
+    headers: getQdrantHeaders(),
+  });
+
+  if (response.status === 404) {
+    return undefined;
+  }
+
+  if (!response.ok) {
+    const body = await response.text();
+    throw new Error(
+      `Qdrant collection info failed: ${response.status} ${body}`,
+    );
+  }
+
+  const data = (await response.json()) as QdrantResponse<QdrantCollectionInfo>;
+  return data.result;
+}
+
+function getPayloadSchemaType(
+  payloadSchema: QdrantCollectionInfo["payload_schema"],
+  fieldName: string,
+): string | undefined {
+  const fieldSchema = payloadSchema?.[fieldName];
+
+  if (typeof fieldSchema === "string") {
+    return fieldSchema;
+  }
+
+  return fieldSchema?.data_type;
+}
+
+export async function ensureMessagePayloadIndexes(): Promise<boolean> {
+  if (payloadIndexesPromise) {
+    return payloadIndexesPromise;
+  }
+
+  payloadIndexesPromise = (async () => {
+    const collectionInfo = await getCollectionInfo();
+
+    if (!collectionInfo) {
+      payloadIndexesPromise = undefined;
+      return false;
+    }
+
+    for (const { fieldName, fieldSchema } of MESSAGE_PAYLOAD_INDEXES) {
+      if (
+        getPayloadSchemaType(collectionInfo.payload_schema, fieldName) ===
+        fieldSchema
+      ) {
+        continue;
+      }
+
+      await qdrantRequest(getCollectionPath("/index?wait=true"), {
+        method: "PUT",
+        body: JSON.stringify({
+          field_name: fieldName,
+          field_schema: fieldSchema,
+        }),
+      });
+    }
+
+    return true;
+  })();
+
+  payloadIndexesPromise.catch(() => {
+    payloadIndexesPromise = undefined;
+  });
+
+  return payloadIndexesPromise;
+}
+
 async function setupQdrant(vectorSize: number): Promise<void> {
   if (setupPromise && setupVectorSize === vectorSize) {
     return setupPromise;
@@ -185,6 +283,7 @@ async function setupQdrant(vectorSize: number): Promise<void> {
   setupVectorSize = vectorSize;
   setupPromise = (async () => {
     if (await collectionExists()) {
+      await ensureMessagePayloadIndexes();
       return;
     }
 
@@ -197,6 +296,8 @@ async function setupQdrant(vectorSize: number): Promise<void> {
         },
       }),
     });
+
+    await ensureMessagePayloadIndexes();
   })();
 
   setupPromise.catch(() => {
@@ -228,6 +329,12 @@ async function embed(texts: string[]): Promise<number[][]> {
   await setupQdrant(firstVector.length);
 
   return vectors;
+}
+
+function getMessageThreadId(message: TextMessage): number | undefined {
+  return (
+    message.message_thread_id ?? message.reply_to_message?.message_thread_id
+  );
 }
 
 async function getPointId(chatId: number, messageId: number): Promise<string> {
@@ -348,6 +455,7 @@ async function indexMessage(
   }
 
   const date = new Date(message.date * 1000);
+  const threadId = getMessageThreadId(message);
   const payload: MessageMetadata = {
     text,
     date: date.toISOString(),
@@ -356,9 +464,7 @@ async function indexMessage(
     sender_id: sender.id,
     chat_id: chatId,
     message_id: message.message_id,
-    ...(message.message_thread_id !== undefined
-      ? { thread_id: message.message_thread_id }
-      : {}),
+    ...(threadId !== undefined ? { thread_id: threadId } : {}),
   };
 
   await qdrantRequest(getCollectionPath("/points"), {
@@ -392,6 +498,10 @@ function getSearchFilter(options: MessageSearchOptions) {
 
   if (options.chatId !== undefined) {
     must.push({ key: "chat_id", match: { value: options.chatId } });
+  }
+
+  if (options.threadId !== undefined) {
+    must.push({ key: "thread_id", match: { value: options.threadId } });
   }
 
   if (options.senderId !== undefined) {

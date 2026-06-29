@@ -186,6 +186,22 @@ function isDirectReplyToBot(
   return reply?.from?.id === botId;
 }
 
+function isImplicitForumTopicReply(
+  message: TextMessage,
+  reply: TextMessage | undefined,
+): boolean {
+  return (
+    message.message_thread_id !== undefined &&
+    reply?.message_id === message.message_thread_id
+  );
+}
+
+function getActualReply(message: TextMessage): TextMessage | undefined {
+  const reply = message.reply_to_message;
+
+  return isImplicitForumTopicReply(message, reply) ? undefined : reply;
+}
+
 function buildRootRequest(text: string, replyText?: string): string {
   return replyText ? `${replyText}\n\n${text}` : text;
 }
@@ -225,12 +241,13 @@ function getLlmToolContext(
   chatId: number,
   message: TextMessage,
 ): LlmToolContext {
+  const reply = getActualReply(message);
+
   return {
     chatId,
     messageId: message.message_id,
-    replyMessageId: message.reply_to_message?.message_id,
-    threadId:
-      message.message_thread_id ?? message.reply_to_message?.message_thread_id,
+    replyMessageId: reply?.message_id,
+    threadId: message.message_thread_id ?? reply?.message_thread_id,
   };
 }
 
@@ -1040,7 +1057,11 @@ async function handleChatRequest(
   const chatId = ctx.chat.id;
   const reply = options.reply;
   const thread = options.thread;
-  const threadId = thread?.thread_id ?? options.threadId ?? message.message_id;
+  const threadId =
+    thread?.thread_id ??
+    options.threadId ??
+    message.message_thread_id ??
+    message.message_id;
   const textUsage = await consumeUsage(ctx.database, chatId, "text_responses");
 
   if (!textUsage.ok) {
@@ -1365,7 +1386,7 @@ chatComposer.on("message", async (ctx, next) => {
 
   const message = ctx.message as TextMessage;
   const text = getMessageText(message);
-  const reply = message.reply_to_message;
+  const reply = getActualReply(message);
   const isDirectBotReply = isDirectReplyToBot(reply, ctx.me.id);
   const addressed = text ? isAddressed(text, ctx.me.username) : false;
   const thread = reply
@@ -1399,7 +1420,7 @@ chatComposer.on("message", async (ctx, next) => {
   await handleChatRequest(ctx, message, requestText, {
     reply,
     thread,
-    threadId: repliedTask?.thread_id,
+    threadId: repliedTask?.thread_id ?? message.message_thread_id,
     onUnhandledError: next,
   });
 });
