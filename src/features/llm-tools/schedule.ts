@@ -18,13 +18,13 @@ export const scheduleMessageToolDefinition = {
   type: "function",
   name: "schedule_message",
   description:
-    "Schedule a message to be sent in the current Telegram chat at a given ISO date and time, precise to minutes. The current chat and forum topic are used automatically. There can be up to 5 active scheduled messages per chat, and only 1 active scheduled message at the same date and minute per chat.",
+    "Schedule a message to be sent at a given local date and time, precise to minutes. Use YYYY-MM-DD HH:mm without a timezone suffix.",
   parameters: {
     type: "object",
     properties: {
       message: {
         type: "string",
-        description: "The exact Telegram message text to send later.",
+        description: "The exact message text to send later.",
       },
       short_elaboration: {
         type: "string",
@@ -34,7 +34,7 @@ export const scheduleMessageToolDefinition = {
       at: {
         type: "string",
         description:
-          "ISO 8601 local date string for when to send the message. If the user gives a local time, omit a timezone suffix so the bot interprets it locally; include a timezone only when the user explicitly provides one. Seconds are ignored.",
+          "Local date/time in YYYY-MM-DD HH:mm format, for example 2022-12-01 10:05.",
       },
     },
     required: ["message", "short_elaboration"],

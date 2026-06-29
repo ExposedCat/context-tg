@@ -1,3 +1,5 @@
+import { formatLocalDateMinute } from "../../utils/date.ts";
+
 export function formatAgentNames(names: readonly string[]): string {
   return names.map((name) => JSON.stringify(name)).join(", ");
 }
@@ -11,8 +13,11 @@ export function joinPromptSections(
 }
 
 export function buildMetadataInstructions(): string {
+  const now = new Date();
+  const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+
   return `# Meta
-Current time (ISO): ${new Date().toISOString()}`;
+Current local time (${timeZone}): ${formatLocalDateMinute(now)}`;
 }
 
 export function buildAgentIdentity(
