@@ -10,6 +10,8 @@ import {
   type ChatLlmSettingKey,
   getChatReasoningEffort,
   getChatWebSearchSetting,
+  getGlobalReasoningEffort,
+  getGlobalWebSearchSetting,
   getReasoningEffort,
   getTrollingSetting,
   getWebSearchSetting,
@@ -20,6 +22,8 @@ import {
   parseReasoningSetting,
   persistChatReasoningEffort,
   persistChatWebSearchSetting,
+  persistGlobalReasoningEffort,
+  persistGlobalWebSearchSetting,
   persistLlmDeploymentName,
   persistReasoningEffort,
   persistTrollingSetting,
@@ -63,6 +67,8 @@ const CONFIGURE_KIND_LABELS = {
   websearch: "Web Search",
 } as const satisfies Record<ChatLlmSettingKey, string>;
 
+type ConfigureScope = "configure" | "global";
+
 type SettingsKeyboardButton = {
   text: string;
   callback_data: string;
@@ -96,8 +102,33 @@ function isConfigureKind(value: string): value is ChatLlmSettingKey {
   return value === "reasoning" || value === "websearch";
 }
 
+function isConfigureScope(value: string): value is ConfigureScope {
+  return value === "configure" || value === "global";
+}
+
 function formatConfigureValue(value: ReasoningSetting | WebSearchSetting) {
   return value ?? "null";
+}
+
+function formatConfigureScopeTarget(scope: ConfigureScope): string {
+  return scope === "global" ? "all chats" : "this chat";
+}
+
+function formatConfigureKindLabel(
+  scope: ConfigureScope,
+  kind: ChatLlmSettingKey,
+): string {
+  const label = CONFIGURE_KIND_LABELS[kind];
+
+  return scope === "global" ? `Global ${label}` : label;
+}
+
+function formatConfigureTitle(scope: ConfigureScope): string {
+  return `Configure ${formatConfigureScopeTarget(scope)}:`;
+}
+
+function formatConfigureAdminWarning(scope: ConfigureScope): string {
+  return `Only the admin can configure ${formatConfigureScopeTarget(scope)}.`;
 }
 
 function formatDeploymentLabel(deployment: LlmSettingsDeployment): string {
@@ -182,19 +213,19 @@ function buildTrollingKeyboard(): SettingsKeyboardMarkup {
   );
 }
 
-function buildConfigureKeyboard(): SettingsKeyboardMarkup {
+function buildConfigureKeyboard(scope: ConfigureScope): SettingsKeyboardMarkup {
   return {
     inline_keyboard: [
       [
         {
           text: CONFIGURE_KIND_LABELS.reasoning,
-          callback_data: "configure:reasoning",
+          callback_data: `${scope}:reasoning`,
         },
       ],
       [
         {
           text: CONFIGURE_KIND_LABELS.websearch,
-          callback_data: "configure:websearch",
+          callback_data: `${scope}:websearch`,
         },
       ],
     ],
@@ -202,24 +233,38 @@ function buildConfigureKeyboard(): SettingsKeyboardMarkup {
 }
 
 function buildConfigureDeploymentKeyboard(
+  scope: ConfigureScope,
   kind: ChatLlmSettingKey,
 ): SettingsKeyboardMarkup {
   return {
     inline_keyboard: [
       LLM_DEPLOYMENT_OPTIONS.map((deployment) => ({
         text: deployment.id,
-        callback_data: `configure:${kind}:deployment:${deployment.id}`,
+        callback_data: `${scope}:${kind}:deployment:${deployment.id}`,
       })),
-      [{ text: "All", callback_data: `configure:${kind}:deployment:all` }],
+      [{ text: "All", callback_data: `${scope}:${kind}:deployment:all` }],
     ],
   };
 }
 
 async function getConfigureValue(
   ctx: Context,
+  scope: ConfigureScope,
   kind: ChatLlmSettingKey,
   deployment: LlmSettingsDeployment,
 ): Promise<string> {
+  if (scope === "global") {
+    if (kind === "reasoning") {
+      return formatConfigureValue(
+        await getGlobalReasoningEffort(ctx.database, deployment),
+      );
+    }
+
+    return formatConfigureValue(
+      await getGlobalWebSearchSetting(ctx.database, deployment),
+    );
+  }
+
   if (!ctx.chat) {
     return "";
   }
@@ -237,16 +282,17 @@ async function getConfigureValue(
 
 async function buildConfigureSettingKeyboard(
   ctx: Context,
+  scope: ConfigureScope,
   kind: ChatLlmSettingKey,
   deployment: LlmSettingsDeployment,
 ): Promise<SettingsKeyboardMarkup> {
   const options = kind === "reasoning" ? REASONING_OPTIONS : WEB_SEARCH_OPTIONS;
-  const current = await getConfigureValue(ctx, kind, deployment);
+  const current = await getConfigureValue(ctx, scope, kind, deployment);
 
   return buildSettingsKeyboard(
     options,
     current,
-    `configure:${kind}:set:${deployment}`,
+    `${scope}:${kind}:set:${deployment}`,
   );
 }
 
@@ -344,12 +390,23 @@ stateComposer.command("configure", async (ctx) => {
   }
 
   if (!isAdmin(ctx)) {
-    await ctx.reply("Only the admin can configure this chat.");
+    await ctx.reply(formatConfigureAdminWarning("configure"));
     return;
   }
 
-  await ctx.reply("Configure this chat:", {
-    reply_markup: buildConfigureKeyboard(),
+  await ctx.reply(formatConfigureTitle("configure"), {
+    reply_markup: buildConfigureKeyboard("configure"),
+  });
+});
+
+stateComposer.command("global", async (ctx) => {
+  if (!isAdmin(ctx)) {
+    await ctx.reply(formatConfigureAdminWarning("global"));
+    return;
+  }
+
+  await ctx.reply(formatConfigureTitle("global"), {
+    reply_markup: buildConfigureKeyboard("global"),
   });
 });
 
@@ -404,19 +461,12 @@ stateComposer.on("message:text", async (ctx, next) => {
 });
 
 stateComposer.callbackQuery(
-  /^configure:(reasoning|websearch)$/,
+  /^(configure|global):(reasoning|websearch)$/,
   async (ctx) => {
-    if (!isAdmin(ctx)) {
-      await ctx.answerCallbackQuery({
-        text: "Only the admin can configure this chat.",
-        show_alert: true,
-      });
-      return;
-    }
+    const scope = ctx.match[1];
+    const kind = ctx.match[2];
 
-    const kind = ctx.match[1];
-
-    if (!isConfigureKind(kind)) {
+    if (!isConfigureScope(scope) || !isConfigureKind(kind)) {
       await ctx.answerCallbackQuery({
         text: "Unknown configuration option.",
         show_alert: true,
@@ -424,35 +474,40 @@ stateComposer.callbackQuery(
       return;
     }
 
+    if (!isAdmin(ctx)) {
+      await ctx.answerCallbackQuery({
+        text: formatConfigureAdminWarning(scope),
+        show_alert: true,
+      });
+      return;
+    }
+
+    if (scope === "configure" && !ctx.chat) {
+      return;
+    }
+
     await ctx.answerCallbackQuery();
     await ctx.editMessageText(
-      `Choose deployment for ${CONFIGURE_KIND_LABELS[kind]}:`,
+      `Choose deployment for ${formatConfigureKindLabel(scope, kind)}:`,
       {
-        reply_markup: buildConfigureDeploymentKeyboard(kind),
+        reply_markup: buildConfigureDeploymentKeyboard(scope, kind),
       },
     );
   },
 );
 
 stateComposer.callbackQuery(
-  /^configure:(reasoning|websearch):deployment:(.+)$/,
+  /^(configure|global):(reasoning|websearch):deployment:(.+)$/,
   async (ctx) => {
-    if (!ctx.chat) {
-      return;
-    }
+    const scope = ctx.match[1];
+    const kind = ctx.match[2];
+    const deployment = ctx.match[3];
 
-    if (!isAdmin(ctx)) {
-      await ctx.answerCallbackQuery({
-        text: "Only the admin can configure this chat.",
-        show_alert: true,
-      });
-      return;
-    }
-
-    const kind = ctx.match[1];
-    const deployment = ctx.match[2];
-
-    if (!isConfigureKind(kind) || !isLlmSettingsDeployment(deployment)) {
+    if (
+      !isConfigureScope(scope) ||
+      !isConfigureKind(kind) ||
+      !isLlmSettingsDeployment(deployment)
+    ) {
       await ctx.answerCallbackQuery({
         text: "Unknown configuration option.",
         show_alert: true,
@@ -460,14 +515,27 @@ stateComposer.callbackQuery(
       return;
     }
 
+    if (!isAdmin(ctx)) {
+      await ctx.answerCallbackQuery({
+        text: formatConfigureAdminWarning(scope),
+        show_alert: true,
+      });
+      return;
+    }
+
+    if (scope === "configure" && !ctx.chat) {
+      return;
+    }
+
     await ctx.answerCallbackQuery();
     await ctx.editMessageText(
-      `Choose ${CONFIGURE_KIND_LABELS[kind]} for ${formatDeploymentLabel(
+      `Choose ${formatConfigureKindLabel(scope, kind)} for ${formatDeploymentLabel(
         deployment,
       )}:`,
       {
         reply_markup: await buildConfigureSettingKeyboard(
           ctx,
+          scope,
           kind,
           deployment,
         ),
@@ -477,27 +545,28 @@ stateComposer.callbackQuery(
 );
 
 stateComposer.callbackQuery(
-  /^configure:(reasoning|websearch):set:(.+):(.+)$/,
+  /^(configure|global):(reasoning|websearch):set:(.+):(.+)$/,
   async (ctx) => {
-    if (!ctx.chat) {
-      return;
-    }
+    const scope = ctx.match[1];
+    const kind = ctx.match[2];
+    const deployment = ctx.match[3];
+    const value = ctx.match[4];
 
-    if (!isAdmin(ctx)) {
+    if (
+      !isConfigureScope(scope) ||
+      !isConfigureKind(kind) ||
+      !isLlmSettingsDeployment(deployment)
+    ) {
       await ctx.answerCallbackQuery({
-        text: "Only the admin can configure this chat.",
+        text: "Unknown configuration option.",
         show_alert: true,
       });
       return;
     }
 
-    const kind = ctx.match[1];
-    const deployment = ctx.match[2];
-    const value = ctx.match[3];
-
-    if (!isConfigureKind(kind) || !isLlmSettingsDeployment(deployment)) {
+    if (!isAdmin(ctx)) {
       await ctx.answerCallbackQuery({
-        text: "Unknown configuration option.",
+        text: formatConfigureAdminWarning(scope),
         show_alert: true,
       });
       return;
@@ -516,14 +585,24 @@ stateComposer.callbackQuery(
         return;
       }
 
-      updatedValue = formatConfigureValue(
-        await persistChatReasoningEffort(
-          ctx.database,
-          ctx.chat.id,
-          deployment,
-          effort,
-        ),
-      );
+      if (scope === "global") {
+        updatedValue = formatConfigureValue(
+          await persistGlobalReasoningEffort(ctx.database, deployment, effort),
+        );
+      } else {
+        if (!ctx.chat) {
+          return;
+        }
+
+        updatedValue = formatConfigureValue(
+          await persistChatReasoningEffort(
+            ctx.database,
+            ctx.chat.id,
+            deployment,
+            effort,
+          ),
+        );
+      }
     } else {
       if (!isWebSearchSetting(value)) {
         await ctx.answerCallbackQuery({
@@ -533,21 +612,33 @@ stateComposer.callbackQuery(
         return;
       }
 
-      updatedValue = await persistChatWebSearchSetting(
-        ctx.database,
-        ctx.chat.id,
-        deployment,
-        value,
-      );
+      if (scope === "global") {
+        updatedValue = await persistGlobalWebSearchSetting(
+          ctx.database,
+          deployment,
+          value,
+        );
+      } else {
+        if (!ctx.chat) {
+          return;
+        }
+
+        updatedValue = await persistChatWebSearchSetting(
+          ctx.database,
+          ctx.chat.id,
+          deployment,
+          value,
+        );
+      }
     }
 
     await ctx.answerCallbackQuery();
     await ctx.editMessageText(
-      `${CONFIGURE_KIND_LABELS[kind]} for ${formatDeploymentLabel(
+      `${formatConfigureKindLabel(scope, kind)} for ${formatDeploymentLabel(
         deployment,
-      )} was set to ${updatedValue}.\n\nConfigure this chat:`,
+      )} was set to ${updatedValue}.\n\n${formatConfigureTitle(scope)}`,
       {
-        reply_markup: buildConfigureKeyboard(),
+        reply_markup: buildConfigureKeyboard(scope),
       },
     );
   },

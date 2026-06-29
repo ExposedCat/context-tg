@@ -1,6 +1,7 @@
 import type { Database } from "./database.ts";
 import {
   isLlmDeploymentId,
+  LLM_DEPLOYMENT_OPTIONS,
   type LlmDeploymentId,
   setLlmDeploymentName,
 } from "./llm-deployments.ts";
@@ -31,9 +32,10 @@ export type ChatLlmSettingsTable = {
 
 type LlmSettingsDatabase = Database;
 type LlmModelSettingKey = `model:${LlmDeploymentId}`;
+type LlmDeploymentSettingKey = `${ChatLlmSettingKey}:${LlmDeploymentId}`;
 type LlmSettingKey =
-  | "reasoning"
-  | "websearch"
+  | ChatLlmSettingKey
+  | LlmDeploymentSettingKey
   | "trolling"
   | LlmModelSettingKey;
 
@@ -91,8 +93,7 @@ export async function persistReasoningEffort(
   database: LlmSettingsDatabase,
   effort: ReasoningSetting,
 ): Promise<ReasoningSetting> {
-  await persistLlmSetting(database, "reasoning", effort);
-  return setReasoningEffort(effort);
+  return await persistGlobalReasoningEffort(database, "all", effort);
 }
 
 export function getWebSearchSetting(): WebSearchSetting {
@@ -122,8 +123,7 @@ export async function persistWebSearchSetting(
   database: LlmSettingsDatabase,
   setting: WebSearchSetting,
 ): Promise<WebSearchSetting> {
-  await persistLlmSetting(database, "websearch", setting);
-  return setWebSearchSetting(setting);
+  return await persistGlobalWebSearchSetting(database, "all", setting);
 }
 
 export function getTrollingSetting(): TrollingSetting {
@@ -198,6 +198,79 @@ async function persistLlmSetting(
     .values({ key, value })
     .onConflict((conflict) => conflict.column("key").doUpdateSet({ value }))
     .execute();
+}
+
+function getGlobalLlmSettingKey(
+  key: ChatLlmSettingKey,
+  deployment: LlmSettingsDeployment,
+): ChatLlmSettingKey | LlmDeploymentSettingKey {
+  return deployment === "all" ? key : `${key}:${deployment}`;
+}
+
+function getGlobalLlmDeploymentSettingKeys(
+  key: ChatLlmSettingKey,
+): LlmDeploymentSettingKey[] {
+  return LLM_DEPLOYMENT_OPTIONS.map(
+    (deployment) => `${key}:${deployment.id}` as LlmDeploymentSettingKey,
+  );
+}
+
+async function getDirectGlobalLlmSetting(
+  database: LlmSettingsDatabase,
+  deployment: LlmSettingsDeployment,
+  key: ChatLlmSettingKey,
+): Promise<string | null | undefined> {
+  const row = await database
+    .selectFrom("llm_settings")
+    .select("value")
+    .where("key", "=", getGlobalLlmSettingKey(key, deployment))
+    .executeTakeFirst();
+
+  return row ? row.value : undefined;
+}
+
+async function getResolvedGlobalLlmSetting(
+  database: LlmSettingsDatabase,
+  deployment: LlmSettingsDeployment,
+  key: ChatLlmSettingKey,
+): Promise<string | null | undefined> {
+  if (deployment === "all") {
+    return await getDirectGlobalLlmSetting(database, deployment, key);
+  }
+
+  const [deploymentValue, allValue] = await Promise.all([
+    getDirectGlobalLlmSetting(database, deployment, key),
+    getDirectGlobalLlmSetting(database, "all", key),
+  ]);
+
+  return deploymentValue !== undefined ? deploymentValue : allValue;
+}
+
+async function persistGlobalLlmSetting(
+  database: LlmSettingsDatabase,
+  deployment: LlmSettingsDeployment,
+  key: ChatLlmSettingKey,
+  value: string | null,
+) {
+  const settingKey = getGlobalLlmSettingKey(key, deployment);
+
+  if (deployment !== "all") {
+    await persistLlmSetting(database, settingKey, value);
+    return;
+  }
+
+  await database.transaction().execute(async (transaction) => {
+    await transaction
+      .deleteFrom("llm_settings")
+      .where("key", "in", getGlobalLlmDeploymentSettingKeys(key))
+      .execute();
+
+    await transaction
+      .insertInto("llm_settings")
+      .values({ key: settingKey, value })
+      .onConflict((conflict) => conflict.column("key").doUpdateSet({ value }))
+      .execute();
+  });
 }
 
 async function getDirectChatLlmSetting(
@@ -300,7 +373,38 @@ export async function getChatReasoningEffort(
   const setting =
     stored === undefined ? undefined : parseStoredReasoningSetting(stored);
 
+  return setting === undefined
+    ? await getGlobalReasoningEffort(database, deployment)
+    : setting;
+}
+
+export async function getGlobalReasoningEffort(
+  database: LlmSettingsDatabase,
+  deployment: LlmSettingsDeployment,
+): Promise<ReasoningSetting> {
+  const stored = await getResolvedGlobalLlmSetting(
+    database,
+    deployment,
+    "reasoning",
+  );
+  const setting =
+    stored === undefined ? undefined : parseStoredReasoningSetting(stored);
+
   return setting === undefined ? getReasoningEffort() : setting;
+}
+
+export async function persistGlobalReasoningEffort(
+  database: LlmSettingsDatabase,
+  deployment: LlmSettingsDeployment,
+  effort: ReasoningSetting,
+): Promise<ReasoningSetting> {
+  await persistGlobalLlmSetting(database, deployment, "reasoning", effort);
+
+  if (deployment === "all") {
+    setReasoningEffort(effort);
+  }
+
+  return effort;
 }
 
 export async function persistChatReasoningEffort(
@@ -333,7 +437,36 @@ export async function getChatWebSearchSetting(
   const setting =
     stored === undefined ? undefined : parseStoredWebSearchSetting(stored);
 
+  return setting ?? (await getGlobalWebSearchSetting(database, deployment));
+}
+
+export async function getGlobalWebSearchSetting(
+  database: LlmSettingsDatabase,
+  deployment: LlmSettingsDeployment,
+): Promise<WebSearchSetting> {
+  const stored = await getResolvedGlobalLlmSetting(
+    database,
+    deployment,
+    "websearch",
+  );
+  const setting =
+    stored === undefined ? undefined : parseStoredWebSearchSetting(stored);
+
   return setting ?? getWebSearchSetting();
+}
+
+export async function persistGlobalWebSearchSetting(
+  database: LlmSettingsDatabase,
+  deployment: LlmSettingsDeployment,
+  setting: WebSearchSetting,
+): Promise<WebSearchSetting> {
+  await persistGlobalLlmSetting(database, deployment, "websearch", setting);
+
+  if (deployment === "all") {
+    setWebSearchSetting(setting);
+  }
+
+  return setting;
 }
 
 export async function persistChatWebSearchSetting(
