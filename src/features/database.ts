@@ -4,6 +4,10 @@ import { DenoSqlite3Dialect } from "@marshift/kysely-deno-sqlite3";
 import { type EmojiPacksTable, migrateEmojiPacks } from "./emoji-packs.ts";
 import { APP_ENV } from "./env.ts";
 import {
+  type LlmChatResponsesTable,
+  migrateLlmChatResponses,
+} from "./llm-chat-responses.ts";
+import {
   type ChatLlmSettingsTable,
   type LlmSettingsTable,
   loadLlmSettings,
@@ -25,6 +29,7 @@ import {
 
 export type DatabaseSchema = {
   threads: ThreadsTable;
+  llm_chat_responses: LlmChatResponsesTable;
   llm_settings: LlmSettingsTable;
   chat_llm_settings: ChatLlmSettingsTable;
   tasks: TasksTable;
@@ -68,6 +73,7 @@ export function initDatabase() {
     });
 
     await migrateThreads(database);
+    await migrateLlmChatResponses(database);
     await migrateLlmSettings(database);
     await migrateTasks(database);
     await migrateSchedules(database);
