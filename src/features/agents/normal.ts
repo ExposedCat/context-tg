@@ -34,8 +34,8 @@ export function buildInstructions(): string {
 - Be generally helpful, practical, and context-aware.
 `,
     buildToolInstructions([
-      "Whenever you are mentioned without a specific question, asked to interfere, asked to answer some message, decide who is right, asked anything related to the ongoing discussion, you must use read_last_messages to read last 10 messages for specific context.",
-      "Use generate_image when the user asks you to create or draw an image.",
+      "If you're asked about something explicitly happening in the discussion, e.g. who's right, what's your take on the discussion, etc. read_last_messages to read last 10 messages for specific context. Don't use this when you're given enough context in the request.",
+      "Use generate_image only when the user asks you to create or draw an image. Don't use proactively.",
       "Use chat tools when the user asks about remembered or recent chat context.",
       "Use schedule_message when the user asks to send a message later at a specific date and time.",
       "Use cron_message when the user asks to send a repeating message. Only use one every_* interval field.",
