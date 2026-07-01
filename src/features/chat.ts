@@ -21,6 +21,7 @@ import {
   type LlmReport,
   LlmRequestError,
   type LlmRequestInput,
+  type LlmRequestMessageInput,
   type LlmRequestOptions,
   type LlmResponse,
   type LlmToolContext,
@@ -52,6 +53,9 @@ import {
 type LlmContextMessage = {
   text?: string;
   caption?: string;
+  from?: TelegramUser;
+  sender_chat?: TelegramChat;
+  origin?: MessageOrigin;
   animation?: unknown;
   audio?: unknown;
   photo?: PhotoSize[];
@@ -65,7 +69,6 @@ type TextMessage = LlmContextMessage & {
   message_id: number;
   message_thread_id?: number;
   is_topic_message?: boolean;
-  from?: TelegramUser;
   quote?: {
     text: string;
   };
@@ -75,7 +78,38 @@ type TextMessage = LlmContextMessage & {
 
 type TelegramUser = {
   id: number;
+  first_name?: string;
+  last_name?: string;
+  username?: string;
 };
+
+type TelegramChat = {
+  id?: number;
+  first_name?: string;
+  last_name?: string;
+  title?: string;
+  username?: string;
+};
+
+type MessageOrigin =
+  | {
+      type: "user";
+      sender_user: TelegramUser;
+    }
+  | {
+      type: "hidden_user";
+      sender_user_name: string;
+    }
+  | {
+      type: "chat";
+      sender_chat: TelegramChat;
+      author_signature?: string;
+    }
+  | {
+      type: "channel";
+      chat: TelegramChat;
+      author_signature?: string;
+    };
 
 type PhotoSize = {
   file_id: string;
@@ -144,6 +178,80 @@ function getLlmContextText(
   return message && text && !startsWithCommandPrefix(text)
     ? buildLlmMessageText(message, text)
     : undefined;
+}
+
+function getTelegramChatName(
+  chat: TelegramChat | undefined,
+): string | undefined {
+  if (!chat) {
+    return undefined;
+  }
+
+  if (chat.title) {
+    return chat.username ? `${chat.title} (@${chat.username})` : chat.title;
+  }
+
+  return getTelegramUserName(chat);
+}
+
+function getTelegramUserName(
+  user: TelegramUser | TelegramChat | undefined,
+): string | undefined {
+  if (!user) {
+    return undefined;
+  }
+
+  const name = [user.first_name, user.last_name].filter(Boolean).join(" ");
+  if (name && user.username) {
+    return `${name} (@${user.username})`;
+  }
+
+  return name || (user.username ? `@${user.username}` : String(user.id ?? ""));
+}
+
+function getMessageOriginSenderName(
+  origin: MessageOrigin | undefined,
+): string | undefined {
+  switch (origin?.type) {
+    case "user":
+      return getTelegramUserName(origin.sender_user);
+    case "hidden_user":
+      return origin.sender_user_name;
+    case "chat":
+      return origin.author_signature ?? getTelegramChatName(origin.sender_chat);
+    case "channel":
+      return origin.author_signature ?? getTelegramChatName(origin.chat);
+    default:
+      return undefined;
+  }
+}
+
+function getMessageSenderName(
+  message: LlmContextMessage | undefined,
+  fallback: string,
+): string {
+  const senderName =
+    getTelegramChatName(message?.sender_chat) ??
+    getTelegramUserName(message?.from) ??
+    getMessageOriginSenderName(message?.origin);
+
+  return senderName?.trim() ? senderName : fallback;
+}
+
+function getLlmMessageContent(
+  message: LlmContextMessage | undefined,
+  text?: string,
+): string | undefined {
+  const messageText =
+    message && text !== undefined
+      ? buildLlmMessageText(message, text)
+      : getLlmContextText(message);
+  const parts = [
+    hasImageAttachments(message) ? "[Attached image]" : undefined,
+    messageText,
+  ].filter((part): part is string => part !== undefined && part.trim() !== "");
+
+  return parts.length > 0 ? parts.join("\n") : undefined;
 }
 
 function getLargestPhoto(
@@ -269,56 +377,86 @@ function getReplyContext(
   message: TextMessage,
   reply: TextMessage | undefined,
 ): LlmContextMessage | undefined {
-  const quoteText = getQuoteReplyContextText(message);
-
   if (reply) {
     return reply;
   }
 
-  if (message.external_reply) {
-    return quoteText
-      ? { ...message.external_reply, text: quoteText }
-      : message.external_reply;
-  }
-
-  return quoteText ? { text: quoteText } : undefined;
+  return message.external_reply;
 }
 
-function buildReplyContextText(
-  reply: LlmContextMessage | undefined,
+function formatRegularLlmMessage(
+  message: LlmContextMessage | undefined,
+  text?: string,
 ): string | undefined {
-  const repliedPrefix = "Replying to the message";
-  const replyText = getLlmContextText(reply);
-  const imagePrefix = hasImageAttachments(reply) ? "[Attached image]\n" : "";
+  const content = getLlmMessageContent(message, text);
 
-  if (replyText) {
-    return `${repliedPrefix}:\n${imagePrefix}${replyText}`;
+  if (!content) {
+    return undefined;
   }
 
-  if (imagePrefix) {
-    return `${repliedPrefix}:\n${imagePrefix.trimEnd()}`;
-  }
-
-  return undefined;
+  return `${getMessageSenderName(message, "Unknown")}:\n${content}`;
 }
 
-function buildRootRequestText(
+function formatCurrentLlmMessage(
+  message: TextMessage,
   text: string,
-  reply: LlmContextMessage | undefined,
+  replyContext: LlmContextMessage | undefined,
 ): string {
-  const replyContextText = buildReplyContextText(reply);
+  const senderName = getMessageSenderName(message, "User");
+  const replySenderName = getMessageSenderName(replyContext, "Unknown");
+  const content = getLlmMessageContent(message, text) ?? text;
+  const quoteText = getQuoteReplyContextText(message);
 
-  return replyContextText ? `${replyContextText}\n\nUser: ${text}` : text;
+  if (quoteText) {
+    return [
+      `${senderName} quoting ${replySenderName}:`,
+      `> ${JSON.stringify(quoteText)}`,
+      content,
+    ].join("\n");
+  }
+
+  if (replyContext) {
+    return `${senderName} replying to ${replySenderName}:\n${content}`;
+  }
+
+  return `${senderName}:\n${content}`;
 }
 
-function buildThreadRequest(text: string, quoteText?: string): string {
-  const quote = quoteText?.trim();
+function buildRootRequestMessages(
+  message: TextMessage,
+  text: string,
+  replyContext: LlmContextMessage | undefined,
+): Array<{
+  text: string;
+  message: LlmContextMessage | undefined;
+}> {
+  const currentMessageText = formatCurrentLlmMessage(
+    message,
+    text,
+    replyContext,
+  );
+  const quoteText = getQuoteReplyContextText(message);
+  const replyMessageText =
+    replyContext && !quoteText
+      ? formatRegularLlmMessage(replyContext)
+      : undefined;
 
-  return quote
-    ? `Replying to quote: ${JSON.stringify(quote)}\nUser: ${JSON.stringify(
-        text,
-      )}`
-    : text;
+  if (replyMessageText) {
+    return [
+      { text: replyMessageText, message: replyContext },
+      { text: currentMessageText, message },
+    ];
+  }
+
+  return [{ text: currentMessageText, message }];
+}
+
+function buildThreadRequest(
+  message: TextMessage,
+  text: string,
+  replyContext: LlmContextMessage | undefined,
+): string {
+  return formatCurrentLlmMessage(message, text, replyContext);
 }
 
 function getLlmToolContext(
@@ -400,10 +538,10 @@ async function downloadImageDataUrl(
 async function buildLlmRequestInput(
   ctx: Context,
   text: string,
-  messages: Array<LlmContextMessage | undefined>,
+  message: LlmContextMessage | undefined,
   signal?: AbortSignal,
-): Promise<LlmRequestInput> {
-  const attachments = messages.flatMap(getMessageImageAttachments);
+): Promise<LlmRequestMessageInput> {
+  const attachments = getMessageImageAttachments(message);
 
   if (attachments.length === 0) {
     return text;
@@ -417,6 +555,23 @@ async function buildLlmRequestInput(
       ),
     ),
   };
+}
+
+async function buildLlmRequestInputs(
+  ctx: Context,
+  messages: Array<{
+    text: string;
+    message: LlmContextMessage | undefined;
+  }>,
+  signal?: AbortSignal,
+): Promise<LlmRequestInput> {
+  const inputs = await Promise.all(
+    messages.map(({ text, message }) =>
+      buildLlmRequestInput(ctx, text, message, signal),
+    ),
+  );
+
+  return inputs.length === 1 ? inputs[0] : inputs;
 }
 
 async function submitTypingAction(ctx: Context): Promise<void> {
@@ -1187,7 +1342,6 @@ async function handleChatRequest(
       (!explicitAgent || explicitAgent.id === threadAgent.id)
         ? thread.response_id
         : undefined;
-    const promptText = buildLlmMessageText(message, text);
     const toolContext = getLlmToolContext(chatId, message);
     const slowResponseReaction = createSlowResponseReactionTracker(ctx);
     const llmResponse = await (async () => {
@@ -1207,13 +1361,8 @@ async function handleChatRequest(
           if (responseId) {
             const request = await buildLlmRequestInput(
               ctx,
-              buildThreadRequest(
-                promptText,
-                startsWithCommandPrefix(message.quote?.text)
-                  ? undefined
-                  : message.quote?.text,
-              ),
-              [message],
+              buildThreadRequest(message, text, replyContext),
+              message,
               taskAbortController.signal,
             );
 
@@ -1227,10 +1376,9 @@ async function handleChatRequest(
             );
           }
 
-          const request = await buildLlmRequestInput(
+          const request = await buildLlmRequestInputs(
             ctx,
-            buildRootRequestText(promptText, replyContext),
-            [replyContext, message],
+            buildRootRequestMessages(message, text, replyContext),
             taskAbortController.signal,
           );
 

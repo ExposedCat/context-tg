@@ -102,12 +102,14 @@ export type LlmImageInput = {
   detail?: "low" | "high" | "auto" | "original";
 };
 
-export type LlmRequestInput =
+export type LlmRequestMessageInput =
   | string
   | {
       text: string;
       images?: LlmImageInput[];
     };
+
+export type LlmRequestInput = LlmRequestMessageInput | LlmRequestMessageInput[];
 
 export type LlmCitation = {
   start_index: number;
@@ -405,28 +407,32 @@ function getToolCallCount(response: ApiResponse): number {
   );
 }
 
-function createInputMessage(request: LlmRequestInput): LlmApiInput {
+function createInputMessage(
+  request: LlmRequestMessageInput,
+): ChatCompletionMessageParam {
   if (typeof request === "string") {
-    return [{ role: "user", content: request }];
+    return { role: "user", content: request };
   }
 
   const images = request.images ?? [];
   if (images.length === 0) {
-    return [{ role: "user", content: request.text }];
+    return { role: "user", content: request.text };
   }
 
-  return [
-    {
-      role: "user",
-      content: [
-        {
-          type: "text",
-          text: request.text.trim() || "Please respond to the attached image.",
-        },
-        ...images.map(createImageContentPart),
-      ],
-    },
-  ];
+  return {
+    role: "user",
+    content: [
+      {
+        type: "text",
+        text: request.text.trim() || "Please respond to the attached image.",
+      },
+      ...images.map(createImageContentPart),
+    ],
+  };
+}
+
+function createInputMessages(request: LlmRequestInput): LlmApiInput {
+  return (Array.isArray(request) ? request : [request]).map(createInputMessage);
 }
 
 function getFunctionToolCalls(response: ApiResponse): FunctionToolCall[] {
@@ -1137,7 +1143,7 @@ async function requestLlmWithInstructions(
   };
   const initialResponse = await createLlmResponseWithRetries(
     client,
-    createInputMessage(request),
+    createInputMessages(request),
     tools,
     responseId ?? undefined,
     state,
