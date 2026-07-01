@@ -307,13 +307,19 @@ function withToolAvailabilityInstructions(
   settings: LlmRuntimeSettings,
 ): string {
   const exposedTools = getExposedTools(tools, settings);
-  const toolList = exposedTools.length > 0 ? exposedTools.join(", ") : "none";
+  const functionTools = exposedTools.filter((tool) => tool !== "web_search");
+  const functionToolList =
+    functionTools.length > 0 ? functionTools.join(", ") : "none";
+  const webSearchInstructions = exposedTools.includes("web_search")
+    ? "Built-in web search is enabled for current web facts, source links, and verification. In Chat Completions it is not a callable function tool named web_search, so do not say you cannot search the web just because no web_search function appears in the callable tool list. Use web search naturally when current information is needed."
+    : "Built-in web search is disabled. If current web facts are needed, say briefly that web search is unavailable.";
 
   return `${instructions}
 
 # Available Runtime Tools
-The tool interface currently exposes exactly these tools: ${toolList}.
-Only call tools that are exposed through the tool interface. If a tool is not exposed here, do not write its name, JSON arguments, or pseudo tool call syntax in a normal response; explain briefly that the tool is unavailable.`;
+The callable function tool interface currently exposes exactly these tools: ${functionToolList}.
+Only call function tools that are exposed through the callable function tool interface. If a function tool is not exposed here, do not write its name, JSON arguments, or pseudo tool call syntax in a normal response; explain briefly that the tool is unavailable.
+${webSearchInstructions}`;
 }
 
 function isFunctionToolName(tool: string): tool is FunctionToolName {

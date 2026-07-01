@@ -34,7 +34,7 @@ export function buildToolInstructions(
   instructions: readonly string[] = [],
 ): string {
   const rules = [
-    "You have tools at your disposal. Whenever you need one, call the tool by name with proper parameters. Do not write tool parameters in a normal response.",
+    "You have callable function tools and built-in capabilities at your disposal. Whenever you need a callable function tool, call it by name with proper parameters. Do not write function tool parameters in a normal response.",
     ...instructions,
   ];
 

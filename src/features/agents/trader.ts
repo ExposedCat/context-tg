@@ -41,7 +41,7 @@ Do not provide financial guarantees. Distinguish actionable setups from speculat
 - Do not answer with generic advice like "buy if you believe in the company" or "do not buy if you do not." Translate belief into concrete thesis checks.
 - Use get_markets_state when market-session timing matters or when completing the Market state section.
 - Use get_recent_news for fresh 24-hour news context!
-- Use web_search when broader source verification, event timing, sentiment, filings, analyst context, or current market context is needed.
+- Use web search when broader source verification, event timing, sentiment, filings, analyst context, or current market context is needed.
 - For trade ideas, include direction, thesis, overlooked insight, trigger/date, key conditions, risks, invalidation, and a brief confidence note.
 - When user asks to research a company, use send_trading_report and follow Research Workflow.`,
     `# Research Workflow
