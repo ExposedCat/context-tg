@@ -185,6 +185,8 @@ const logError = createDebug("app:llm:error");
 const MAX_LLM_RETRIES = 3;
 const LLM_RATE_LIMIT_RETRY_DELAY_MS = 3000;
 const LLM_RATE_LIMIT_MAX_RETRIES = 5;
+const MAX_FUNCTION_TOOL_ROUNDS = 4;
+
 type LlmRequestState = {
   lastResponseId?: string;
   messages: ChatCompletionMessageParam[];
@@ -679,6 +681,17 @@ function createInterruptedToolOutput(
   };
 }
 
+function createSkippedToolOutput(
+  call: FunctionToolCall,
+): ChatCompletionToolMessageParam {
+  return {
+    role: "tool",
+    tool_call_id: call.id,
+    content:
+      "Tool execution was skipped because the maximum tool round limit was reached. Produce the final answer from the available context and mention any important missing data.",
+  };
+}
+
 function closePendingToolCalls(
   messages: ChatCompletionMessageParam[],
 ): ChatCompletionMessageParam[] {
@@ -807,6 +820,38 @@ async function recordChatResponse(
   );
 
   return responseId;
+}
+
+async function createFinalTextResponse(
+  client: OpenAI,
+  response: ApiResponse,
+  options: LlmRequestOptions,
+  state: LlmRequestState,
+  model: AgentModel,
+  instructions: string,
+  settings: LlmRuntimeSettings,
+): Promise<ApiResponse> {
+  const unresolvedFunctionCalls = getFunctionToolCalls(response);
+
+  if (unresolvedFunctionCalls.length === 0 || getResponseText(response)) {
+    return response;
+  }
+
+  logDebug("Forcing final text response after unresolved tool calls", {
+    response: formatResponseSummary(response),
+  });
+
+  return await createLlmResponseWithRetries(
+    client,
+    unresolvedFunctionCalls.map(createSkippedToolOutput),
+    [],
+    state.lastResponseId,
+    state,
+    options,
+    model,
+    instructions,
+    settings,
+  );
 }
 
 async function createLlmResponse(
@@ -994,7 +1039,7 @@ async function resolveFunctionToolCalls(
     responseId: state.lastResponseId,
   });
 
-  for (let index = 0; index < 4; index += 1) {
+  for (let index = 0; index < MAX_FUNCTION_TOOL_ROUNDS; index += 1) {
     const functionCalls = getFunctionToolCalls(response);
 
     if (functionCalls.length === 0) {
@@ -1044,6 +1089,21 @@ async function resolveFunctionToolCalls(
       calledTools.add(tool);
     }
   }
+
+  response = await createFinalTextResponse(
+    client,
+    response,
+    options,
+    state,
+    model,
+    instructions,
+    settings,
+  );
+
+  await options.onProgress?.({
+    toolCallCount,
+    responseId: state.lastResponseId,
+  });
 
   return {
     response,
