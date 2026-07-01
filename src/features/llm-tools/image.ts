@@ -19,7 +19,7 @@ export const toolDefinition = {
   type: "function",
   name: "generate_image",
   description:
-    "Generate one image from a text prompt. Use this when the user asks to create, draw, render, or visualize an image. After using it, respond with a short caption or note that the image is attached.",
+    "Generate one image from a text prompt. Never use proactively. Use this only when the user explicitly asks to create, draw, render, or visualize an image. After using it, respond with a short caption or note that the image is attached.",
   parameters: {
     type: "object",
     properties: {
