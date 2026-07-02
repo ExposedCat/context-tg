@@ -49,6 +49,7 @@ export type { LlmGeneratedImage, LlmToolContext } from "./llm-tools/types.ts";
 
 export const TOOL_DEFINITIONS = {
   web_search: webSearchTool.toolDefinition,
+  read_web_page: webSearchTool.readPageToolDefinition,
   get_markets_state: marketTool.toolDefinition,
   search_chat: searchChatToolDefinition,
   read_last_messages: readLastMessagesToolDefinition,
@@ -66,6 +67,7 @@ export type ToolName = keyof typeof TOOL_DEFINITIONS;
 
 const FUNCTION_TOOL_RUNNERS = {
   web_search: webSearchTool.execute,
+  read_web_page: webSearchTool.executeReadPage,
   get_markets_state: marketTool.execute,
   search_chat: executeSearchChat,
   read_last_messages: executeReadLastMessages,
@@ -244,7 +246,7 @@ function getExposedTools(
   settings: LlmRuntimeSettings,
 ): ToolName[] {
   return tools.filter((tool) => {
-    if (tool === "web_search") {
+    if (tool === "web_search" || tool === "read_web_page") {
       return isWebSearchEnabled(settings.webSearch);
     }
 
@@ -292,8 +294,8 @@ function withToolAvailabilityInstructions(
   const functionToolList =
     exposedTools.length > 0 ? exposedTools.join(", ") : "none";
   const webSearchInstructions = exposedTools.includes("web_search")
-    ? "The callable web_search function is enabled for current web facts, source links, and verification. Use it naturally when current information is needed."
-    : "Web search is disabled. If current web facts are needed, say briefly that web search is unavailable.";
+    ? "The callable web_search and read_web_page functions are enabled for current web facts, source links, and verification. Use them naturally when current information is needed."
+    : "Web search and page reading are disabled. If current web facts are needed, say briefly that web search is unavailable.";
 
   return `${instructions}
 

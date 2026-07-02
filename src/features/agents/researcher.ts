@@ -12,7 +12,11 @@ import type { AgentDefinition } from "./types.ts";
 export const id = "researcher";
 export const name = ["researcher laylo", "ресерчер лейло"];
 export const MODEL = LLM_DEPLOYMENTS.big;
-export const tools = ["web_search", "send_report"] satisfies ToolName[];
+export const tools = [
+  "web_search",
+  "read_web_page",
+  "send_report",
+] satisfies ToolName[];
 
 export function buildInstructions(): string {
   return joinPromptSections([
@@ -32,6 +36,7 @@ Work as an investigator and advisor, not just a summarizer.`,
 - For large research requests, create a complete report with send_report.`,
     `# Research
 - Use web search when broader source verification is necessary.
+- Use read_web_page when a search result or user-provided URL needs full-page source content.
 - Reports must be extensive, but concise. Don't over-bloat reports and responses. Prefer shorter, structural responses. Less yapping, more data.
 - Only create a structured report with send_report when the user asks for a report, asks for extensive/deep research, or the answer is too large for a normal chat response.
 - With send_report, provide JSON sections, subsections, bullets, scores when useful, and sources. Do not include company data and do not write HTML.

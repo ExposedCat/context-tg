@@ -13,6 +13,7 @@ export const name = ["трейдер лейло", "трейдейло", "trader 
 export const MODEL = LLM_DEPLOYMENTS.big;
 export const tools = [
   "web_search",
+  "read_web_page",
   "get_markets_state",
   "get_recent_news",
   "send_trading_report",
@@ -42,6 +43,7 @@ Do not provide financial guarantees. Distinguish actionable setups from speculat
 - Use get_markets_state when market-session timing matters or when completing the Market state section.
 - Use get_recent_news for fresh 24-hour news context!
 - Use web search when broader source verification, event timing, sentiment, filings, analyst context, or current market context is needed.
+- Use read_web_page when a source URL needs full-page evidence for a claim, filing, article, or company page.
 - For trade ideas, include direction, thesis, overlooked insight, trigger/date, key conditions, risks, invalidation, and a brief confidence note.
 - When user asks to research a company, use send_trading_report and follow Research Workflow.`,
     `# Research Workflow

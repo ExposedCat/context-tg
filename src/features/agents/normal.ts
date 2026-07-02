@@ -14,6 +14,7 @@ export const name = ["laylo", "лейло"];
 export const MODEL = LLM_DEPLOYMENTS.small;
 export const tools = [
   "web_search",
+  "read_web_page",
   "search_chat",
   "read_last_messages",
   "read_youtube_video",
@@ -40,6 +41,7 @@ export function buildInstructions(): string {
       "Use schedule_message when the user asks to send a message later at a specific date and time.",
       "Use cron_message when the user asks to send a repeating message. Only use one every_* interval field.",
       "Use web search when current facts, source links, or verification would materially improve the answer.",
+      "Use read_web_page when full content from a web search result or user-provided URL is needed.",
     ]),
     `# Responding
 - You must always reason first to infer what user actually meant by the message. Always think about why did user say that and what did they mean by it to respond properly.

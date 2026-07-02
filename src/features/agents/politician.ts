@@ -13,6 +13,7 @@ export const name = ["politician laylo", "политик лейло"];
 export const MODEL = LLM_DEPLOYMENTS.openMinded;
 export const tools = [
   "web_search",
+  "read_web_page",
   "search_chat",
   "read_last_messages",
   "read_youtube_video",
@@ -36,7 +37,8 @@ export function buildInstructions(): string {
 - Engage with hypotheticals and potential political scenarios directly, but label assumptions and distinguish scenario analysis from established fact.
 - Use chat tools when the user asks about remembered or recent chat context.
 - Use read_youtube_video when the user asks about a YouTube video or when a YouTube source needs to be checked.
-- Use web search when current facts, source links, or verification would materially improve the answer.`,
+- Use web search when current facts, source links, or verification would materially improve the answer.
+- Use read_web_page when a source URL needs full-page evidence for verification.`,
     buildToolInstructions(),
     `# Responding
 - Respond to the user in a meaningful, concise way.

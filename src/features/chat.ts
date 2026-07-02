@@ -897,8 +897,9 @@ function formatMarkdownCitations(
 const TOOL_USAGE_EMOJIS: Partial<
   Record<ToolName, { id: string; fallback: string }>
 > = {
-  web_search: { id: "5879585266426973039", fallback: "🔎" },
-  search_chat: { id: "5891169510483823323", fallback: "💬" },
+  web_search: { id: "5879585266426973039", fallback: "🌐" },
+  read_web_page: { id: "5960551395730919906", fallback: "📝" },
+  search_chat: { id: "5874960879434338403", fallback: "🔎" },
   read_last_messages: { id: "5891169510483823323", fallback: "💬" },
   send_report: { id: "5877597667231534929", fallback: "📄" },
   send_trading_report: { id: "5877597667231534929", fallback: "📄" },

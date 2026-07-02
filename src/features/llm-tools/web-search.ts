@@ -4,7 +4,10 @@ import type { FunctionToolRunner } from "./types.ts";
 import { asRecord, getString } from "./utils.ts";
 
 const API_URL = "https://api.keenable.ai/v1/search";
+const FETCH_API_URL = "https://api.keenable.ai/v1/fetch";
 const REQUEST_TIMEOUT_MS = 5_000;
+const READ_WEB_PAGE_FAILED =
+  "This URL was not indexed to be read yet. Consider using web_search to find an indexed URL of same content.";
 
 const logError = createDebug("app:llm-tools:web-search:error");
 
@@ -22,6 +25,25 @@ export const toolDefinition = {
       },
     },
     required: ["query"],
+    additionalProperties: false,
+  },
+  strict: true,
+} as const;
+
+export const readPageToolDefinition = {
+  type: "function",
+  name: "read_web_page",
+  description:
+    "Read the text content of a web page by URL. Use this after web_search when a result's full page content is needed.",
+  parameters: {
+    type: "object",
+    properties: {
+      url: {
+        type: "string",
+        description: "The URL of the web page to read.",
+      },
+    },
+    required: ["url"],
     additionalProperties: false,
   },
   strict: true,
@@ -103,6 +125,60 @@ async function searchWeb(
   }
 }
 
+async function readWebPage(
+  pageUrl: string,
+  signal?: AbortSignal,
+): Promise<string> {
+  const apiUrl = new URL(FETCH_API_URL);
+  apiUrl.searchParams.set("url", pageUrl);
+
+  const controller = new AbortController();
+  const abort = () => controller.abort();
+  const timeoutId = setTimeout(abort, REQUEST_TIMEOUT_MS);
+
+  if (signal?.aborted) {
+    abort();
+  } else {
+    signal?.addEventListener("abort", abort, { once: true });
+  }
+
+  try {
+    const response = await fetch(apiUrl, {
+      headers: {
+        "X-API-Key": APP_ENV.KEENABLE_API_KEY,
+        Accept: "application/json",
+      },
+      signal: controller.signal,
+    });
+    const text = await response.text();
+
+    if (!response.ok) {
+      throw new Error(`Keenable fetch returned HTTP ${response.status}`);
+    }
+
+    let payload: unknown;
+
+    try {
+      payload = text ? JSON.parse(text) : null;
+    } catch {
+      throw new Error(
+        `Keenable fetch returned non-JSON response: ${text.slice(0, 200)}`,
+      );
+    }
+
+    const content = getString(asRecord(payload)?.content);
+
+    if (!content) {
+      throw new Error("Keenable fetch response did not include content.");
+    }
+
+    return content;
+  } finally {
+    clearTimeout(timeoutId);
+    signal?.removeEventListener("abort", abort);
+  }
+}
+
 export const execute: FunctionToolRunner = async (args, _context, options) => {
   const query = getString(args?.query);
 
@@ -120,5 +196,28 @@ export const execute: FunctionToolRunner = async (args, _context, options) => {
 
     logError("Failed to search web", { query, error });
     return JSON.stringify([], null, 2);
+  }
+};
+
+export const executeReadPage: FunctionToolRunner = async (
+  args,
+  _context,
+  options,
+) => {
+  const url = getString(args?.url);
+
+  if (!url) {
+    return READ_WEB_PAGE_FAILED;
+  }
+
+  try {
+    return await readWebPage(url, options?.signal);
+  } catch (error) {
+    if (options?.signal?.aborted) {
+      throw error;
+    }
+
+    logError("Failed to read web page", { url, error });
+    return READ_WEB_PAGE_FAILED;
   }
 };
