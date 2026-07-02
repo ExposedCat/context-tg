@@ -5,7 +5,8 @@ import { asRecord, getString } from "./utils.ts";
 
 const API_URL = "https://api.keenable.ai/v1/search";
 const FETCH_API_URL = "https://api.keenable.ai/v1/fetch";
-const REQUEST_TIMEOUT_MS = 5_000;
+const SEARCH_REQUEST_TIMEOUT_MS = 20_000;
+const FETCH_REQUEST_TIMEOUT_MS = 30_000;
 const READ_WEB_PAGE_FAILED =
   "This URL was not indexed to be read yet. Consider using web_search to find an indexed URL of same content.";
 
@@ -69,13 +70,17 @@ function getSearchResults(payload: unknown): Record<string, unknown>[] {
   });
 }
 
+function isAbortError(error: unknown): boolean {
+  return error instanceof Error && error.name === "AbortError";
+}
+
 async function searchWeb(
   query: string,
   signal?: AbortSignal,
 ): Promise<Record<string, unknown>[]> {
   const controller = new AbortController();
   const abort = () => controller.abort();
-  const timeoutId = setTimeout(abort, REQUEST_TIMEOUT_MS);
+  const timeoutId = setTimeout(abort, SEARCH_REQUEST_TIMEOUT_MS);
 
   if (signal?.aborted) {
     abort();
@@ -134,7 +139,7 @@ async function readWebPage(
 
   const controller = new AbortController();
   const abort = () => controller.abort();
-  const timeoutId = setTimeout(abort, REQUEST_TIMEOUT_MS);
+  const timeoutId = setTimeout(abort, FETCH_REQUEST_TIMEOUT_MS);
 
   if (signal?.aborted) {
     abort();
@@ -194,6 +199,10 @@ export const execute: FunctionToolRunner = async (args, _context, options) => {
       throw error;
     }
 
+    if (isAbortError(error)) {
+      return JSON.stringify([], null, 2);
+    }
+
     logError("Failed to search web", { query, error });
     return JSON.stringify([], null, 2);
   }
@@ -215,6 +224,10 @@ export const executeReadPage: FunctionToolRunner = async (
   } catch (error) {
     if (options?.signal?.aborted) {
       throw error;
+    }
+
+    if (isAbortError(error)) {
+      return READ_WEB_PAGE_FAILED;
     }
 
     logError("Failed to read web page", { url, error });
