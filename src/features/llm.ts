@@ -48,6 +48,7 @@ export type { LlmReport } from "./llm-tools/reports.ts";
 export type { LlmGeneratedImage, LlmToolContext } from "./llm-tools/types.ts";
 
 export const TOOL_DEFINITIONS = {
+  web_search: webSearchTool.toolDefinition,
   get_markets_state: marketTool.toolDefinition,
   search_chat: searchChatToolDefinition,
   read_last_messages: readLastMessagesToolDefinition,
@@ -61,9 +62,10 @@ export const TOOL_DEFINITIONS = {
   cron_message: scheduleTool.cronMessageToolDefinition,
 } as const;
 
-export type ToolName = "web_search" | keyof typeof TOOL_DEFINITIONS;
+export type ToolName = keyof typeof TOOL_DEFINITIONS;
 
 const FUNCTION_TOOL_RUNNERS = {
+  web_search: webSearchTool.execute,
   get_markets_state: marketTool.execute,
   search_chat: executeSearchChat,
   read_last_messages: executeReadLastMessages,
@@ -79,10 +81,7 @@ const FUNCTION_TOOL_RUNNERS = {
 
 type FunctionToolName = keyof typeof FUNCTION_TOOL_RUNNERS;
 
-export const DEFAULT_LLM_TOOLS = [
-  "web_search",
-  ...Object.keys(TOOL_DEFINITIONS),
-] as ToolName[];
+export const DEFAULT_LLM_TOOLS = Object.keys(TOOL_DEFINITIONS) as ToolName[];
 
 export type LlmProgress = {
   toolCallCount: number;
@@ -148,8 +147,6 @@ type ChatCompletionMessageToolCall = OpenAI.Chat.ChatCompletionMessageToolCall;
 type ChatCompletionTool = OpenAI.Chat.ChatCompletionTool;
 type ChatCompletionToolMessageParam =
   OpenAI.Chat.ChatCompletionToolMessageParam;
-type ChatWebSearchOptions =
-  OpenAI.Chat.ChatCompletionCreateParams.WebSearchOptions;
 type ChatUrlCitationAnnotation = {
   url_citation: {
     start_index: number;
@@ -266,10 +263,6 @@ function getToolDefinitions(
   const definitions: ChatCompletionTool[] = [];
 
   for (const tool of getExposedTools(tools, settings)) {
-    if (tool === "web_search") {
-      continue;
-    }
-
     definitions.push(createChatFunctionToolDefinition(TOOL_DEFINITIONS[tool]));
   }
 
@@ -290,33 +283,17 @@ function createChatFunctionToolDefinition(
   };
 }
 
-function getWebSearchOptions(
-  tools: ToolName[],
-  settings: LlmRuntimeSettings,
-): ChatWebSearchOptions | undefined {
-  if (!getExposedTools(tools, settings).includes("web_search")) {
-    return undefined;
-  }
-
-  const definition = webSearchTool.createToolDefinition(settings.webSearch);
-
-  return {
-    search_context_size: definition.search_context_size,
-  };
-}
-
 function withToolAvailabilityInstructions(
   instructions: string,
   tools: ToolName[],
   settings: LlmRuntimeSettings,
 ): string {
   const exposedTools = getExposedTools(tools, settings);
-  const functionTools = exposedTools.filter((tool) => tool !== "web_search");
   const functionToolList =
-    functionTools.length > 0 ? functionTools.join(", ") : "none";
+    exposedTools.length > 0 ? exposedTools.join(", ") : "none";
   const webSearchInstructions = exposedTools.includes("web_search")
-    ? "Built-in web search is enabled for current web facts, source links, and verification. In Chat Completions it is not a callable function tool named web_search, so do not say you cannot search the web just because no web_search function appears in the callable tool list. Use web search naturally when current information is needed."
-    : "Built-in web search is disabled. If current web facts are needed, say briefly that web search is unavailable.";
+    ? "The callable web_search function is enabled for current web facts, source links, and verification. Use it naturally when current information is needed."
+    : "Web search is disabled. If current web facts are needed, say briefly that web search is unavailable.";
 
   return `${instructions}
 
@@ -875,7 +852,6 @@ async function createLlmResponse(
 ): Promise<ApiResponse> {
   throwIfAborted(signal);
   const toolDefinitions = getToolDefinitions(tools, settings);
-  const webSearchOptions = getWebSearchOptions(tools, settings);
 
   return await client.chat.completions.create(
     {
@@ -895,7 +871,6 @@ async function createLlmResponse(
       // temperature: APP_ENV.LLM_TEMPERATURE,
       tools: toolDefinitions.length > 0 ? toolDefinitions : undefined,
       tool_choice: toolDefinitions.length > 0 ? "auto" : undefined,
-      web_search_options: webSearchOptions,
       ...(model.withReasoning && settings.reasoning !== null
         ? { reasoning_effort: settings.reasoning }
         : {}),
