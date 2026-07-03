@@ -17,8 +17,8 @@ export const tools = [
   "search_chat",
   "read_last_messages",
   "read_youtube_video",
-  "save_memo",
-  "forget_memo",
+  "remember",
+  "forget",
 ] satisfies ToolName[];
 
 export function buildInstructions(): string {

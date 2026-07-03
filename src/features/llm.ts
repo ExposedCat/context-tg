@@ -63,8 +63,8 @@ export const TOOL_DEFINITIONS = {
   call_agent: agentTool.toolDefinition,
   schedule_message: scheduleTool.scheduleMessageToolDefinition,
   cron_message: scheduleTool.cronMessageToolDefinition,
-  save_memo: memoTool.saveMemoToolDefinition,
-  forget_memo: memoTool.forgetMemoToolDefinition,
+  remember: memoTool.saveMemoToolDefinition,
+  forget: memoTool.forgetMemoToolDefinition,
 } as const;
 
 export type ToolName = keyof typeof TOOL_DEFINITIONS;
@@ -83,8 +83,8 @@ const FUNCTION_TOOL_RUNNERS = {
   call_agent: agentTool.createRunner(runAgent),
   schedule_message: scheduleTool.executeScheduleMessage,
   cron_message: scheduleTool.executeCronMessage,
-  save_memo: memoTool.executeSaveMemo,
-  forget_memo: memoTool.executeForgetMemo,
+  remember: memoTool.executeSaveMemo,
+  forget: memoTool.executeForgetMemo,
 } satisfies Record<string, FunctionToolRunner>;
 
 type FunctionToolName = keyof typeof FUNCTION_TOOL_RUNNERS;

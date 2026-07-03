@@ -14,15 +14,15 @@ import {
 
 export const saveMemoToolDefinition = {
   type: "function",
-  name: "save_memo",
+  name: "remember",
   description:
-    "Save a short-term memory memo for the current Telegram chat and current agent. Use this when the user explicitly asks this agent to remember something, or when a short-lived chat fact or preference will be useful to this agent later. Memos expire after 24 hours.",
+    "Remember a long-term memo about something that is useful to always know cross-dialog. Only you see memos, so use it as own memory in your brain. Always use this to remember long-term facts when asked or when you think of something long-term important to remember.",
   parameters: {
     type: "object",
     properties: {
       memo: {
         type: "string",
-        description: "The concise memo text to remember for up to 24 hours.",
+        description: "The concise memo text to remember long-term.",
       },
     },
     required: ["memo"],
@@ -33,9 +33,9 @@ export const saveMemoToolDefinition = {
 
 export const forgetMemoToolDefinition = {
   type: "function",
-  name: "forget_memo",
+  name: "forget",
   description:
-    "Remove one of the current agent's short-term memory memos from the current Telegram chat by its stable numeric id from the # Memos metadata section.",
+    "Forget one of your current memories from your head. Use ID from the # Memos metadata section.",
   parameters: {
     type: "object",
     properties: {

@@ -173,8 +173,8 @@ const PROACTIVE_DISABLED_TOOLS = new Set<ToolName>([
   "generate_image",
   "schedule_message",
   "cron_message",
-  "save_memo",
-  "forget_memo",
+  "remember",
+  "forget",
 ]);
 const UNSUPPORTED_CAPTIONED_MEDIA_TYPES = [
   { key: "animation", label: "animation" },

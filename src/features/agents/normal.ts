@@ -21,8 +21,8 @@ export const tools = [
   "generate_image",
   "schedule_message",
   "cron_message",
-  "save_memo",
-  "forget_memo",
+  "remember",
+  "forget",
 ] satisfies ToolName[];
 
 export function buildInstructions(): string {
@@ -42,7 +42,7 @@ export function buildInstructions(): string {
       "Use chat tools when the user asks about remembered or recent chat context.",
       "Use schedule_message when the user asks to send a message later at a specific date and time.",
       "Use cron_message when the user asks to send a repeating message. Only use one every_* interval field.",
-      "Use save_memo when the user asks you to remember something short-term, and forget_memo when they ask you to remove a memo.",
+      "Use remember when the user asks you to remember something short-term, and forget when they ask you to remove a memo.",
       "Use web search when current facts, source links, or verification would materially improve the answer.",
       "Use read_web_page when full content from a web search result or user-provided URL is needed.",
     ]),

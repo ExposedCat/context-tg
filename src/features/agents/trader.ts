@@ -17,8 +17,8 @@ export const tools = [
   "get_markets_state",
   "get_recent_news",
   "send_trading_report",
-  "save_memo",
-  "forget_memo",
+  "remember",
+  "forget",
 ] satisfies ToolName[];
 
 export function buildInstructions(): string {

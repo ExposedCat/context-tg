@@ -22,8 +22,8 @@ export const tools = [
   "search_chat",
   "read_last_messages",
   "generate_image",
-  "save_memo",
-  "forget_memo",
+  "remember",
+  "forget",
 ] satisfies ToolName[];
 
 export function buildInstructions(): string {
