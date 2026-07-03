@@ -13,6 +13,7 @@ import {
   loadLlmSettings,
   migrateLlmSettings,
 } from "./llm-models.ts";
+import { type MemosTable, migrateMemos } from "./memos.ts";
 import {
   type CronMessagesTable,
   migrateSchedules,
@@ -39,6 +40,7 @@ export type DatabaseSchema = {
   chat_usage: ChatUsageTable;
   chat_trolling: ChatTrollingTable;
   emoji_packs: EmojiPacksTable;
+  memos: MemosTable;
 };
 
 export type Database = Kysely<DatabaseSchema>;
@@ -80,6 +82,7 @@ export function initDatabase() {
     await migrateUsage(database);
     await migrateTrolling(database);
     await migrateEmojiPacks(database);
+    await migrateMemos(database);
     await loadLlmSettings(database);
 
     return database;

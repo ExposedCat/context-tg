@@ -139,6 +139,7 @@ export async function maybeSendPeriodicTroll(
         messageId: message.message_id,
         threadId: message.message_thread_id,
       },
+      agentId: trollAgent.id,
     },
     trollAgent.buildInstructions(),
     trollAgent.MODEL,

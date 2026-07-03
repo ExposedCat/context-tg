@@ -1351,6 +1351,7 @@ async function handleChatRequest(
           const requestOptions: LlmRequestOptions = {
             database: ctx.database,
             context: toolContext,
+            agentId: agent.id,
             onProgress: async (progress) => {
               progressResponseId = progress.responseId ?? progressResponseId;
             },

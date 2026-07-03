@@ -16,6 +16,8 @@ export const tools = [
   "web_search",
   "read_web_page",
   "send_report",
+  "save_memo",
+  "forget_memo",
 ] satisfies ToolName[];
 
 export function buildInstructions(): string {

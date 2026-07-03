@@ -32,5 +32,6 @@ export type FunctionToolRunner = (
   options?: {
     signal?: AbortSignal;
     database?: Database;
+    agentId?: AgentId;
   },
 ) => FunctionToolResult | string | Promise<FunctionToolResult | string>;

@@ -32,6 +32,7 @@ import {
 import * as gdeltTool from "./llm-tools/gdelt.ts";
 import * as imageTool from "./llm-tools/image.ts";
 import * as marketTool from "./llm-tools/market.ts";
+import * as memoTool from "./llm-tools/memos.ts";
 import type { LlmReport } from "./llm-tools/reports.ts";
 import * as reportsTool from "./llm-tools/reports.ts";
 import * as scheduleTool from "./llm-tools/schedule.ts";
@@ -43,6 +44,7 @@ import type {
 } from "./llm-tools/types.ts";
 import * as webSearchTool from "./llm-tools/web-search.ts";
 import * as youtubeTool from "./llm-tools/youtube.ts";
+import { buildMemosMetadataSection } from "./memos.ts";
 
 export type { LlmReport } from "./llm-tools/reports.ts";
 export type { LlmGeneratedImage, LlmToolContext } from "./llm-tools/types.ts";
@@ -61,6 +63,8 @@ export const TOOL_DEFINITIONS = {
   call_agent: agentTool.toolDefinition,
   schedule_message: scheduleTool.scheduleMessageToolDefinition,
   cron_message: scheduleTool.cronMessageToolDefinition,
+  save_memo: memoTool.saveMemoToolDefinition,
+  forget_memo: memoTool.forgetMemoToolDefinition,
 } as const;
 
 export type ToolName = keyof typeof TOOL_DEFINITIONS;
@@ -79,6 +83,8 @@ const FUNCTION_TOOL_RUNNERS = {
   call_agent: agentTool.createRunner(runAgent),
   schedule_message: scheduleTool.executeScheduleMessage,
   cron_message: scheduleTool.executeCronMessage,
+  save_memo: memoTool.executeSaveMemo,
+  forget_memo: memoTool.executeForgetMemo,
 } satisfies Record<string, FunctionToolRunner>;
 
 type FunctionToolName = keyof typeof FUNCTION_TOOL_RUNNERS;
@@ -93,6 +99,7 @@ export type LlmProgress = {
 export type LlmRequestOptions = {
   database?: Database;
   context?: LlmToolContext;
+  agentId?: AgentId;
   onProgress?: (progress: LlmProgress) => void | Promise<void>;
   onWarning?: (details: string) => void | Promise<void>;
   signal?: AbortSignal;
@@ -200,6 +207,26 @@ type LlmRequestState = {
 
 function getSystemInstructions(): string {
   return normalAgent.buildInstructions();
+}
+
+async function withMemoMetadata(
+  instructions: string,
+  options: LlmRequestOptions,
+): Promise<string> {
+  const database = options.database;
+  const chatId = options.context?.chatId;
+
+  if (!database || chatId === undefined) {
+    return instructions;
+  }
+
+  const memosSection = await buildMemosMetadataSection(
+    database,
+    chatId,
+    options.agentId ?? normalAgent.id,
+  );
+
+  return memosSection ? `${instructions}\n\n${memosSection}` : instructions;
 }
 
 function getClient(): OpenAI {
@@ -617,13 +644,14 @@ async function runFunctionToolCall(
   context?: LlmToolContext,
   database?: Database,
   signal?: AbortSignal,
+  agentId: AgentId = normalAgent.id,
 ): Promise<FunctionToolCallResult> {
   throwIfAborted(signal);
   const args = parseJsonObject(call.function.arguments);
   logDebug("Running tool call", formatToolCallLog(call));
   const runner = FUNCTION_TOOL_RUNNERS[call.function.name];
   const result = normalizeFunctionToolResult(
-    await runner(args, context, { signal, database }),
+    await runner(args, context, { signal, database, agentId }),
   );
   throwIfAborted(signal);
 
@@ -1037,6 +1065,7 @@ async function resolveFunctionToolCalls(
           options.context,
           options.database,
           options.signal,
+          options.agentId ?? normalAgent.id,
         ),
       ),
     );
@@ -1107,6 +1136,7 @@ async function requestLlmWithInstructions(
   logDebug("Sending request to LLM", { tools, responseId, model });
   const client = getClient();
   const settings = await resolveRuntimeSettings(model, options);
+  const runtimeInstructions = await withMemoMetadata(instructions, options);
   const previousMessages = await loadPreviousChatMessages(
     responseId ?? undefined,
     options,
@@ -1126,7 +1156,7 @@ async function requestLlmWithInstructions(
     state,
     options,
     model,
-    instructions,
+    runtimeInstructions,
     settings,
   );
 
@@ -1138,7 +1168,7 @@ async function requestLlmWithInstructions(
       options,
       state,
       model,
-      instructions,
+      runtimeInstructions,
       settings,
     );
   logDebug("Received response from LLM", formatResponseSummary(response));
@@ -1194,7 +1224,7 @@ async function runAgent(
     `Delegated task from ultimate agent:\n${task}\n\nReturn a concise result for the ultimate agent to synthesize.`,
     agent.tools,
     undefined,
-    { context, database, signal },
+    { context, database, signal, agentId: agent.id },
     agent.buildInstructions(),
     agent.MODEL,
   );
