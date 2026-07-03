@@ -18,12 +18,20 @@ type Sender = {
 export type ChatTrollingTable = {
   chat_id: number;
   message_count: number;
+  interval_message_count: number;
+  enabled: number;
+};
+
+export type TrollingSettings = {
+  enabled: boolean;
+  intervalMessageCount: number;
 };
 
 const logError = createDebug("app:trolling:error");
 
-const TROLLING_INTERVAL_MESSAGE_COUNT = 100;
+export const DEFAULT_TROLLING_INTERVAL_MESSAGE_COUNT = 100;
 const TROLLING_CONTEXT_MESSAGE_COUNT = 11;
+const TRIGGER_CHANCE = 0.25;
 
 export async function migrateTrolling(database: Database) {
   await database.schema
@@ -33,7 +41,33 @@ export async function migrateTrolling(database: Database) {
     .addColumn("message_count", "integer", (column) =>
       column.notNull().defaultTo(0),
     )
+    .addColumn("interval_message_count", "integer", (column) =>
+      column.notNull().defaultTo(DEFAULT_TROLLING_INTERVAL_MESSAGE_COUNT),
+    )
+    .addColumn("enabled", "integer", (column) => column.notNull().defaultTo(1))
     .execute();
+
+  try {
+    await database.schema
+      .alterTable("chat_trolling")
+      .addColumn("interval_message_count", "integer", (column) =>
+        column.notNull().defaultTo(DEFAULT_TROLLING_INTERVAL_MESSAGE_COUNT),
+      )
+      .execute();
+  } catch {
+    // Column already exists on fresh or previously migrated databases.
+  }
+
+  try {
+    await database.schema
+      .alterTable("chat_trolling")
+      .addColumn("enabled", "integer", (column) =>
+        column.notNull().defaultTo(1),
+      )
+      .execute();
+  } catch {
+    // Column already exists on fresh or previously migrated databases.
+  }
 }
 
 function formatSenderName(sender: Sender): string {
@@ -55,11 +89,16 @@ function formatContextMessage(message: MessageMetadata): string {
 async function incrementTrollingMessageCount(
   database: Database,
   chatId: number,
-): Promise<number> {
+): Promise<{ messageCount: number } & TrollingSettings> {
   return await database.transaction().execute(async (transaction) => {
     await transaction
       .insertInto("chat_trolling")
-      .values({ chat_id: chatId, message_count: 0 })
+      .values({
+        chat_id: chatId,
+        message_count: 0,
+        interval_message_count: DEFAULT_TROLLING_INTERVAL_MESSAGE_COUNT,
+        enabled: 1,
+      })
       .onConflict((conflict) => conflict.column("chat_id").doNothing())
       .execute();
 
@@ -71,17 +110,92 @@ async function incrementTrollingMessageCount(
 
     const row = await transaction
       .selectFrom("chat_trolling")
-      .select("message_count")
+      .select(["message_count", "interval_message_count", "enabled"])
       .where("chat_id", "=", chatId)
       .executeTakeFirst();
 
-    return row?.message_count ?? 0;
+    return {
+      messageCount: row?.message_count ?? 0,
+      enabled: row?.enabled !== 0,
+      intervalMessageCount:
+        row?.interval_message_count ?? DEFAULT_TROLLING_INTERVAL_MESSAGE_COUNT,
+    };
   });
 }
 
-function shouldTriggerTrolling(messageCount: number): boolean {
+export async function setTrollingInterval(
+  database: Database,
+  chatId: number,
+  intervalMessageCount: number,
+): Promise<void> {
+  await database
+    .insertInto("chat_trolling")
+    .values({
+      chat_id: chatId,
+      message_count: 0,
+      interval_message_count: intervalMessageCount,
+      enabled: 1,
+    })
+    .onConflict((conflict) =>
+      conflict.column("chat_id").doUpdateSet({
+        message_count: 0,
+        interval_message_count: intervalMessageCount,
+        enabled: 1,
+      }),
+    )
+    .execute();
+}
+
+export async function setTrollingEnabled(
+  database: Database,
+  chatId: number,
+  enabled: boolean,
+): Promise<void> {
+  await database
+    .insertInto("chat_trolling")
+    .values({
+      chat_id: chatId,
+      message_count: 0,
+      interval_message_count: DEFAULT_TROLLING_INTERVAL_MESSAGE_COUNT,
+      enabled: enabled ? 1 : 0,
+    })
+    .onConflict((conflict) =>
+      conflict.column("chat_id").doUpdateSet({
+        message_count: 0,
+        enabled: enabled ? 1 : 0,
+      }),
+    )
+    .execute();
+}
+
+export async function getTrollingSettings(
+  database: Database,
+  chatId: number,
+): Promise<TrollingSettings> {
+  const row = await database
+    .selectFrom("chat_trolling")
+    .select(["interval_message_count", "enabled"])
+    .where("chat_id", "=", chatId)
+    .executeTakeFirst();
+
+  return {
+    enabled: row?.enabled !== 0,
+    intervalMessageCount:
+      row?.interval_message_count ?? DEFAULT_TROLLING_INTERVAL_MESSAGE_COUNT,
+  };
+}
+
+function shouldTriggerTrolling(
+  messageCount: number,
+  enabled: boolean,
+  intervalMessageCount: number,
+): boolean {
   return (
-    messageCount > 0 && messageCount % TROLLING_INTERVAL_MESSAGE_COUNT === 0
+    enabled &&
+    messageCount > 0 &&
+    intervalMessageCount > 0 &&
+    messageCount % intervalMessageCount === 0 &&
+    Math.random() < TRIGGER_CHANCE
   );
 }
 
@@ -109,12 +223,10 @@ export async function maybeSendPeriodicTroll(
     return;
   }
 
-  const messageCount = await incrementTrollingMessageCount(
-    ctx.database,
-    chatId,
-  );
+  const { messageCount, enabled, intervalMessageCount } =
+    await incrementTrollingMessageCount(ctx.database, chatId);
 
-  if (!shouldTriggerTrolling(messageCount)) {
+  if (!shouldTriggerTrolling(messageCount, enabled, intervalMessageCount)) {
     return;
   }
 

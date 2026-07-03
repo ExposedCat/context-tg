@@ -14,6 +14,7 @@ import {
   stripMessageAgentName,
 } from "./agents/index.ts";
 import { APP_ENV } from "./env.ts";
+import { readLastMessages } from "./last-messages.ts";
 import {
   type LlmCitation,
   type LlmGeneratedImage,
@@ -28,7 +29,13 @@ import {
   requestLlm,
   type ToolName,
 } from "./llm.ts";
+import { formatMessageLine } from "./llm-tools/chat.ts";
 import { startsWithCommandPrefix } from "./message-filter.ts";
+import type { MessageMetadata } from "./messages.ts";
+import {
+  incrementProactiveResponseMessageCount,
+  shouldTriggerProactiveResponse,
+} from "./proactive.ts";
 import {
   completeTask,
   createTask,
@@ -73,6 +80,29 @@ type TextMessage = LlmContextMessage & {
     text: string;
   };
   reply_to_message?: TextMessage;
+  external_reply?: LlmContextMessage;
+};
+
+type ProactiveTriggerMessage = {
+  message_id: number;
+  message_thread_id?: number;
+  is_topic_message?: boolean;
+  text?: string;
+  caption?: string;
+  from?: TelegramUser;
+  sender_chat?: TelegramChat;
+  origin?: MessageOrigin;
+  quote?: {
+    text: string;
+  };
+  reply_to_message?: {
+    message_id: number;
+    message_thread_id?: number;
+    is_topic_message?: boolean;
+    from?: TelegramUser;
+    text?: string;
+    caption?: string;
+  };
   external_reply?: LlmContextMessage;
 };
 
@@ -137,6 +167,15 @@ export const chatComposer = new Composer<Context>();
 
 const TELEGRAM_RICH_MESSAGE_CHUNK_SIZE_BYTES = 30_000;
 const SLOW_RESPONSE_REACTION_DELAY_MS = 15_000;
+const PROACTIVE_CONTEXT_MESSAGE_COUNT = 10;
+const PROACTIVE_TASK_TEXT = "Proactive response";
+const PROACTIVE_DISABLED_TOOLS = new Set<ToolName>([
+  "generate_image",
+  "schedule_message",
+  "cron_message",
+  "save_memo",
+  "forget_memo",
+]);
 const UNSUPPORTED_CAPTIONED_MEDIA_TYPES = [
   { key: "animation", label: "animation" },
   { key: "audio", label: "audio" },
@@ -1258,9 +1297,14 @@ async function saveResumableTaskThread(
 type HandleChatRequestOptions = {
   reply?: TextMessage;
   replyContext?: LlmContextMessage;
+  requestMessages?: Array<{
+    text: string;
+    message: LlmContextMessage | undefined;
+  }>;
   thread?: Thread;
   threadId?: number;
   taskText?: string;
+  tools?: ToolName[];
   onUnhandledError?: () => Promise<void>;
 };
 
@@ -1323,9 +1367,10 @@ async function handleChatRequest(
     const threadAgent = getAgentById(thread?.agent_id) ?? normalAgent;
     const agent: AgentDefinition = explicitAgent ?? threadAgent;
     activeAgent = agent;
+    const requestedTools = options.tools ?? agent.tools;
     const toolUsage = await getUsageStatus(ctx.database, chatId, "tool_usages");
 
-    if (agent.tools.length > 0 && toolUsage.used >= toolUsage.quota) {
+    if (requestedTools.length > 0 && toolUsage.used >= toolUsage.quota) {
       throw new Error(formatQuotaExceededResponse("tool_usages", toolUsage));
     }
 
@@ -1334,7 +1379,7 @@ async function handleChatRequest(
       chatId,
       "image_responses",
     );
-    const agentTools = filterToolsForUsage(agent.tools, {
+    const agentTools = filterToolsForUsage(requestedTools, {
       toolUsageRemaining: toolUsage.used < toolUsage.quota,
       imageUsageRemaining,
     });
@@ -1380,7 +1425,8 @@ async function handleChatRequest(
 
           const request = await buildLlmRequestInputs(
             ctx,
-            buildRootRequestMessages(message, text, replyContext),
+            options.requestMessages ??
+              buildRootRequestMessages(message, text, replyContext),
             taskAbortController.signal,
           );
 
@@ -1545,6 +1591,92 @@ async function handleChatRequest(
         logError("Failed to finish task:", { error });
       }
     }
+  }
+}
+
+function getProactiveTools(): ToolName[] {
+  return normalAgent.tools.filter(
+    (tool) => !PROACTIVE_DISABLED_TOOLS.has(tool),
+  );
+}
+
+function buildProactiveRequest(messages: MessageMetadata[]): string {
+  return [
+    "Automatic internal trigger: you were called into the chat after the configured message interval.",
+    "Use the recent chat context below, equivalent to read_last_messages with count 10, and answer naturally as Laylo.",
+    "Do not mention the automatic trigger, counters, or tools. Keep it short and make one useful, funny, or context-aware contribution to the current conversation.",
+    "",
+    "Recent chat messages, oldest to newest:",
+    messages.map(formatMessageLine).join("\n"),
+  ].join("\n");
+}
+
+function shouldSkipProactiveAgentResponse(
+  ctx: Context,
+  message: TextMessage,
+): boolean {
+  const text = getMessageText(message);
+  const reply = getActualReply(message);
+
+  return (
+    !text ||
+    startsWithCommandPrefix(text) ||
+    isAddressed(text, ctx.me.username) ||
+    isDirectReplyToBot(reply, ctx.me.id)
+  );
+}
+
+export async function maybeSendProactiveAgentResponse(
+  ctx: Context,
+  message: ProactiveTriggerMessage,
+  chatId: number,
+): Promise<void> {
+  const textMessage = message as TextMessage;
+
+  if (shouldSkipProactiveAgentResponse(ctx, textMessage)) {
+    return;
+  }
+
+  const { messageCount, enabled, intervalMessageCount } =
+    await incrementProactiveResponseMessageCount(ctx.database, chatId);
+
+  if (
+    !shouldTriggerProactiveResponse(messageCount, enabled, intervalMessageCount)
+  ) {
+    return;
+  }
+
+  const reply = getActualReply(textMessage);
+  const threadId = getForumThreadId(textMessage, reply);
+  const messages = await readLastMessages(PROACTIVE_CONTEXT_MESSAGE_COUNT, {
+    chatId,
+    messageId: message.message_id,
+    threadId,
+  });
+
+  if (messages.length === 0) {
+    return;
+  }
+
+  await handleChatRequest(ctx, textMessage, PROACTIVE_TASK_TEXT, {
+    requestMessages: [
+      { text: buildProactiveRequest(messages), message: undefined },
+    ],
+    taskText: PROACTIVE_TASK_TEXT,
+    threadId,
+    tools: getProactiveTools(),
+  });
+}
+
+export async function safelyMaybeSendProactiveAgentResponse(
+  ctx: Context,
+  message: ProactiveTriggerMessage,
+  chatId: number,
+): Promise<void> {
+  try {
+    await maybeSendProactiveAgentResponse(ctx, message, chatId);
+  } catch (error) {
+    logError("Failed to send proactive agent response:", error);
   }
 }
 

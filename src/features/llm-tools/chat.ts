@@ -78,7 +78,7 @@ function parseCount(value: unknown): number {
   return Math.max(1, Math.min(MAX_LAST_MESSAGES_COUNT, Math.floor(count)));
 }
 
-function formatMessageLine(message: {
+export function formatMessageLine(message: {
   date: string;
   sender_name: string;
   text: string;

@@ -33,6 +33,11 @@ import {
 } from "./llm-models.ts";
 import { replyWithMemos, replyWithRemoveMemoById } from "./memos.ts";
 import {
+  getProactiveResponseSettings,
+  setProactiveResponseEnabled,
+  setProactiveResponseInterval,
+} from "./proactive.ts";
+import {
   replyWithCancelCronMessage,
   replyWithCancelCronMessageByNumber,
   replyWithCancelScheduledMessage,
@@ -40,6 +45,11 @@ import {
   replyWithSchedules,
 } from "./schedules.ts";
 import { replyWithCancelTask, replyWithRecentTasks } from "./tasks.ts";
+import {
+  getTrollingSettings,
+  setTrollingEnabled,
+  setTrollingInterval,
+} from "./trolling.ts";
 import {
   formatUsageSnapshot,
   getUsageDate,
@@ -63,12 +73,18 @@ const REASONING_OPTIONS = [
 
 const WEB_SEARCH_OPTIONS = ["off", "low", "medium", "high"] as const;
 const TROLLING_OPTIONS = ["off", "on"] as const;
+const MAX_RESPONSE_INTERVAL_MESSAGE_COUNT = 1_000_000;
 const CONFIGURE_KIND_LABELS = {
   reasoning: "Reasoning",
   websearch: "Web Search",
 } as const satisfies Record<ChatLlmSettingKey, string>;
 
 type ConfigureScope = "configure" | "global";
+type MessageIntervalSetting = number | "off";
+type MessageIntervalStatus = {
+  enabled: boolean;
+  intervalMessageCount: number;
+};
 
 type SettingsKeyboardButton = {
   text: string;
@@ -89,6 +105,42 @@ function getUsageCommandUsage(): string {
 function getModelCommandUsage(): string {
   const options = LLM_DEPLOYMENT_OPTIONS.map(({ id }) => id).join("|");
   return `Usage: /model ${options} DEPLOYMENT_NAME`;
+}
+
+function getIntervalCommandUsage(command: "/trolleach" | "/proactive"): string {
+  return `Usage: ${command} N|off, where N is a positive integer up to ${MAX_RESPONSE_INTERVAL_MESSAGE_COUNT}`;
+}
+
+function parseMessageIntervalSetting(
+  value: string | undefined,
+): MessageIntervalSetting | undefined {
+  const trimmed = value?.trim();
+
+  if (!trimmed) {
+    return undefined;
+  }
+
+  if (trimmed.toLocaleLowerCase() === "off") {
+    return "off";
+  }
+
+  if (!/^\d+$/.test(trimmed)) {
+    return undefined;
+  }
+
+  const interval = Number(trimmed);
+
+  return Number.isSafeInteger(interval) &&
+    interval >= 1 &&
+    interval <= MAX_RESPONSE_INTERVAL_MESSAGE_COUNT
+    ? interval
+    : undefined;
+}
+
+function formatMessageIntervalStatus(status: MessageIntervalStatus): string {
+  return status.enabled
+    ? `${status.intervalMessageCount}`
+    : `off (saved interval: ${status.intervalMessageCount})`;
 }
 
 function isAdmin(ctx: Context): boolean {
@@ -763,4 +815,65 @@ stateComposer.callbackQuery(/^trolling:(.+)$/, async (ctx) => {
 
   await ctx.answerCallbackQuery();
   await ctx.editMessageText(`Trolling was set to ${updatedSetting}.`);
+});
+
+stateComposer.hears(/^\/trolleach(?:@\w+)?(?:\s+(.+))?$/, async (ctx) => {
+  if (!isAdmin(ctx) || !ctx.chat) {
+    return;
+  }
+
+  const setting = parseMessageIntervalSetting(ctx.match[1]);
+
+  if (setting === undefined) {
+    const current = await getTrollingSettings(ctx.database, ctx.chat.id);
+    await ctx.reply(
+      `${getIntervalCommandUsage(
+        "/trolleach",
+      )}\nCurrent trolling interval: ${formatMessageIntervalStatus(current)}`,
+    );
+    return;
+  }
+
+  if (setting === "off") {
+    await setTrollingEnabled(ctx.database, ctx.chat.id, false);
+    await ctx.reply("Trolling disabled for this chat.");
+    return;
+  }
+
+  await setTrollingInterval(ctx.database, ctx.chat.id, setting);
+  await ctx.reply(
+    `Trolling interval set to ${setting} messages for this chat. It rolls a 25% chance at each interval.`,
+  );
+});
+
+stateComposer.hears(/^\/proactive(?:@\w+)?(?:\s+(.+))?$/, async (ctx) => {
+  if (!isAdmin(ctx) || !ctx.chat) {
+    return;
+  }
+
+  const setting = parseMessageIntervalSetting(ctx.match[1]);
+
+  if (setting === undefined) {
+    const current = await getProactiveResponseSettings(
+      ctx.database,
+      ctx.chat.id,
+    );
+    await ctx.reply(
+      `${getIntervalCommandUsage(
+        "/proactive",
+      )}\nCurrent proactive interval: ${formatMessageIntervalStatus(current)}`,
+    );
+    return;
+  }
+
+  if (setting === "off") {
+    await setProactiveResponseEnabled(ctx.database, ctx.chat.id, false);
+    await ctx.reply("Proactive responses disabled for this chat.");
+    return;
+  }
+
+  await setProactiveResponseInterval(ctx.database, ctx.chat.id, setting);
+  await ctx.reply(
+    `Proactive interval set to ${setting} messages for this chat. It rolls a 25% chance at each interval.`,
+  );
 });

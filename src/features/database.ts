@@ -15,6 +15,10 @@ import {
 } from "./llm-models.ts";
 import { type MemosTable, migrateMemos } from "./memos.ts";
 import {
+  type ChatProactiveResponsesTable,
+  migrateProactiveResponses,
+} from "./proactive.ts";
+import {
   type CronMessagesTable,
   migrateSchedules,
   type ScheduledMessagesTable,
@@ -38,6 +42,7 @@ export type DatabaseSchema = {
   cron_messages: CronMessagesTable;
   chat_usage_limits: ChatUsageLimitsTable;
   chat_usage: ChatUsageTable;
+  chat_proactive_responses: ChatProactiveResponsesTable;
   chat_trolling: ChatTrollingTable;
   emoji_packs: EmojiPacksTable;
   memos: MemosTable;
@@ -80,6 +85,7 @@ export function initDatabase() {
     await migrateTasks(database);
     await migrateSchedules(database);
     await migrateUsage(database);
+    await migrateProactiveResponses(database);
     await migrateTrolling(database);
     await migrateEmojiPacks(database);
     await migrateMemos(database);

@@ -2,7 +2,10 @@ import { createDebug } from "@grammyjs/debug";
 import { Bot, type Context as GrammyContext, type Transformer } from "grammy";
 import { I18n, type I18nFlavor } from "grammy-i18n";
 import { run } from "grammy-runner";
-import { chatComposer } from "./features/chat.ts";
+import {
+  chatComposer,
+  safelyMaybeSendProactiveAgentResponse,
+} from "./features/chat.ts";
 import type { Database } from "./features/database.ts";
 import {
   createEmojiPackTransformer,
@@ -68,7 +71,10 @@ export function initBot(token: string, database: Database) {
   const bot = new Bot<Context>(token);
   bot.api.config.use(createTelegramRateLimitRetryTransformer());
   bot.api.config.use(createEmojiPackTransformer(database, bot.api));
-  setIndexedTextMessageHandler(safelyMaybeSendPeriodicTroll);
+  setIndexedTextMessageHandler(async (ctx, message, sender, chatId) => {
+    await safelyMaybeSendPeriodicTroll(ctx, message, sender, chatId);
+    await safelyMaybeSendProactiveAgentResponse(ctx, message, chatId);
+  });
 
   const i18n = new I18n<Context>({
     directory: "locales",
