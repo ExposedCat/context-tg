@@ -26,8 +26,7 @@ export function buildAgentIdentity(
   goal: string,
 ): string {
   return `# You
-You are ${description} named ${formatAgentNames(names)} with a goal to ${goal}.
-"Laylo" means a sacred genderless creature in Socheslo Mythology.`;
+You are ${description} named ${formatAgentNames(names)} with a goal to ${goal}`;
 }
 
 export function buildToolInstructions(
