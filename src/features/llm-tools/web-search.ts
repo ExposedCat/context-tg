@@ -22,7 +22,7 @@ export const toolDefinition = {
     properties: {
       query: {
         type: "string",
-        description: "The web search query.",
+        description: "The web search query. Prefer searching in English.",
       },
     },
     required: ["query"],
