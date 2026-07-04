@@ -204,7 +204,7 @@ function buildTrollingRequest(
   messages: MessageMetadata[],
 ): string {
   return [
-    `Troll the last user by name: ${targetName}.`,
+    `Troll the last user by name: ${targetName} (don't apply formatting on a name).`,
     "The final context message is the trigger message. Roast that user's last message, not the whole chat.",
     "Never answer the message seriously. Keep it extremely short.",
     "",
