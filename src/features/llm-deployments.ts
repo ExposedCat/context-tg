@@ -1,4 +1,4 @@
-export type LlmDeploymentId = "small" | "big" | "openminded";
+export type LlmDeploymentId = "small" | "big" | "openminded" | "image";
 export type LlmDeployment = {
   readonly id: LlmDeploymentId;
   deploymentName: string;
@@ -21,18 +21,25 @@ export const LLM_DEPLOYMENTS = {
     deploymentName: "",
     withReasoning: false,
   },
+  image: {
+    id: "image",
+    deploymentName: "",
+    withReasoning: false,
+  },
 } satisfies Record<string, LlmDeployment>;
 
 export const LLM_DEPLOYMENT_OPTIONS = [
   LLM_DEPLOYMENTS.small,
   LLM_DEPLOYMENTS.big,
   LLM_DEPLOYMENTS.openMinded,
+  LLM_DEPLOYMENTS.image,
 ] as const satisfies readonly LlmDeployment[];
 
 const LLM_DEPLOYMENT_BY_ID = {
   small: LLM_DEPLOYMENTS.small,
   big: LLM_DEPLOYMENTS.big,
   openminded: LLM_DEPLOYMENTS.openMinded,
+  image: LLM_DEPLOYMENTS.image,
 } as const satisfies Record<LlmDeploymentId, LlmDeployment>;
 
 export function isLlmDeploymentId(value: string): value is LlmDeploymentId {

@@ -1,3 +1,4 @@
+import type OpenAI from "@openai/openai";
 import type { AgentId } from "../agents/index.ts";
 import type { Database } from "../database.ts";
 
@@ -41,5 +42,6 @@ export type FunctionToolRunner = (
     signal?: AbortSignal;
     database?: Database;
     agentId?: AgentId;
+    client?: OpenAI;
   },
 ) => FunctionToolResult | string | Promise<FunctionToolResult | string>;

@@ -64,6 +64,7 @@ export const TOOL_DEFINITIONS = {
   get_recent_news: gdeltTool.toolDefinition,
   read_youtube_video: youtubeTool.toolDefinition,
   generate_image: imageTool.toolDefinition,
+  generate_image_nsfw: imageTool.nsfwToolDefinition,
   send_sticker: stickerTool.toolDefinition,
   send_report: reportsTool.toolDefinition,
   send_trading_report: reportsTool.tradingToolDefinition,
@@ -85,6 +86,7 @@ const FUNCTION_TOOL_RUNNERS = {
   get_recent_news: gdeltTool.execute,
   read_youtube_video: youtubeTool.execute,
   generate_image: imageTool.execute,
+  generate_image_nsfw: imageTool.executeNsfw,
   send_sticker: stickerTool.execute,
   send_report: reportsTool.execute,
   send_trading_report: reportsTool.executeTrading,
@@ -291,6 +293,10 @@ function getExposedTools(
 
     if (tool === "generate_image") {
       return imageTool.isConfigured();
+    }
+
+    if (tool === "generate_image_nsfw") {
+      return imageTool.isNsfwConfigured();
     }
 
     return true;
@@ -651,6 +657,7 @@ function normalizeFunctionToolResult(
 }
 
 async function runFunctionToolCall(
+  client: OpenAI,
   call: FunctionToolCall,
   state: LlmRequestState,
   context?: LlmToolContext,
@@ -663,7 +670,7 @@ async function runFunctionToolCall(
   logDebug("Running tool call", formatToolCallLog(call));
   const runner = FUNCTION_TOOL_RUNNERS[call.function.name];
   const result = normalizeFunctionToolResult(
-    await runner(args, context, { signal, database, agentId }),
+    await runner(args, context, { signal, database, agentId, client }),
   );
   throwIfAborted(signal);
 
@@ -1080,6 +1087,7 @@ async function resolveFunctionToolCalls(
     const toolCallResults = await Promise.all(
       functionCalls.map((call) =>
         runFunctionToolCall(
+          client,
           call,
           state,
           options.context,

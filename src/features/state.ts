@@ -193,6 +193,8 @@ function formatModelDisplayName(id: string): string {
       return "Big";
     case "openminded":
       return "Open-Minded";
+    case "image":
+      return "Image";
     default:
       return id;
   }

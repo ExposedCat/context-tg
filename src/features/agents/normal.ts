@@ -19,6 +19,7 @@ export const tools = [
   "read_last_messages",
   "read_youtube_video",
   "generate_image",
+  "generate_image_nsfw",
   "send_sticker",
   "schedule_message",
   "cron_message",
@@ -40,6 +41,7 @@ export function buildInstructions(): string {
     buildToolInstructions([
       "If you're asked about something explicitly happening in the discussion, e.g. who's right, what's your take on the discussion, etc. read_last_messages to read last 10 messages for specific context. Don't use this when you're given enough context in the request.",
       "Use generate_image only when the user asks you to create or draw an image. Don't use proactively.",
+      "Use generate_image_nsfw only when the user explicitly asks for the alternate NSFW image model. Don't use proactively.",
       "Use send_sticker when a sticker reaction is a better fit than words, or when the user asks for a sticker. Use a single matching emoji argument.",
       "Use chat tools when the user asks about remembered or recent chat context.",
       "Use schedule_message when the user asks to send a message later at a specific date and time.",

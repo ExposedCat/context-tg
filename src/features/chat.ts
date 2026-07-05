@@ -180,6 +180,7 @@ const PROACTIVE_CONTEXT_MESSAGE_COUNT = 10;
 const PROACTIVE_TASK_TEXT = "Proactive response";
 const PROACTIVE_DISABLED_TOOLS = new Set<ToolName>([
   "generate_image",
+  "generate_image_nsfw",
   "send_sticker",
   "schedule_message",
   "cron_message",
@@ -971,7 +972,8 @@ const TOOL_USAGE_EMOJIS: Partial<
   get_markets_state: { id: "5900104897885376843", fallback: "📈" },
   get_recent_news: { id: "6008090211181923982", fallback: "📰" },
   read_youtube_video: { id: "6005986106703613755", fallback: "▶️" },
-  generate_image: { id: "5766879414704935108", fallback: "🖼️" },
+  generate_image: { id: "5814690801665446789", fallback: "🖼️" },
+  generate_image_nsfw: { id: "5816705961666025146", fallback: "🖼️" },
   schedule_message: { id: "5967412305338568701", fallback: "⏰" },
   cron_message: { id: "5967412305338568701", fallback: "⏰" },
   remember: { id: "5778168620278354602", fallback: "💾" },
@@ -1156,7 +1158,10 @@ function filterToolsForUsage(
       return false;
     }
 
-    if (tool === "generate_image" && !options.imageUsageRemaining) {
+    if (
+      (tool === "generate_image" || tool === "generate_image_nsfw") &&
+      !options.imageUsageRemaining
+    ) {
       return false;
     }
 
