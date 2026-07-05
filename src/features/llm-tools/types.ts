@@ -4,6 +4,8 @@ import type { Database } from "../database.ts";
 export type LlmToolContext = {
   chatId: number;
   messageId: number;
+  userId?: number;
+  userName?: string;
   replyMessageId?: number;
   threadId?: number;
 };

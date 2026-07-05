@@ -507,6 +507,8 @@ function getLlmToolContext(
   return {
     chatId,
     messageId: message.message_id,
+    userId: message.from?.id,
+    userName: getTelegramUserName(message.from),
     replyMessageId: reply?.message_id,
     threadId: getForumThreadId(message, reply),
   };

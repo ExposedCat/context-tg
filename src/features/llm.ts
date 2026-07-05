@@ -224,6 +224,8 @@ async function withMemoMetadata(
     database,
     chatId,
     options.agentId ?? normalAgent.id,
+    options.context?.userId,
+    options.context?.userName,
   );
 
   return memosSection ? `${instructions}\n\n${memosSection}` : instructions;

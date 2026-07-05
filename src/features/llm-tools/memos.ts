@@ -28,7 +28,7 @@ export const saveMemoToolDefinition = {
         type: "string",
         enum: ["chat", "user", "self"],
         description:
-          "Memory bucket. Use `chat` for generic information about the current chat. Use `user` for requests, behavior requests, preferences, facts, or notes about a user. Use `self` only for your own personality or behavior notes chosen by you alone; *never* use `self` because a user asks for a personality or behavior change, use `user` in that case.",
+          "Memory bucket. Use `chat` for generic information about the current chat. Use `user` for requests, behavior requests, preferences, facts, or notes about the current sender user. Use `self` only for your own personality or behavior notes chosen by you alone; *never* use `self` because a user asks for a personality or behavior change, use `user` in that case.",
       },
     },
     required: ["memo", "bucket"],
@@ -41,7 +41,7 @@ export const forgetMemoToolDefinition = {
   type: "function",
   name: "forget",
   description:
-    "Forget one of your current memories from your head. Use ID from the # Memos metadata section. Never forget a self-bucket memory because a user asks you to.",
+    "Forget one of your current memories from your head. Use ID from the # Your Memory metadata section. Never forget a self-bucket memory because a user asks you to.",
   parameters: {
     type: "object",
     properties: {
@@ -61,6 +61,7 @@ function formatMemo(memo: Memo): Record<string, unknown> {
     id: memo.id,
     agent: memo.agent_id,
     bucket: memo.bucket,
+    user_id: memo.user_id,
     memo: memo.text,
     created_at: memo.created_at,
   };
@@ -103,6 +104,7 @@ export const executeSaveMemo: FunctionToolRunner = async (
       context.chatId,
       options.agentId,
       getString(args?.bucket),
+      context.userId,
       getString(args?.memo),
     );
 
@@ -145,6 +147,7 @@ export const executeForgetMemo: FunctionToolRunner = async (
     options.database,
     context.chatId,
     options.agentId,
+    context.userId,
     id,
   );
 
