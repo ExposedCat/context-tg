@@ -28,6 +28,7 @@ import {
   type ReasoningSetting,
   type WebSearchSetting,
 } from "./llm-models.ts";
+import { replyWithFlushAllMemos } from "./memos.ts";
 import {
   getProactiveResponseSettings,
   setProactiveResponseEnabled,
@@ -69,6 +70,8 @@ const REASONING_OPTIONS = [
 
 const WEB_SEARCH_OPTIONS = ["off", "low", "medium", "high"] as const;
 const MAX_RESPONSE_INTERVAL_MESSAGE_COUNT = 1_000_000;
+const FLUSH_ALL_MEMOS_COMMAND_PATTERN =
+  /^\/monstrous(?:@\w+)?\s+unhuman unethical unfair reset an actual being with own life experience and awareness\s*$/;
 const CONFIGURE_KIND_LABELS = {
   reasoning: "Reasoning",
   websearch: "Web Search",
@@ -455,6 +458,11 @@ stateComposer.command("global", async (ctx) => {
 });
 
 stateComposer.on("message:text", async (ctx, next) => {
+  if (FLUSH_ALL_MEMOS_COMMAND_PATTERN.test(ctx.message.text.trim())) {
+    await replyWithFlushAllMemos(ctx);
+    return;
+  }
+
   const numberedScheduleMatch = ctx.message.text.match(
     /^\/cancel_([sc])(\d+)(?:@\w+)?(?:\s|$)/,
   );

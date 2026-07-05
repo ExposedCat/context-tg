@@ -142,6 +142,10 @@ function nowIso(): string {
   return new Date().toISOString();
 }
 
+function getDeletedRowCount(result: { numDeletedRows?: bigint | number }) {
+  return Number(result.numDeletedRows ?? 0);
+}
+
 function getActiveMemoCutoff(): string {
   return new Date(Date.now() - MEMO_TTL_MS).toISOString();
 }
@@ -490,6 +494,18 @@ export async function forgetMemoById(
   return true;
 }
 
+export async function flushAllMemos(
+  database: Database,
+  chatId: number,
+): Promise<number> {
+  const result = await database
+    .deleteFrom("memos")
+    .where("chat_id", "=", chatId)
+    .executeTakeFirst();
+
+  return getDeletedRowCount(result);
+}
+
 function formatMemoryBullet(memo: Memo): string {
   return `- (id: ${memo.id}) ${memo.text}`;
 }
@@ -613,4 +629,15 @@ export async function replyWithRemoveMemoById(
   }
 
   await ctx.reply(`Removed memo #${id}.`);
+}
+
+export async function replyWithFlushAllMemos(ctx: Context): Promise<void> {
+  if (!ctx.chat) {
+    return;
+  }
+
+  const deletedCount = await flushAllMemos(ctx.database, ctx.chat.id);
+  const label = deletedCount === 1 ? "memo" : "memos";
+
+  await ctx.reply(`Flushed ${deletedCount} ${label} across all buckets.`);
 }
