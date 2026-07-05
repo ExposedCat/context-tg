@@ -435,7 +435,6 @@ function formatMemoHtml(memo: Memo, index: number): string {
   return [
     `${index + 1}. <code>#${memo.id}</code>`,
     `<blockquote>${escapeHtml(memo.text)}</blockquote>`,
-    `/rm_${memo.id}`,
   ].join("\n");
 }
 

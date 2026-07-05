@@ -948,6 +948,8 @@ const TOOL_USAGE_EMOJIS: Partial<
   generate_image: { id: "5766879414704935108", fallback: "🖼️" },
   schedule_message: { id: "5967412305338568701", fallback: "⏰" },
   cron_message: { id: "5967412305338568701", fallback: "⏰" },
+  remember: { id: "5778168620278354602", fallback: "💾" },
+  forget: { id: "5877738786971979125", fallback: "🗑️" },
 };
 
 function formatToolUsageMarkdown(tools: ToolName[]): string {

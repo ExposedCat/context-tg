@@ -31,7 +31,6 @@ import {
   type ReasoningSetting,
   type WebSearchSetting,
 } from "./llm-models.ts";
-import { replyWithMemos, replyWithRemoveMemoById } from "./memos.ts";
 import {
   getProactiveResponseSettings,
   setProactiveResponseEnabled,
@@ -365,10 +364,6 @@ stateComposer.command("schedule", async (ctx) => {
   await replyWithSchedules(ctx);
 });
 
-stateComposer.command("memos", async (ctx) => {
-  await replyWithMemos(ctx);
-});
-
 stateComposer.command("usage", async (ctx) => {
   if (!ctx.chat) {
     return;
@@ -468,15 +463,6 @@ stateComposer.command("global", async (ctx) => {
 });
 
 stateComposer.on("message:text", async (ctx, next) => {
-  const removeMemoMatch = ctx.message.text.match(
-    /^\/rm_(\d+)(?:@\w+)?(?:\s|$)/,
-  );
-
-  if (removeMemoMatch) {
-    await replyWithRemoveMemoById(ctx, Number(removeMemoMatch[1]));
-    return;
-  }
-
   const numberedScheduleMatch = ctx.message.text.match(
     /^\/cancel_([sc])(\d+)(?:@\w+)?(?:\s|$)/,
   );
