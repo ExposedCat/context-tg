@@ -1207,6 +1207,13 @@ async function requestLlmWithInstructions(
     .map((link) => ({ link }));
   const responseText = getResponseText(response);
 
+  if (state.stickers.length > 0) {
+    logDebug("LLM response includes sticker requests", {
+      count: state.stickers.length,
+      emojis: state.stickers.map((sticker) => sticker.emoji),
+    });
+  }
+
   return {
     response_id: lastResponseId,
     handoff_agent_id: state.handoffAgentId,

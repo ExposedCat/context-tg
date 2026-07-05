@@ -86,6 +86,7 @@ type MessageEntity = {
 
 type ApiPayload = Record<string, unknown>;
 
+const logDebug = createDebug("app:emoji-packs:debug");
 const logError = createDebug("app:emoji-packs:error");
 
 const PACK_NAME_PATTERN = /^[a-zA-Z0-9_]{1,128}$/;
@@ -408,6 +409,15 @@ async function loadEmojiRegistry(
   );
 
   stickers.sort((left, right) => right.emoji.length - left.emoji.length);
+  logDebug("Loaded emoji registry", {
+    packs: packs.length,
+    replacements: replacements.length,
+    stickerEmojis: stickers.length,
+    stickerCandidates: stickers.reduce(
+      (count, sticker) => count + sticker.candidates.length,
+      0,
+    ),
+  });
   return { replacements, stickers };
 }
 

@@ -170,6 +170,7 @@ type TelegramImageAttachment = {
 
 type BotReaction = "🤔";
 
+const logDebug = createDebug("app:chat:debug");
 const logError = createDebug("app:chat:error");
 
 export const chatComposer = new Composer<Context>();
@@ -1245,6 +1246,13 @@ async function sendStickerMessages(
 ): Promise<Array<{ message_id: number }>> {
   const sentMessages = [];
 
+  if (stickers.length > 0) {
+    logDebug("Sending requested stickers", {
+      count: stickers.length,
+      emojis: stickers.map((sticker) => sticker.emoji),
+    });
+  }
+
   for (const requestedSticker of stickers) {
     try {
       const sticker = await findRandomStickerForEmoji(
@@ -1254,8 +1262,17 @@ async function sendStickerMessages(
       );
 
       if (!sticker) {
+        logDebug("No configured sticker found for emoji", {
+          emoji: requestedSticker.emoji,
+        });
         continue;
       }
+
+      logDebug("Sending sticker", {
+        requestedEmoji: requestedSticker.emoji,
+        matchedEmoji: sticker.emoji,
+        fallback: sticker.fallback,
+      });
 
       const sentSticker = await ctx.replyWithSticker(sticker.fileId, {
         reply_parameters: {
@@ -1263,6 +1280,11 @@ async function sendStickerMessages(
         },
       });
       sentMessages.push(sentSticker);
+
+      logDebug("Sticker sent", {
+        requestedEmoji: requestedSticker.emoji,
+        messageId: sentSticker.message_id,
+      });
     } catch (error) {
       logError("Failed to send sticker:", {
         emoji: requestedSticker.emoji,
