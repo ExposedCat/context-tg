@@ -679,6 +679,10 @@ async function runFunctionToolCall(
     state.stickers.push(result.sticker);
   }
 
+  if (result.stickers) {
+    state.stickers.push(...result.stickers);
+  }
+
   return {
     toolOutput: createToolOutput(call, result.output),
     handoffAgentId: result.handoffAgentId,
@@ -1251,6 +1255,7 @@ async function runAgent(
     agent: agent.id,
     response: result.response ?? "",
     report_attached: Boolean(result.report),
+    stickers_attached: result.stickers.length,
     tools_used: result.tools,
     tool_call_count: result.tool_call_count,
     web_search: result.web_search.used,
@@ -1261,10 +1266,11 @@ async function runAgent(
       output,
       handoffAgentId: agent.id,
       report: result.report,
+      stickers: result.stickers,
     };
   }
 
-  return { output, handoffAgentId: agent.id };
+  return { output, handoffAgentId: agent.id, stickers: result.stickers };
 }
 
 export async function requestLlm(
