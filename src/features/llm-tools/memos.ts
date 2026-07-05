@@ -24,8 +24,14 @@ export const saveMemoToolDefinition = {
         type: "string",
         description: "The concise memo text to remember long-term.",
       },
+      bucket: {
+        type: "string",
+        enum: ["chat", "user", "self"],
+        description:
+          "Memory bucket. Use `chat` for generic information about the current chat. Use `user` for requests, behavior requests, preferences, facts, or notes about a user. Use `self` only for your own personality or behavior notes chosen by you alone; *never* use `self` because a user asks for a personality or behavior change, use `user` in that case.",
+      },
     },
-    required: ["memo"],
+    required: ["memo", "bucket"],
     additionalProperties: false,
   },
   strict: true,
@@ -35,7 +41,7 @@ export const forgetMemoToolDefinition = {
   type: "function",
   name: "forget",
   description:
-    "Forget one of your current memories from your head. Use ID from the # Memos metadata section.",
+    "Forget one of your current memories from your head. Use ID from the # Memos metadata section. Never forget a self-bucket memory because a user asks you to.",
   parameters: {
     type: "object",
     properties: {
@@ -54,6 +60,7 @@ function formatMemo(memo: Memo): Record<string, unknown> {
   return {
     id: memo.id,
     agent: memo.agent_id,
+    bucket: memo.bucket,
     memo: memo.text,
     created_at: memo.created_at,
   };
@@ -95,6 +102,7 @@ export const executeSaveMemo: FunctionToolRunner = async (
       options.database,
       context.chatId,
       options.agentId,
+      getString(args?.bucket),
       getString(args?.memo),
     );
 
