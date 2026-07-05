@@ -1,4 +1,3 @@
-import type OpenAI from "@openai/openai";
 import { APP_ENV } from "../env.ts";
 import { LLM_DEPLOYMENTS } from "../llm-deployments.ts";
 import type { FunctionToolRunner } from "./types.ts";
@@ -53,6 +52,14 @@ function getImageGenerationUrl(): string {
   return `${baseUrl}/images/generations`;
 }
 
+function getAzureAltImageGenerationUrl(): string {
+  if (!APP_ENV.AZURE_ALT_IMAGE_BASE_URL) {
+    throw new Error("AZURE_ALT_IMAGE_BASE_URL is not set.");
+  }
+
+  return APP_ENV.AZURE_ALT_IMAGE_BASE_URL;
+}
+
 export function isConfigured(): boolean {
   return Boolean(
     APP_ENV.LLM_IMAGE_BASE_URL &&
@@ -62,7 +69,11 @@ export function isConfigured(): boolean {
 }
 
 export function isNsfwConfigured(): boolean {
-  return Boolean(LLM_DEPLOYMENTS.image.deploymentName);
+  return Boolean(
+    APP_ENV.AZURE_ALT_IMAGE_BASE_URL &&
+      APP_ENV.AZURE_ALT_IMAGE_KEY &&
+      LLM_DEPLOYMENTS.image.deploymentName,
+  );
 }
 
 function getConfiguredNsfwDeploymentName(): string {
@@ -138,20 +149,45 @@ async function createImage(prompt: string, signal?: AbortSignal) {
   };
 }
 
-async function createNsfwImage(
-  client: OpenAI,
-  prompt: string,
-  signal?: AbortSignal,
-) {
-  const response = await client.images.generate(
-    {
+async function createNsfwImage(prompt: string, signal?: AbortSignal) {
+  const response = await fetch(getAzureAltImageGenerationUrl(), {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${APP_ENV.AZURE_ALT_IMAGE_KEY ?? ""}`,
+      "Content-Type": "application/json",
+      Accept: "application/json",
+    },
+    body: JSON.stringify({
       model: getConfiguredNsfwDeploymentName(),
       prompt,
+      width: 1024,
+      height: 1024,
       n: 1,
-    },
-    { signal },
-  );
-  const image = getFirstImageData(response as ImageGenerationResponse);
+    }),
+    signal,
+  });
+  const text = await response.text();
+  let payload: ImageGenerationResponse;
+
+  try {
+    payload = JSON.parse(text) as ImageGenerationResponse;
+  } catch {
+    throw new Error(
+      `Azure alternate image API returned non-JSON response: ${text.slice(
+        0,
+        200,
+      )}`,
+    );
+  }
+
+  if (!response.ok) {
+    const message = getString(payload.error?.message) || text.slice(0, 200);
+    throw new Error(
+      `Azure alternate image API returned HTTP ${response.status}: ${message}`,
+    );
+  }
+
+  const image = getFirstImageData(payload);
   const b64Json = getString(image?.b64_json);
   const url = getString(image?.url);
 
@@ -211,11 +247,7 @@ export const executeNsfw: FunctionToolRunner = async (
     return getJsonError("Image generation is not configured.");
   }
 
-  if (!options?.client) {
-    return getJsonError("LLM client is not available for image generation.");
-  }
-
-  const image = await createNsfwImage(options.client, prompt, options?.signal);
+  const image = await createNsfwImage(prompt, options?.signal);
 
   return {
     output: JSON.stringify({
