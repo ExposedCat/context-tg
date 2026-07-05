@@ -5,7 +5,7 @@ export const toolDefinition = {
   type: "function",
   name: "send_sticker",
   description:
-    "Send one Telegram sticker matching an emoji from the configured sticker or emoji packs. Use this for expressive sticker reactions when a sticker is more natural than text. If no sticker exists for the emoji, the app silently does nothing. If the sticker itself is the whole reply, make the final response exactly [sticker EMOJI].",
+    "Send sticker along with response. Use this for expressive sticker reactions when a sticker is more natural than text.",
   parameters: {
     type: "object",
     properties: {
