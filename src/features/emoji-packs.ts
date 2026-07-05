@@ -24,6 +24,8 @@ type EmojiPacksDatabase = Pick<
   | "updateTable"
 >;
 
+type PackKind = "emoji" | "sticker";
+
 type StickerSet = {
   sticker_type: string;
   stickers: Array<{
@@ -84,7 +86,6 @@ type MessageEntity = {
 
 type ApiPayload = Record<string, unknown>;
 
-const logDebug = createDebug("app:emoji-packs:debug");
 const logError = createDebug("app:emoji-packs:error");
 
 const PACK_NAME_PATTERN = /^[a-zA-Z0-9_]{1,128}$/;
@@ -167,13 +168,15 @@ function isAdmin(ctx: Context): boolean {
   return ctx.from?.id === APP_ENV.ADMIN_ID;
 }
 
-function formatEmojiPacksList(packs: EmojiPack[]): string {
+function formatPacksList(packs: EmojiPack[], kind: PackKind): string {
+  const label = kind === "emoji" ? "emoji" : "sticker";
+
   if (packs.length === 0) {
-    return "No active emoji/sticker packs.";
+    return `No active ${label} packs.`;
   }
 
   return [
-    "Active emoji/sticker packs:",
+    `Active ${label} packs:`,
     ...packs.map((pack, index) => `${index + 1}. ${pack.name}`),
   ].join("\n");
 }
@@ -186,6 +189,45 @@ export async function listEmojiPacks(
     .selectAll()
     .orderBy("position", "asc")
     .execute();
+}
+
+function getPackKind(stickerSet: StickerSet): PackKind | undefined {
+  const emojiCount = stickerSet.stickers.filter(
+    (sticker) => sticker.custom_emoji_id && sticker.emoji,
+  ).length;
+
+  if (stickerSet.sticker_type === "custom_emoji" && emojiCount > 0) {
+    return "emoji";
+  }
+
+  const stickerCount = stickerSet.stickers.filter(
+    (sticker) => sticker.file_id && sticker.emoji,
+  ).length;
+
+  return stickerCount > 0 ? "sticker" : undefined;
+}
+
+async function listPacksByKind(
+  database: EmojiPacksDatabase,
+  api: StickerSetReader,
+  kind: PackKind,
+): Promise<EmojiPack[]> {
+  const packs = await listEmojiPacks(database);
+  const matchingPacks: EmojiPack[] = [];
+
+  for (const pack of packs) {
+    try {
+      const stickerSet = await api.getStickerSet(pack.name);
+
+      if (getPackKind(stickerSet) === kind) {
+        matchingPacks.push(pack);
+      }
+    } catch (error) {
+      logError("Failed to load pack for list", { name: pack.name, error });
+    }
+  }
+
+  return matchingPacks;
 }
 
 async function createEmojiPack(
@@ -287,7 +329,7 @@ async function validateStickerPack(
     (sticker) => sticker.file_id && sticker.emoji,
   ).length;
 
-  if (stickerCount === 0) {
+  if (stickerSet.sticker_type === "custom_emoji" || stickerCount === 0) {
     throw new Error("Sticker set does not contain emoji-mapped stickers.");
   }
 
@@ -306,12 +348,7 @@ async function loadEmojiRegistry(
     try {
       const stickerSet = await api.getStickerSet(pack.name);
 
-      if (stickerSet.sticker_type !== "custom_emoji") {
-        logDebug("Skipping custom emoji replacements for sticker set", {
-          name: pack.name,
-          stickerType: stickerSet.sticker_type,
-        });
-      }
+      const packKind = getPackKind(stickerSet);
 
       for (const sticker of stickerSet.stickers) {
         const id = sticker.custom_emoji_id;
@@ -322,7 +359,7 @@ async function loadEmojiRegistry(
           continue;
         }
 
-        if (fileId) {
+        if (packKind === "sticker" && fileId) {
           for (const emoji of getEmojiAliases(fallback)) {
             const candidates = stickerGroups.get(emoji) ?? [];
 
@@ -338,7 +375,7 @@ async function loadEmojiRegistry(
           }
         }
 
-        if (stickerSet.sticker_type !== "custom_emoji" || !id) {
+        if (packKind !== "emoji" || !id) {
           continue;
         }
 
@@ -830,14 +867,24 @@ export function createEmojiPackTransformer(
 }
 
 emojiPacksComposer.command("packs", async (ctx) => {
-  await ctx.reply(formatEmojiPacksList(await listEmojiPacks(ctx.database)));
+  await ctx.reply(
+    formatPacksList(
+      await listPacksByKind(ctx.database, ctx.api, "emoji"),
+      "emoji",
+    ),
+  );
 });
 
 emojiPacksComposer.command("stickers", async (ctx) => {
   const args = typeof ctx.match === "string" ? ctx.match.trim() : "";
 
   if (!args) {
-    await ctx.reply(formatEmojiPacksList(await listEmojiPacks(ctx.database)));
+    await ctx.reply(
+      formatPacksList(
+        await listPacksByKind(ctx.database, ctx.api, "sticker"),
+        "sticker",
+      ),
+    );
     return;
   }
 
