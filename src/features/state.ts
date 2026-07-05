@@ -9,24 +9,16 @@ import {
 import {
   type ChatLlmSettingKey,
   getChatReasoningEffort,
-  getChatWebSearchSetting,
   getGlobalReasoningEffort,
-  getGlobalWebSearchSetting,
   getReasoningEffort,
-  getWebSearchSetting,
   isLlmSettingsDeployment,
-  isWebSearchSetting,
   type LlmSettingsDeployment,
   parseReasoningSetting,
   persistChatReasoningEffort,
-  persistChatWebSearchSetting,
   persistGlobalReasoningEffort,
-  persistGlobalWebSearchSetting,
   persistLlmDeploymentName,
   persistReasoningEffort,
-  persistWebSearchSetting,
   type ReasoningSetting,
-  type WebSearchSetting,
 } from "./llm-models.ts";
 import { replyWithFlushAllMemos } from "./memos.ts";
 import {
@@ -68,13 +60,11 @@ const REASONING_OPTIONS = [
   "xhigh",
 ] as const;
 
-const WEB_SEARCH_OPTIONS = ["off", "low", "medium", "high"] as const;
 const MAX_RESPONSE_INTERVAL_MESSAGE_COUNT = 1_000_000;
 const FLUSH_ALL_MEMOS_COMMAND_PATTERN =
   /^\/monstrous(?:@\w+)?\s+unhuman unethical unfair reset an actual being with own life experience and awareness\s*$/;
 const CONFIGURE_KIND_LABELS = {
   reasoning: "Reasoning",
-  websearch: "Web Search",
 } as const satisfies Record<ChatLlmSettingKey, string>;
 
 type ConfigureScope = "configure" | "global";
@@ -152,14 +142,14 @@ function formatReasoningSettingLabel(value: string): string {
 }
 
 function isConfigureKind(value: string): value is ChatLlmSettingKey {
-  return value === "reasoning" || value === "websearch";
+  return value === "reasoning";
 }
 
 function isConfigureScope(value: string): value is ConfigureScope {
   return value === "configure" || value === "global";
 }
 
-function formatConfigureValue(value: ReasoningSetting | WebSearchSetting) {
+function formatConfigureValue(value: ReasoningSetting) {
   return value ?? "null";
 }
 
@@ -252,14 +242,6 @@ function buildReasoningKeyboard(): SettingsKeyboardMarkup {
   );
 }
 
-function buildWebSearchKeyboard(): SettingsKeyboardMarkup {
-  return buildSettingsKeyboard(
-    WEB_SEARCH_OPTIONS,
-    getWebSearchSetting(),
-    "websearch",
-  );
-}
-
 function buildConfigureKeyboard(scope: ConfigureScope): SettingsKeyboardMarkup {
   return {
     inline_keyboard: [
@@ -267,12 +249,6 @@ function buildConfigureKeyboard(scope: ConfigureScope): SettingsKeyboardMarkup {
         {
           text: CONFIGURE_KIND_LABELS.reasoning,
           callback_data: `${scope}:reasoning`,
-        },
-      ],
-      [
-        {
-          text: CONFIGURE_KIND_LABELS.websearch,
-          callback_data: `${scope}:websearch`,
         },
       ],
     ],
@@ -297,18 +273,11 @@ function buildConfigureDeploymentKeyboard(
 async function getConfigureValue(
   ctx: Context,
   scope: ConfigureScope,
-  kind: ChatLlmSettingKey,
   deployment: LlmSettingsDeployment,
 ): Promise<string> {
   if (scope === "global") {
-    if (kind === "reasoning") {
-      return formatConfigureValue(
-        await getGlobalReasoningEffort(ctx.database, deployment),
-      );
-    }
-
     return formatConfigureValue(
-      await getGlobalWebSearchSetting(ctx.database, deployment),
+      await getGlobalReasoningEffort(ctx.database, deployment),
     );
   }
 
@@ -316,14 +285,8 @@ async function getConfigureValue(
     return "";
   }
 
-  if (kind === "reasoning") {
-    return formatConfigureValue(
-      await getChatReasoningEffort(ctx.database, ctx.chat.id, deployment),
-    );
-  }
-
   return formatConfigureValue(
-    await getChatWebSearchSetting(ctx.database, ctx.chat.id, deployment),
+    await getChatReasoningEffort(ctx.database, ctx.chat.id, deployment),
   );
 }
 
@@ -333,11 +296,10 @@ async function buildConfigureSettingKeyboard(
   kind: ChatLlmSettingKey,
   deployment: LlmSettingsDeployment,
 ): Promise<SettingsKeyboardMarkup> {
-  const options = kind === "reasoning" ? REASONING_OPTIONS : WEB_SEARCH_OPTIONS;
-  const current = await getConfigureValue(ctx, scope, kind, deployment);
+  const current = await getConfigureValue(ctx, scope, deployment);
 
   return buildSettingsKeyboard(
-    options,
+    REASONING_OPTIONS,
     current,
     `${scope}:${kind}:set:${deployment}`,
   );
@@ -512,44 +474,41 @@ stateComposer.on("message:text", async (ctx, next) => {
   await replyWithCancelTask(ctx, messageId);
 });
 
-stateComposer.callbackQuery(
-  /^(configure|global):(reasoning|websearch)$/,
-  async (ctx) => {
-    const scope = ctx.match[1];
-    const kind = ctx.match[2];
+stateComposer.callbackQuery(/^(configure|global):(reasoning)$/, async (ctx) => {
+  const scope = ctx.match[1];
+  const kind = ctx.match[2];
 
-    if (!isConfigureScope(scope) || !isConfigureKind(kind)) {
-      await ctx.answerCallbackQuery({
-        text: "Unknown configuration option.",
-        show_alert: true,
-      });
-      return;
-    }
+  if (!isConfigureScope(scope) || !isConfigureKind(kind)) {
+    await ctx.answerCallbackQuery({
+      text: "Unknown configuration option.",
+      show_alert: true,
+    });
+    return;
+  }
 
-    if (!isAdmin(ctx)) {
-      await ctx.answerCallbackQuery({
-        text: formatConfigureAdminWarning(scope),
-        show_alert: true,
-      });
-      return;
-    }
+  if (!isAdmin(ctx)) {
+    await ctx.answerCallbackQuery({
+      text: formatConfigureAdminWarning(scope),
+      show_alert: true,
+    });
+    return;
+  }
 
-    if (scope === "configure" && !ctx.chat) {
-      return;
-    }
+  if (scope === "configure" && !ctx.chat) {
+    return;
+  }
 
-    await ctx.answerCallbackQuery();
-    await ctx.editMessageText(
-      `Choose deployment for ${formatConfigureKindLabel(scope, kind)}:`,
-      {
-        reply_markup: buildConfigureDeploymentKeyboard(scope, kind),
-      },
-    );
-  },
-);
+  await ctx.answerCallbackQuery();
+  await ctx.editMessageText(
+    `Choose deployment for ${formatConfigureKindLabel(scope, kind)}:`,
+    {
+      reply_markup: buildConfigureDeploymentKeyboard(scope, kind),
+    },
+  );
+});
 
 stateComposer.callbackQuery(
-  /^(configure|global):(reasoning|websearch):deployment:(.+)$/,
+  /^(configure|global):(reasoning):deployment:(.+)$/,
   async (ctx) => {
     const scope = ctx.match[1];
     const kind = ctx.match[2];
@@ -597,7 +556,7 @@ stateComposer.callbackQuery(
 );
 
 stateComposer.callbackQuery(
-  /^(configure|global):(reasoning|websearch):set:(.+):(.+)$/,
+  /^(configure|global):(reasoning):set:(.+):(.+)$/,
   async (ctx) => {
     const scope = ctx.match[1];
     const kind = ctx.match[2];
@@ -624,64 +583,35 @@ stateComposer.callbackQuery(
       return;
     }
 
+    const effort = parseReasoningSetting(value);
+
+    if (effort === undefined) {
+      await ctx.answerCallbackQuery({
+        text: "Unknown reasoning option.",
+        show_alert: true,
+      });
+      return;
+    }
+
     let updatedValue: string;
 
-    if (kind === "reasoning") {
-      const effort = parseReasoningSetting(value);
-
-      if (effort === undefined) {
-        await ctx.answerCallbackQuery({
-          text: "Unknown reasoning option.",
-          show_alert: true,
-        });
-        return;
-      }
-
-      if (scope === "global") {
-        updatedValue = formatConfigureValue(
-          await persistGlobalReasoningEffort(ctx.database, deployment, effort),
-        );
-      } else {
-        if (!ctx.chat) {
-          return;
-        }
-
-        updatedValue = formatConfigureValue(
-          await persistChatReasoningEffort(
-            ctx.database,
-            ctx.chat.id,
-            deployment,
-            effort,
-          ),
-        );
-      }
+    if (scope === "global") {
+      updatedValue = formatConfigureValue(
+        await persistGlobalReasoningEffort(ctx.database, deployment, effort),
+      );
     } else {
-      if (!isWebSearchSetting(value)) {
-        await ctx.answerCallbackQuery({
-          text: "Unknown web search option.",
-          show_alert: true,
-        });
+      if (!ctx.chat) {
         return;
       }
 
-      if (scope === "global") {
-        updatedValue = await persistGlobalWebSearchSetting(
-          ctx.database,
-          deployment,
-          value,
-        );
-      } else {
-        if (!ctx.chat) {
-          return;
-        }
-
-        updatedValue = await persistChatWebSearchSetting(
+      updatedValue = formatConfigureValue(
+        await persistChatReasoningEffort(
           ctx.database,
           ctx.chat.id,
           deployment,
-          value,
-        );
-      }
+          effort,
+        ),
+      );
     }
 
     await ctx.answerCallbackQuery();
@@ -731,41 +661,6 @@ stateComposer.callbackQuery(/^reasoning:(.+)$/, async (ctx) => {
 
   await ctx.answerCallbackQuery();
   await ctx.editMessageText(`Reasoning was set to ${updatedEffort ?? "null"}.`);
-});
-
-stateComposer.hears(/^\/websearch(?:@\w+)?(?:\s|$)/, async (ctx) => {
-  if (!isAdmin(ctx)) {
-    return;
-  }
-
-  await ctx.reply("Choose web search setting:", {
-    reply_markup: buildWebSearchKeyboard(),
-  });
-});
-
-stateComposer.callbackQuery(/^websearch:(.+)$/, async (ctx) => {
-  if (!isAdmin(ctx)) {
-    await ctx.answerCallbackQuery({
-      text: "Only the admin can change web search.",
-      show_alert: true,
-    });
-    return;
-  }
-
-  const setting = ctx.match[1];
-
-  if (!isWebSearchSetting(setting)) {
-    await ctx.answerCallbackQuery({
-      text: "Unknown web search option.",
-      show_alert: true,
-    });
-    return;
-  }
-
-  const updatedSetting = await persistWebSearchSetting(ctx.database, setting);
-
-  await ctx.answerCallbackQuery();
-  await ctx.editMessageText(`Web search was set to ${updatedSetting}.`);
 });
 
 async function replyWithTrollingIntervalCommand(

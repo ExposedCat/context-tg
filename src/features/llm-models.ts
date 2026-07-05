@@ -14,9 +14,7 @@ export type ReasoningEffort =
   | "high"
   | "xhigh";
 export type ReasoningSetting = ReasoningEffort | null;
-export type WebSearchSetting = "off" | "low" | "medium" | "high";
-export type WebSearchContextSize = Exclude<WebSearchSetting, "off">;
-export type ChatLlmSettingKey = "reasoning" | "websearch";
+export type ChatLlmSettingKey = "reasoning";
 export type LlmSettingsDeployment = LlmDeploymentId | "all";
 export type LlmSettingsTable = {
   key: string;
@@ -25,7 +23,7 @@ export type LlmSettingsTable = {
 export type ChatLlmSettingsTable = {
   chat_id: number;
   deployment: LlmSettingsDeployment;
-  key: ChatLlmSettingKey;
+  key: string;
   value: string | null;
 };
 
@@ -38,7 +36,10 @@ type LlmSettingKey =
   | LlmModelSettingKey;
 
 let reasoningEffort: ReasoningSetting = "high";
-let webSearchSetting: WebSearchSetting = "high";
+const OBSOLETE_WEB_SEARCH_SETTING_KEYS = [
+  "websearch",
+  ...LLM_DEPLOYMENT_OPTIONS.map((deployment) => `websearch:${deployment.id}`),
+] as const;
 
 export function isReasoningEffort(value: string): value is ReasoningEffort {
   return (
@@ -61,12 +62,6 @@ export function parseReasoningSetting(
   return isReasoningEffort(value) ? value : undefined;
 }
 
-export function isWebSearchSetting(value: string): value is WebSearchSetting {
-  return (
-    value === "off" || value === "low" || value === "medium" || value === "high"
-  );
-}
-
 export function isLlmSettingsDeployment(
   value: string,
 ): value is LlmSettingsDeployment {
@@ -87,36 +82,6 @@ export async function persistReasoningEffort(
   effort: ReasoningSetting,
 ): Promise<ReasoningSetting> {
   return await persistGlobalReasoningEffort(database, "all", effort);
-}
-
-export function getWebSearchSetting(): WebSearchSetting {
-  return webSearchSetting;
-}
-
-export function isWebSearchEnabled(
-  setting: WebSearchSetting = webSearchSetting,
-): boolean {
-  return setting !== "off";
-}
-
-export function getWebSearchContextSize(
-  setting: WebSearchSetting = webSearchSetting,
-): WebSearchContextSize {
-  return setting === "off" ? "low" : setting;
-}
-
-export function setWebSearchSetting(
-  setting: WebSearchSetting,
-): WebSearchSetting {
-  webSearchSetting = setting;
-  return webSearchSetting;
-}
-
-export async function persistWebSearchSetting(
-  database: LlmSettingsDatabase,
-  setting: WebSearchSetting,
-): Promise<WebSearchSetting> {
-  return await persistGlobalWebSearchSetting(database, "all", setting);
 }
 
 export async function persistLlmDeploymentName(
@@ -149,6 +114,15 @@ export async function migrateLlmSettings(database: LlmSettingsDatabase) {
       "deployment",
       "key",
     ])
+    .execute();
+
+  await database
+    .deleteFrom("llm_settings")
+    .where("key", "in", OBSOLETE_WEB_SEARCH_SETTING_KEYS)
+    .execute();
+  await database
+    .deleteFrom("chat_llm_settings")
+    .where("key", "=", "websearch")
     .execute();
 }
 
@@ -325,12 +299,6 @@ function parseStoredReasoningSetting(
   return isReasoningEffort(value) ? value : undefined;
 }
 
-function parseStoredWebSearchSetting(
-  value: string | null,
-): WebSearchSetting | undefined {
-  return value && isWebSearchSetting(value) ? value : undefined;
-}
-
 export async function getChatReasoningEffort(
   database: LlmSettingsDatabase,
   chatId: number,
@@ -395,68 +363,6 @@ export async function persistChatReasoningEffort(
   return effort;
 }
 
-export async function getChatWebSearchSetting(
-  database: LlmSettingsDatabase,
-  chatId: number,
-  deployment: LlmSettingsDeployment,
-): Promise<WebSearchSetting> {
-  const stored = await getResolvedChatLlmSetting(
-    database,
-    chatId,
-    deployment,
-    "websearch",
-  );
-  const setting =
-    stored === undefined ? undefined : parseStoredWebSearchSetting(stored);
-
-  return setting ?? (await getGlobalWebSearchSetting(database, deployment));
-}
-
-export async function getGlobalWebSearchSetting(
-  database: LlmSettingsDatabase,
-  deployment: LlmSettingsDeployment,
-): Promise<WebSearchSetting> {
-  const stored = await getResolvedGlobalLlmSetting(
-    database,
-    deployment,
-    "websearch",
-  );
-  const setting =
-    stored === undefined ? undefined : parseStoredWebSearchSetting(stored);
-
-  return setting ?? getWebSearchSetting();
-}
-
-export async function persistGlobalWebSearchSetting(
-  database: LlmSettingsDatabase,
-  deployment: LlmSettingsDeployment,
-  setting: WebSearchSetting,
-): Promise<WebSearchSetting> {
-  await persistGlobalLlmSetting(database, deployment, "websearch", setting);
-
-  if (deployment === "all") {
-    setWebSearchSetting(setting);
-  }
-
-  return setting;
-}
-
-export async function persistChatWebSearchSetting(
-  database: LlmSettingsDatabase,
-  chatId: number,
-  deployment: LlmSettingsDeployment,
-  setting: WebSearchSetting,
-): Promise<WebSearchSetting> {
-  await persistChatLlmSetting(
-    database,
-    chatId,
-    deployment,
-    "websearch",
-    setting,
-  );
-  return setting;
-}
-
 function loadLlmSetting(key: string, value: string | null) {
   const deploymentId = parseLlmModelSettingKey(key);
 
@@ -468,11 +374,6 @@ function loadLlmSetting(key: string, value: string | null) {
   switch (key) {
     case "reasoning":
       loadReasoningSetting(value);
-      break;
-    case "websearch":
-      if (value && isWebSearchSetting(value)) {
-        setWebSearchSetting(value);
-      }
       break;
   }
 }

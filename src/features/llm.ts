@@ -16,12 +16,8 @@ import {
 } from "./llm-chat-responses.ts";
 import {
   getChatReasoningEffort,
-  getChatWebSearchSetting,
   getReasoningEffort,
-  getWebSearchSetting,
-  isWebSearchEnabled,
   type ReasoningSetting,
-  type WebSearchSetting,
 } from "./llm-models.ts";
 import * as agentTool from "./llm-tools/agent.ts";
 import {
@@ -198,7 +194,6 @@ type FunctionToolCallResult = {
 
 type LlmRuntimeSettings = {
   reasoning: ReasoningSetting;
-  webSearch: WebSearchSetting;
 };
 
 const logDebug = createDebug("app:llm:debug");
@@ -279,46 +274,18 @@ async function resolveRuntimeSettings(
   if (!database || chatId === undefined) {
     return {
       reasoning: getReasoningEffort(),
-      webSearch: getWebSearchSetting(),
     };
   }
 
-  const [reasoning, webSearch] = await Promise.all([
-    getChatReasoningEffort(database, chatId, model.id),
-    getChatWebSearchSetting(database, chatId, model.id),
-  ]);
-
-  return { reasoning, webSearch };
+  return {
+    reasoning: await getChatReasoningEffort(database, chatId, model.id),
+  };
 }
 
-function getExposedTools(
-  tools: ToolName[],
-  settings: LlmRuntimeSettings,
-): ToolName[] {
-  return tools.filter((tool) => {
-    if (tool === "web_search" || tool === "read_web_page") {
-      return isWebSearchEnabled(settings.webSearch);
-    }
-
-    if (tool === "generate_image") {
-      return imageTool.isConfigured();
-    }
-
-    if (tool === "generate_image_nsfw") {
-      return imageTool.isNsfwConfigured();
-    }
-
-    return true;
-  });
-}
-
-function getToolDefinitions(
-  tools: ToolName[],
-  settings: LlmRuntimeSettings,
-): ChatCompletionTool[] {
+function getToolDefinitions(tools: ToolName[]): ChatCompletionTool[] {
   const definitions: ChatCompletionTool[] = [];
 
-  for (const tool of getExposedTools(tools, settings)) {
+  for (const tool of tools) {
     definitions.push(createChatFunctionToolDefinition(TOOL_DEFINITIONS[tool]));
   }
 
@@ -337,26 +304,6 @@ function createChatFunctionToolDefinition(
       strict: definition.strict,
     },
   };
-}
-
-function withToolAvailabilityInstructions(
-  instructions: string,
-  tools: ToolName[],
-  settings: LlmRuntimeSettings,
-): string {
-  const exposedTools = getExposedTools(tools, settings);
-  const functionToolList =
-    exposedTools.length > 0 ? exposedTools.join(", ") : "none";
-  const webSearchInstructions = exposedTools.includes("web_search")
-    ? "The callable web_search and read_web_page functions are enabled for current web facts, source links, and verification. Use them naturally when current information is needed."
-    : "Web search and page reading are disabled. If current web facts are needed, say briefly that web search is unavailable.";
-
-  return `${instructions}
-
-# Available Runtime Tools
-The callable function tool interface currently exposes exactly these tools: ${functionToolList}.
-Only call function tools that are exposed through the callable function tool interface. If a function tool is not exposed here, do not write its name, JSON arguments, or pseudo tool call syntax in a normal response; explain briefly that the tool is unavailable.
-${webSearchInstructions}`;
 }
 
 function isFunctionToolName(tool: string): tool is FunctionToolName {
@@ -936,12 +883,11 @@ async function createLlmResponse(
   instructions = getSystemInstructions(),
   settings: LlmRuntimeSettings = {
     reasoning: getReasoningEffort(),
-    webSearch: getWebSearchSetting(),
   },
   signal?: AbortSignal,
 ): Promise<ApiResponse> {
   throwIfAborted(signal);
-  const toolDefinitions = getToolDefinitions(tools, settings);
+  const toolDefinitions = getToolDefinitions(tools);
 
   return await client.chat.completions.create(
     {
@@ -949,11 +895,7 @@ async function createLlmResponse(
       messages: [
         {
           role: "system",
-          content: withToolAvailabilityInstructions(
-            instructions,
-            tools,
-            settings,
-          ),
+          content: instructions,
         },
         ...messages,
         ...input,
@@ -980,7 +922,6 @@ async function createLlmResponseWithRetries(
   instructions = getSystemInstructions(),
   settings: LlmRuntimeSettings = {
     reasoning: getReasoningEffort(),
-    webSearch: getWebSearchSetting(),
   },
 ): Promise<ApiResponse> {
   let lastError: unknown;
@@ -1094,7 +1035,6 @@ async function resolveFunctionToolCalls(
   instructions = getSystemInstructions(),
   settings: LlmRuntimeSettings = {
     reasoning: getReasoningEffort(),
-    webSearch: getWebSearchSetting(),
   },
 ): Promise<{
   response: ApiResponse;
