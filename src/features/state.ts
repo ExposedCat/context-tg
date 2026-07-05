@@ -13,10 +13,8 @@ import {
   getGlobalReasoningEffort,
   getGlobalWebSearchSetting,
   getReasoningEffort,
-  getTrollingSetting,
   getWebSearchSetting,
   isLlmSettingsDeployment,
-  isTrollingSetting,
   isWebSearchSetting,
   type LlmSettingsDeployment,
   parseReasoningSetting,
@@ -26,7 +24,6 @@ import {
   persistGlobalWebSearchSetting,
   persistLlmDeploymentName,
   persistReasoningEffort,
-  persistTrollingSetting,
   persistWebSearchSetting,
   type ReasoningSetting,
   type WebSearchSetting,
@@ -71,7 +68,6 @@ const REASONING_OPTIONS = [
 ] as const;
 
 const WEB_SEARCH_OPTIONS = ["off", "low", "medium", "high"] as const;
-const TROLLING_OPTIONS = ["off", "on"] as const;
 const MAX_RESPONSE_INTERVAL_MESSAGE_COUNT = 1_000_000;
 const CONFIGURE_KIND_LABELS = {
   reasoning: "Reasoning",
@@ -106,7 +102,9 @@ function getModelCommandUsage(): string {
   return `Usage: /model ${options} DEPLOYMENT_NAME`;
 }
 
-function getIntervalCommandUsage(command: "/trolleach" | "/proactive"): string {
+function getIntervalCommandUsage(
+  command: "/trolleach" | "/trolling" | "/proactive",
+): string {
   return `Usage: ${command} N|off, where N is a positive integer up to ${MAX_RESPONSE_INTERVAL_MESSAGE_COUNT}`;
 }
 
@@ -254,14 +252,6 @@ function buildWebSearchKeyboard(): SettingsKeyboardMarkup {
     WEB_SEARCH_OPTIONS,
     getWebSearchSetting(),
     "websearch",
-  );
-}
-
-function buildTrollingKeyboard(): SettingsKeyboardMarkup {
-  return buildSettingsKeyboard(
-    TROLLING_OPTIONS,
-    getTrollingSetting(),
-    "trolling",
   );
 }
 
@@ -768,53 +758,22 @@ stateComposer.callbackQuery(/^websearch:(.+)$/, async (ctx) => {
   await ctx.editMessageText(`Web search was set to ${updatedSetting}.`);
 });
 
-stateComposer.hears(/^\/trolling(?:@\w+)?(?:\s|$)/, async (ctx) => {
-  if (!isAdmin(ctx)) {
-    return;
-  }
-
-  await ctx.reply("Choose trolling setting:", {
-    reply_markup: buildTrollingKeyboard(),
-  });
-});
-
-stateComposer.callbackQuery(/^trolling:(.+)$/, async (ctx) => {
-  if (!isAdmin(ctx)) {
-    await ctx.answerCallbackQuery({
-      text: "Only the admin can change trolling.",
-      show_alert: true,
-    });
-    return;
-  }
-
-  const setting = ctx.match[1];
-
-  if (!isTrollingSetting(setting)) {
-    await ctx.answerCallbackQuery({
-      text: "Unknown trolling option.",
-      show_alert: true,
-    });
-    return;
-  }
-
-  const updatedSetting = await persistTrollingSetting(ctx.database, setting);
-
-  await ctx.answerCallbackQuery();
-  await ctx.editMessageText(`Trolling was set to ${updatedSetting}.`);
-});
-
-stateComposer.hears(/^\/trolleach(?:@\w+)?(?:\s+(.+))?$/, async (ctx) => {
+async function replyWithTrollingIntervalCommand(
+  ctx: Context,
+  command: "/trolleach" | "/trolling",
+  value: string | undefined,
+) {
   if (!isAdmin(ctx) || !ctx.chat) {
     return;
   }
 
-  const setting = parseMessageIntervalSetting(ctx.match[1]);
+  const setting = parseMessageIntervalSetting(value);
 
   if (setting === undefined) {
     const current = await getTrollingSettings(ctx.database, ctx.chat.id);
     await ctx.reply(
       `${getIntervalCommandUsage(
-        "/trolleach",
+        command,
       )}\nCurrent trolling interval: ${formatMessageIntervalStatus(current)}`,
     );
     return;
@@ -830,6 +789,14 @@ stateComposer.hears(/^\/trolleach(?:@\w+)?(?:\s+(.+))?$/, async (ctx) => {
   await ctx.reply(
     `Trolling interval set to ${setting} messages for this chat. It rolls a 25% chance at each interval.`,
   );
+}
+
+stateComposer.hears(/^\/trolling(?:@\w+)?(?:\s+(.+))?$/, async (ctx) => {
+  await replyWithTrollingIntervalCommand(ctx, "/trolling", ctx.match[1]);
+});
+
+stateComposer.hears(/^\/trolleach(?:@\w+)?(?:\s+(.+))?$/, async (ctx) => {
+  await replyWithTrollingIntervalCommand(ctx, "/trolleach", ctx.match[1]);
 });
 
 stateComposer.hears(/^\/proactive(?:@\w+)?(?:\s+(.+))?$/, async (ctx) => {

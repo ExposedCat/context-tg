@@ -18,9 +18,14 @@ export type LlmGeneratedImage = {
   mimeType?: string;
 };
 
+export type LlmSticker = {
+  emoji: string;
+};
+
 export type FunctionToolResult = {
   output: string;
   image?: LlmGeneratedImage;
+  sticker?: LlmSticker;
   handoffAgentId?: AgentId;
   report?: {
     documentHtml: string;

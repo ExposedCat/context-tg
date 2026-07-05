@@ -18,6 +18,9 @@ type RememberedMessage = {
   entities?: MessageEntity[];
   caption_entities?: MessageEntity[];
   photo?: unknown[];
+  sticker?: {
+    emoji?: string;
+  };
   via_bot?: unknown;
   forward_origin?: ForwardOrigin;
   forward_from?: Sender;
@@ -430,10 +433,22 @@ function hasPhotoAttachment(message: RememberedMessage): boolean {
   return message.photo !== undefined && message.photo.length > 0;
 }
 
+function formatStickerMarker(emoji: string | undefined): string {
+  const trimmedEmoji = emoji?.trim();
+  return trimmedEmoji ? `[sticker ${trimmedEmoji}]` : "[sticker]";
+}
+
+function getStickerMarker(message: RememberedMessage): string | undefined {
+  return message.sticker
+    ? formatStickerMarker(message.sticker.emoji)
+    : undefined;
+}
+
 function getMessageContent(message: RememberedMessage): string | undefined {
   const text = getMessageText(message);
   const parts = [
     hasPhotoAttachment(message) ? PHOTO_ATTACHMENT_MARKER : undefined,
+    getStickerMarker(message),
     text,
   ].filter((part): part is string => part !== undefined && part.trim() !== "");
 

@@ -5,7 +5,6 @@ import { trollAgent } from "./agents/index.ts";
 import type { Database } from "./database.ts";
 import { readLastMessages } from "./last-messages.ts";
 import { requestLlm } from "./llm.ts";
-import { isTrollingEnabled } from "./llm-models.ts";
 import type { MessageMetadata } from "./messages.ts";
 
 type Sender = {
@@ -219,10 +218,6 @@ export async function maybeSendPeriodicTroll(
   sender: Sender,
   chatId: number,
 ): Promise<void> {
-  if (!isTrollingEnabled()) {
-    return;
-  }
-
   const { messageCount, enabled, intervalMessageCount } =
     await incrementTrollingMessageCount(ctx.database, chatId);
 

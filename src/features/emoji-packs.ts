@@ -27,6 +27,7 @@ type EmojiPacksDatabase = Pick<
 type StickerSet = {
   sticker_type: string;
   stickers: Array<{
+    file_id?: string;
     custom_emoji_id?: string;
     emoji?: string;
   }>;
@@ -49,8 +50,25 @@ type EmojiReplacementGroup = {
   emoji: string;
 };
 
+type StickerCandidate = {
+  fallback: string;
+  fileId: string;
+};
+
+type StickerGroup = {
+  candidates: StickerCandidate[];
+  emoji: string;
+};
+
 type EmojiRegistry = {
   replacements: EmojiReplacementGroup[];
+  stickers: StickerGroup[];
+};
+
+export type EmojiPackSticker = {
+  emoji: string;
+  fallback: string;
+  fileId: string;
 };
 
 type MarkdownLinkMatch = {
@@ -135,8 +153,14 @@ function parsePackName(args: string): string | undefined {
   return PACK_NAME_PATTERN.test(name) ? name : undefined;
 }
 
-function getPackCommandUsage(command: "pack_add" | "pack_remove"): string {
+function getPackCommandUsage(
+  command: "pack_add" | "pack_remove" | "sticker_add" | "sticker_remove",
+): string {
   return `Usage: /${command} NAME`;
+}
+
+function getStickersCommandUsage(): string {
+  return "Usage: /stickers [add NAME | remove NAME]";
 }
 
 function isAdmin(ctx: Context): boolean {
@@ -145,11 +169,11 @@ function isAdmin(ctx: Context): boolean {
 
 function formatEmojiPacksList(packs: EmojiPack[]): string {
   if (packs.length === 0) {
-    return "No active emoji packs.";
+    return "No active emoji/sticker packs.";
   }
 
   return [
-    "Active emoji packs:",
+    "Active emoji/sticker packs:",
     ...packs.map((pack, index) => `${index + 1}. ${pack.name}`),
   ].join("\n");
 }
@@ -254,11 +278,28 @@ async function validateEmojiPack(
   return emojiCount;
 }
 
+async function validateStickerPack(
+  api: StickerSetReader,
+  name: string,
+): Promise<number> {
+  const stickerSet = await api.getStickerSet(name);
+  const stickerCount = stickerSet.stickers.filter(
+    (sticker) => sticker.file_id && sticker.emoji,
+  ).length;
+
+  if (stickerCount === 0) {
+    throw new Error("Sticker set does not contain emoji-mapped stickers.");
+  }
+
+  return stickerCount;
+}
+
 async function loadEmojiRegistry(
   database: EmojiPacksDatabase,
   api: StickerSetReader,
 ): Promise<EmojiRegistry> {
   const replacementGroups = new Map<string, EmojiReplacementCandidate[]>();
+  const stickerGroups = new Map<string, StickerCandidate[]>();
   const packs = await listEmojiPacks(database);
 
   for (const pack of packs) {
@@ -266,15 +307,38 @@ async function loadEmojiRegistry(
       const stickerSet = await api.getStickerSet(pack.name);
 
       if (stickerSet.sticker_type !== "custom_emoji") {
-        logDebug("Skipping non-custom emoji sticker set", { name: pack.name });
-        continue;
+        logDebug("Skipping custom emoji replacements for sticker set", {
+          name: pack.name,
+          stickerType: stickerSet.sticker_type,
+        });
       }
 
       for (const sticker of stickerSet.stickers) {
         const id = sticker.custom_emoji_id;
         const fallback = sticker.emoji;
+        const fileId = sticker.file_id;
 
-        if (!id || !fallback) {
+        if (!fallback) {
+          continue;
+        }
+
+        if (fileId) {
+          for (const emoji of getEmojiAliases(fallback)) {
+            const candidates = stickerGroups.get(emoji) ?? [];
+
+            if (!stickerGroups.has(emoji)) {
+              stickerGroups.set(emoji, candidates);
+            }
+
+            if (candidates.some((candidate) => candidate.fileId === fileId)) {
+              continue;
+            }
+
+            candidates.push({ fallback, fileId });
+          }
+        }
+
+        if (stickerSet.sticker_type !== "custom_emoji" || !id) {
           continue;
         }
 
@@ -302,7 +366,12 @@ async function loadEmojiRegistry(
   );
 
   replacements.sort((left, right) => right.emoji.length - left.emoji.length);
-  return { replacements };
+  const stickers = Array.from(stickerGroups.entries()).map(
+    ([emoji, candidates]) => ({ emoji, candidates }),
+  );
+
+  stickers.sort((left, right) => right.emoji.length - left.emoji.length);
+  return { replacements, stickers };
 }
 
 async function getEmojiRegistry(
@@ -335,6 +404,34 @@ function findEmojiReplacementAt(
   const candidate =
     group.candidates[Math.floor(Math.random() * group.candidates.length)];
   return { emoji: group.emoji, ...candidate };
+}
+
+export async function findRandomStickerForEmoji(
+  database: EmojiPacksDatabase,
+  api: StickerSetReader,
+  emoji: string,
+): Promise<EmojiPackSticker | undefined> {
+  const trimmedEmoji = emoji.trim();
+
+  if (!trimmedEmoji) {
+    return undefined;
+  }
+
+  const registry = await getEmojiRegistry(database, api);
+
+  for (const alias of getEmojiAliases(trimmedEmoji)) {
+    const group = registry.stickers.find((sticker) => sticker.emoji === alias);
+
+    if (!group || group.candidates.length === 0) {
+      continue;
+    }
+
+    const candidate =
+      group.candidates[Math.floor(Math.random() * group.candidates.length)];
+    return { emoji: group.emoji, ...candidate };
+  }
+
+  return undefined;
 }
 
 function hasReplacementCandidates(payload: ApiPayload): boolean {
@@ -736,6 +833,58 @@ emojiPacksComposer.command("packs", async (ctx) => {
   await ctx.reply(formatEmojiPacksList(await listEmojiPacks(ctx.database)));
 });
 
+emojiPacksComposer.command("stickers", async (ctx) => {
+  const args = typeof ctx.match === "string" ? ctx.match.trim() : "";
+
+  if (!args) {
+    await ctx.reply(formatEmojiPacksList(await listEmojiPacks(ctx.database)));
+    return;
+  }
+
+  if (!isAdmin(ctx)) {
+    await ctx.reply("Only the admin can change sticker packs.");
+    return;
+  }
+
+  const [action, ...nameParts] = args.split(/\s+/).filter(Boolean);
+  const name = parsePackName(nameParts.join(" "));
+
+  if (!name || (action !== "add" && action !== "remove")) {
+    await ctx.reply(getStickersCommandUsage());
+    return;
+  }
+
+  if (action === "add") {
+    let stickerCount: number;
+    try {
+      stickerCount = await validateStickerPack(ctx.api, name);
+    } catch (error) {
+      logError("Failed to validate sticker pack", { name, error });
+      await ctx.reply(`Could not add ${name}: sticker pack not found.`);
+      return;
+    }
+
+    const result = await createEmojiPack(ctx.database, name);
+
+    if (result === "exists") {
+      await ctx.reply(`${name} is already active.`);
+      return;
+    }
+
+    invalidateEmojiRegistry();
+    await ctx.reply(`Added ${name} (${stickerCount} stickers).`);
+    return;
+  }
+
+  if (!(await removeEmojiPack(ctx.database, name))) {
+    await ctx.reply(`${name} is not active.`);
+    return;
+  }
+
+  invalidateEmojiRegistry();
+  await ctx.reply(`Removed ${name}.`);
+});
+
 emojiPacksComposer.command("pack_add", async (ctx) => {
   if (!isAdmin(ctx)) {
     await ctx.reply("Only the admin can change emoji packs.");
@@ -769,6 +918,39 @@ emojiPacksComposer.command("pack_add", async (ctx) => {
   await ctx.reply(`Added ${name} (${emojiCount} emoji).`);
 });
 
+emojiPacksComposer.command("sticker_add", async (ctx) => {
+  if (!isAdmin(ctx)) {
+    await ctx.reply("Only the admin can change sticker packs.");
+    return;
+  }
+
+  const name = parsePackName(typeof ctx.match === "string" ? ctx.match : "");
+
+  if (!name) {
+    await ctx.reply(getPackCommandUsage("sticker_add"));
+    return;
+  }
+
+  let stickerCount: number;
+  try {
+    stickerCount = await validateStickerPack(ctx.api, name);
+  } catch (error) {
+    logError("Failed to validate sticker pack", { name, error });
+    await ctx.reply(`Could not add ${name}: sticker pack not found.`);
+    return;
+  }
+
+  const result = await createEmojiPack(ctx.database, name);
+
+  if (result === "exists") {
+    await ctx.reply(`${name} is already active.`);
+    return;
+  }
+
+  invalidateEmojiRegistry();
+  await ctx.reply(`Added ${name} (${stickerCount} stickers).`);
+});
+
 emojiPacksComposer.command("pack_remove", async (ctx) => {
   if (!isAdmin(ctx)) {
     await ctx.reply("Only the admin can change emoji packs.");
@@ -779,6 +961,28 @@ emojiPacksComposer.command("pack_remove", async (ctx) => {
 
   if (!name) {
     await ctx.reply(getPackCommandUsage("pack_remove"));
+    return;
+  }
+
+  if (!(await removeEmojiPack(ctx.database, name))) {
+    await ctx.reply(`${name} is not active.`);
+    return;
+  }
+
+  invalidateEmojiRegistry();
+  await ctx.reply(`Removed ${name}.`);
+});
+
+emojiPacksComposer.command("sticker_remove", async (ctx) => {
+  if (!isAdmin(ctx)) {
+    await ctx.reply("Only the admin can change sticker packs.");
+    return;
+  }
+
+  const name = parsePackName(typeof ctx.match === "string" ? ctx.match : "");
+
+  if (!name) {
+    await ctx.reply(getPackCommandUsage("sticker_remove"));
     return;
   }
 

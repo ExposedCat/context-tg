@@ -13,6 +13,7 @@ import {
   resolveMessageAgent,
   stripMessageAgentName,
 } from "./agents/index.ts";
+import { findRandomStickerForEmoji } from "./emoji-packs.ts";
 import { APP_ENV } from "./env.ts";
 import { readLastMessages } from "./last-messages.ts";
 import {
@@ -25,6 +26,7 @@ import {
   type LlmRequestMessageInput,
   type LlmRequestOptions,
   type LlmResponse,
+  type LlmSticker,
   type LlmToolContext,
   requestLlm,
   type ToolName,
@@ -70,6 +72,7 @@ type LlmContextMessage = {
   paid_media?: unknown;
   video?: unknown;
   voice?: unknown;
+  sticker?: TelegramSticker;
 };
 
 type TextMessage = LlmContextMessage & {
@@ -95,6 +98,7 @@ type ProactiveTriggerMessage = {
   quote?: {
     text: string;
   };
+  sticker?: TelegramSticker;
   reply_to_message?: {
     message_id: number;
     message_thread_id?: number;
@@ -102,6 +106,7 @@ type ProactiveTriggerMessage = {
     from?: TelegramUser;
     text?: string;
     caption?: string;
+    sticker?: TelegramSticker;
   };
   external_reply?: LlmContextMessage;
 };
@@ -154,6 +159,10 @@ type TelegramDocument = {
   mime_type?: string;
 };
 
+type TelegramSticker = {
+  emoji?: string;
+};
+
 type TelegramImageAttachment = {
   fileId: string;
   mimeType?: string;
@@ -171,6 +180,7 @@ const PROACTIVE_CONTEXT_MESSAGE_COUNT = 10;
 const PROACTIVE_TASK_TEXT = "Proactive response";
 const PROACTIVE_DISABLED_TOOLS = new Set<ToolName>([
   "generate_image",
+  "send_sticker",
   "schedule_message",
   "cron_message",
   "remember",
@@ -190,6 +200,19 @@ const UNSUPPORTED_CAPTIONED_MEDIA_TYPES = [
 
 function getMessageText(message: LlmContextMessage): string | undefined {
   return message.text ?? message.caption;
+}
+
+function formatStickerMarker(emoji: string | undefined): string {
+  const trimmedEmoji = emoji?.trim();
+  return trimmedEmoji ? `[sticker ${trimmedEmoji}]` : "[sticker]";
+}
+
+function getStickerMarker(
+  message: LlmContextMessage | undefined,
+): string | undefined {
+  return message?.sticker
+    ? formatStickerMarker(message.sticker.emoji)
+    : undefined;
 }
 
 function getUnsupportedCaptionedMediaLabel(
@@ -286,6 +309,7 @@ function getLlmMessageContent(
       ? buildLlmMessageText(message, text)
       : getLlmContextText(message);
   const parts = [
+    getStickerMarker(message),
     hasImageAttachments(message) ? "[Attached image]" : undefined,
     messageText,
   ].filter((part): part is string => part !== undefined && part.trim() !== "");
@@ -983,14 +1007,29 @@ function appendToolUsageMarkdown(text: string, tools: ToolName[]): string {
   return trimmedText ? `${trimmedText}\n\n${suffix}` : suffix;
 }
 
+function normalizeStickerPlaceholder(text: string): string {
+  return text.replaceAll(/\s+/g, " ").trim();
+}
+
+function isStickerOnlyResponse(
+  response: string,
+  stickers: LlmSticker[],
+): boolean {
+  const normalizedResponse = normalizeStickerPlaceholder(response);
+  return stickers.some(
+    (sticker) =>
+      normalizedResponse ===
+      normalizeStickerPlaceholder(formatStickerMarker(sticker.emoji)),
+  );
+}
+
 function formatLlmResponse(llmResponse: LlmResponse): {
   richMarkdown: string;
 } {
   const response = llmResponse.response ?? "";
-  const richMarkdown = formatMarkdownCitations(
-    response,
-    llmResponse.web_search.citations,
-  );
+  const richMarkdown = isStickerOnlyResponse(response, llmResponse.stickers)
+    ? ""
+    : formatMarkdownCitations(response, llmResponse.web_search.citations);
 
   return {
     richMarkdown: appendToolUsageMarkdown(richMarkdown, llmResponse.tools),
@@ -1199,21 +1238,38 @@ async function sendGeneratedImagePhotos(
   return sentMessages;
 }
 
-async function sendGeneratedImagesResponse(
+async function sendStickerMessages(
   ctx: Context,
   message: TextMessage,
-  images: LlmGeneratedImage[],
-  formattedResponse: ReturnType<typeof formatLlmResponse>,
+  stickers: LlmSticker[],
 ): Promise<Array<{ message_id: number }>> {
-  const sentMessages = await sendGeneratedImagePhotos(ctx, message, images);
+  const sentMessages = [];
 
-  sentMessages.push(
-    ...(await sendRichMarkdownResponse(
-      ctx,
-      message,
-      formattedResponse.richMarkdown || "Image attached.",
-    )),
-  );
+  for (const requestedSticker of stickers) {
+    try {
+      const sticker = await findRandomStickerForEmoji(
+        ctx.database,
+        ctx.api,
+        requestedSticker.emoji,
+      );
+
+      if (!sticker) {
+        continue;
+      }
+
+      const sentSticker = await ctx.replyWithSticker(sticker.fileId, {
+        reply_parameters: {
+          message_id: message.message_id,
+        },
+      });
+      sentMessages.push(sentSticker);
+    } catch (error) {
+      logError("Failed to send sticker:", {
+        emoji: requestedSticker.emoji,
+        error,
+      });
+    }
+  }
 
   return sentMessages;
 }
@@ -1477,24 +1533,32 @@ async function handleChatRequest(
       imageUsageConsumedCount = imageAttachmentCount;
     }
 
-    const sentMessages =
-      llmResponse.images.length > 0
-        ? await sendGeneratedImagesResponse(
-            ctx,
-            message,
-            llmResponse.images,
-            formattedResponse,
-          )
-        : llmResponse.report
-          ? await sendReportResponse(
-              ctx,
-              message,
-              llmResponse.report,
-              formattedResponse,
-            )
-          : [];
+    const sentMessages = [
+      ...(await sendGeneratedImagePhotos(ctx, message, llmResponse.images)),
+      ...(await sendStickerMessages(ctx, message, llmResponse.stickers)),
+    ];
 
-    if (!llmResponse.report && llmResponse.images.length === 0) {
+    if (llmResponse.report) {
+      sentMessages.push(
+        ...(await sendReportResponse(
+          ctx,
+          message,
+          llmResponse.report,
+          formattedResponse,
+        )),
+      );
+    } else if (llmResponse.images.length > 0) {
+      sentMessages.push(
+        ...(await sendRichMarkdownResponse(
+          ctx,
+          message,
+          formattedResponse.richMarkdown || "Image attached.",
+        )),
+      );
+    } else if (
+      formattedResponse.richMarkdown ||
+      llmResponse.stickers.length === 0
+    ) {
       sentMessages.push(
         ...(await sendRichMarkdownResponse(
           ctx,

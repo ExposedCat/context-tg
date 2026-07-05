@@ -16,7 +16,6 @@ export type ReasoningEffort =
 export type ReasoningSetting = ReasoningEffort | null;
 export type WebSearchSetting = "off" | "low" | "medium" | "high";
 export type WebSearchContextSize = Exclude<WebSearchSetting, "off">;
-export type TrollingSetting = "off" | "on";
 export type ChatLlmSettingKey = "reasoning" | "websearch";
 export type LlmSettingsDeployment = LlmDeploymentId | "all";
 export type LlmSettingsTable = {
@@ -36,12 +35,10 @@ type LlmDeploymentSettingKey = `${ChatLlmSettingKey}:${LlmDeploymentId}`;
 type LlmSettingKey =
   | ChatLlmSettingKey
   | LlmDeploymentSettingKey
-  | "trolling"
   | LlmModelSettingKey;
 
 let reasoningEffort: ReasoningSetting = "high";
 let webSearchSetting: WebSearchSetting = "high";
-let trollingSetting: TrollingSetting = "off";
 
 export function isReasoningEffort(value: string): value is ReasoningEffort {
   return (
@@ -68,10 +65,6 @@ export function isWebSearchSetting(value: string): value is WebSearchSetting {
   return (
     value === "off" || value === "low" || value === "medium" || value === "high"
   );
-}
-
-export function isTrollingSetting(value: string): value is TrollingSetting {
-  return value === "off" || value === "on";
 }
 
 export function isLlmSettingsDeployment(
@@ -124,27 +117,6 @@ export async function persistWebSearchSetting(
   setting: WebSearchSetting,
 ): Promise<WebSearchSetting> {
   return await persistGlobalWebSearchSetting(database, "all", setting);
-}
-
-export function getTrollingSetting(): TrollingSetting {
-  return trollingSetting;
-}
-
-export function isTrollingEnabled(): boolean {
-  return trollingSetting === "on";
-}
-
-export function setTrollingSetting(setting: TrollingSetting): TrollingSetting {
-  trollingSetting = setting;
-  return trollingSetting;
-}
-
-export async function persistTrollingSetting(
-  database: LlmSettingsDatabase,
-  setting: TrollingSetting,
-): Promise<TrollingSetting> {
-  await persistLlmSetting(database, "trolling", setting);
-  return setTrollingSetting(setting);
 }
 
 export async function persistLlmDeploymentName(
@@ -500,11 +472,6 @@ function loadLlmSetting(key: string, value: string | null) {
     case "websearch":
       if (value && isWebSearchSetting(value)) {
         setWebSearchSetting(value);
-      }
-      break;
-    case "trolling":
-      if (value && isTrollingSetting(value)) {
-        setTrollingSetting(value);
       }
       break;
   }

@@ -36,10 +36,12 @@ import * as memoTool from "./llm-tools/memos.ts";
 import type { LlmReport } from "./llm-tools/reports.ts";
 import * as reportsTool from "./llm-tools/reports.ts";
 import * as scheduleTool from "./llm-tools/schedule.ts";
+import * as stickerTool from "./llm-tools/sticker.ts";
 import type {
   FunctionToolResult,
   FunctionToolRunner,
   LlmGeneratedImage,
+  LlmSticker,
   LlmToolContext,
 } from "./llm-tools/types.ts";
 import * as webSearchTool from "./llm-tools/web-search.ts";
@@ -47,7 +49,11 @@ import * as youtubeTool from "./llm-tools/youtube.ts";
 import { buildMemosMetadataSection } from "./memos.ts";
 
 export type { LlmReport } from "./llm-tools/reports.ts";
-export type { LlmGeneratedImage, LlmToolContext } from "./llm-tools/types.ts";
+export type {
+  LlmGeneratedImage,
+  LlmSticker,
+  LlmToolContext,
+} from "./llm-tools/types.ts";
 
 export const TOOL_DEFINITIONS = {
   web_search: webSearchTool.toolDefinition,
@@ -58,6 +64,7 @@ export const TOOL_DEFINITIONS = {
   get_recent_news: gdeltTool.toolDefinition,
   read_youtube_video: youtubeTool.toolDefinition,
   generate_image: imageTool.toolDefinition,
+  send_sticker: stickerTool.toolDefinition,
   send_report: reportsTool.toolDefinition,
   send_trading_report: reportsTool.tradingToolDefinition,
   call_agent: agentTool.toolDefinition,
@@ -78,6 +85,7 @@ const FUNCTION_TOOL_RUNNERS = {
   get_recent_news: gdeltTool.execute,
   read_youtube_video: youtubeTool.execute,
   generate_image: imageTool.execute,
+  send_sticker: stickerTool.execute,
   send_report: reportsTool.execute,
   send_trading_report: reportsTool.executeTrading,
   call_agent: agentTool.createRunner(runAgent),
@@ -135,6 +143,7 @@ export type LlmResponse = {
   response?: string;
   report?: LlmReport;
   images: LlmGeneratedImage[];
+  stickers: LlmSticker[];
   web_search: {
     used: boolean;
     citations: LlmCitation[];
@@ -203,6 +212,7 @@ type LlmRequestState = {
   sentImmediateContentFilterWarning: boolean;
   report?: LlmReport;
   images: LlmGeneratedImage[];
+  stickers: LlmSticker[];
 };
 
 function getSystemInstructions(): string {
@@ -663,6 +673,10 @@ async function runFunctionToolCall(
 
   if (result.image) {
     state.images.push(result.image);
+  }
+
+  if (result.sticker) {
+    state.stickers.push(result.sticker);
   }
 
   return {
@@ -1149,6 +1163,7 @@ async function requestLlmWithInstructions(
     receivedResponse: false,
     sentImmediateContentFilterWarning: false,
     images: [],
+    stickers: [],
   };
   const initialResponse = await createLlmResponseWithRetries(
     client,
@@ -1194,6 +1209,7 @@ async function requestLlmWithInstructions(
     response: responseText,
     report: state.report,
     images: state.images,
+    stickers: state.stickers,
     web_search: {
       used: calledTools.includes("web_search"),
       citations,
