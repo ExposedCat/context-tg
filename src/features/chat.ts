@@ -979,10 +979,24 @@ const TOOL_USAGE_EMOJIS: Partial<
   remember: { id: "5778168620278354602", fallback: "💾" },
   forget: { id: "5877738786971979125", fallback: "🗑️" },
 };
+const ERROR_USAGE_EMOJI = {
+  id: "5881702736843511327",
+  fallback: "⚠️",
+} as const;
 
-function formatToolUsageMarkdown(tools: ToolName[]): string {
+function formatToolUsageMarkdown(
+  tools: ToolName[],
+  includeErrorIcon: boolean,
+): string {
   const usedEmojiIds = new Set<string>();
   const emojis: string[] = [];
+
+  if (includeErrorIcon) {
+    usedEmojiIds.add(ERROR_USAGE_EMOJI.id);
+    emojis.push(
+      `![${ERROR_USAGE_EMOJI.fallback}](tg://emoji?id=${ERROR_USAGE_EMOJI.id})`,
+    );
+  }
 
   for (const tool of tools) {
     const emoji = TOOL_USAGE_EMOJIS[tool];
@@ -998,15 +1012,51 @@ function formatToolUsageMarkdown(tools: ToolName[]): string {
   return emojis.join(" ");
 }
 
-function appendToolUsageMarkdown(text: string, tools: ToolName[]): string {
-  const suffix = formatToolUsageMarkdown(tools);
+function formatMarkdownBlockquote(text: string): string {
+  const trimmedText = text.trim();
 
-  if (!suffix) {
-    return text;
+  if (!trimmedText) {
+    return "";
   }
 
+  return trimmedText
+    .split(/\r?\n/)
+    .map((line) => (line ? `> ${line}` : ">"))
+    .join("\n");
+}
+
+function getUniqueNonEmptyLines(values: string[]): string[] {
+  const lines = values.map((value) => value.trim()).filter(Boolean);
+  return [...new Set(lines)];
+}
+
+function appendResponseFooterMarkdown(
+  text: string,
+  tools: ToolName[],
+  errors: string[],
+): string {
+  const uniqueErrors = getUniqueNonEmptyLines(errors);
+  const suffix = formatToolUsageMarkdown(tools, uniqueErrors.length > 0);
+  const sections: string[] = [];
   const trimmedText = text.trimEnd();
-  return trimmedText ? `${trimmedText}\n\n${suffix}` : suffix;
+
+  if (trimmedText) {
+    sections.push(trimmedText);
+  }
+
+  for (const error of uniqueErrors) {
+    const blockquote = formatMarkdownBlockquote(error);
+
+    if (blockquote) {
+      sections.push(blockquote);
+    }
+  }
+
+  if (suffix) {
+    sections.push(suffix);
+  }
+
+  return sections.join("\n\n");
 }
 
 function normalizeStickerPlaceholder(text: string): string {
@@ -1025,16 +1075,24 @@ function isStickerOnlyResponse(
   );
 }
 
-function formatLlmResponse(llmResponse: LlmResponse): {
+function formatLlmResponse(
+  llmResponse: LlmResponse,
+  options: { errors?: string[] } = {},
+): {
   richMarkdown: string;
 } {
   const response = llmResponse.response ?? "";
   const richMarkdown = isStickerOnlyResponse(response, llmResponse.stickers)
     ? ""
     : formatMarkdownCitations(response, llmResponse.web_search.citations);
+  const errors = [...llmResponse.errors, ...(options.errors ?? [])];
 
   return {
-    richMarkdown: appendToolUsageMarkdown(richMarkdown, llmResponse.tools),
+    richMarkdown: appendResponseFooterMarkdown(
+      richMarkdown,
+      llmResponse.tools,
+      errors,
+    ),
   };
 }
 
@@ -1122,14 +1180,33 @@ async function createGeneratedImageInputFile(
   };
 }
 
-function getErrorResponseText(error: unknown): string {
+function getErrorDetails(error: unknown): string {
   if (error instanceof LlmRequestError) {
-    const prefix = error.kind === "content_filter" ? "Warn" : "Error";
-    return `${prefix}: ${sanitizeLlmHtml(error.details)}`;
+    return error.details;
   }
 
-  const details = error instanceof Error ? error.message : String(error);
-  return `Error: ${sanitizeLlmHtml(details)}`;
+  return error instanceof Error ? error.message : String(error);
+}
+
+function formatHtmlBlockquote(text: string): string {
+  const trimmedText = text.trim() || "Unknown error";
+  return `<blockquote>${escapeHtml(trimmedText)}</blockquote>`;
+}
+
+function formatModelFailureResponse(
+  error: unknown,
+  resumeCommand: string | undefined,
+): string {
+  const parts = [
+    "Failed to generate response",
+    formatHtmlBlockquote(getErrorDetails(error)),
+  ];
+
+  if (resumeCommand) {
+    parts.push(resumeCommand);
+  }
+
+  return parts.join("\n\n");
 }
 
 function formatQuotaExceededResponse(
@@ -1322,6 +1399,20 @@ function getResumePrompt(taskText: string): string {
   ].join("\n");
 }
 
+function getErrorRecoveryPrompt(taskText: string, error: unknown): string {
+  return [
+    "The previous attempt to handle this Telegram message failed because of an application or tool error.",
+    "Use the original request and the error below to produce the best user-facing response you can.",
+    "If the task cannot be completed because of the error, explain that briefly. Do not include the diagnostic blockquote or footer icon; the app will append those.",
+    "",
+    "Original request:",
+    taskText.trim() || "No text message was available.",
+    "",
+    "Error:",
+    getErrorDetails(error),
+  ].join("\n");
+}
+
 function getResumableResponseId(
   error: unknown,
   progressResponseId: string | undefined,
@@ -1357,6 +1448,100 @@ async function saveResumableTaskThread(
     logError("Failed to save resumable task thread:", { responseId, error });
     return false;
   }
+}
+
+async function saveRecoveredResponseThread(
+  ctx: Context,
+  chatId: number,
+  message: TextMessage,
+  threadId: number,
+  agent: AgentDefinition,
+  llmResponse: LlmResponse,
+  sentMessages: Array<{ message_id: number }>,
+  saveOriginalMessageThread: boolean,
+): Promise<void> {
+  if (!llmResponse.response_id) {
+    return;
+  }
+
+  const responseAgent = getAgentById(llmResponse.handoff_agent_id) ?? agent;
+
+  try {
+    if (saveOriginalMessageThread) {
+      await saveThread(ctx.database, {
+        chat_id: chatId,
+        message_id: message.message_id,
+        thread_id: threadId,
+        response_id: llmResponse.response_id,
+        agent_id: responseAgent.id,
+      });
+    }
+
+    for (const sentMessage of sentMessages) {
+      await createThread(ctx.database, {
+        chat_id: chatId,
+        message_id: sentMessage.message_id,
+        thread_id: threadId,
+        response_id: llmResponse.response_id,
+        agent_id: responseAgent.id,
+      });
+    }
+  } catch (error) {
+    logError("Failed to save recovered error response thread:", {
+      responseId: llmResponse.response_id,
+      error,
+    });
+  }
+}
+
+async function sendRecoveredErrorResponse(
+  ctx: Context,
+  chatId: number,
+  message: TextMessage,
+  taskText: string,
+  threadId: number,
+  agent: AgentDefinition,
+  error: unknown,
+  signal: AbortSignal,
+  saveOriginalMessageThread: boolean,
+): Promise<void> {
+  const toolContext = getLlmToolContext(chatId, message);
+  const llmResponse = await withTypingAction(
+    ctx,
+    async () =>
+      await requestLlm(
+        getErrorRecoveryPrompt(taskText, error),
+        [],
+        undefined,
+        {
+          database: ctx.database,
+          context: toolContext,
+          agentId: agent.id,
+          signal,
+        },
+        agent.buildInstructions(),
+        agent.MODEL,
+      ),
+  );
+  const formattedResponse = formatLlmResponse(llmResponse, {
+    errors: [getErrorDetails(error)],
+  });
+  const sentMessages = await sendRichMarkdownResponse(
+    ctx,
+    message,
+    formattedResponse.richMarkdown,
+  );
+
+  await saveRecoveredResponseThread(
+    ctx,
+    chatId,
+    message,
+    threadId,
+    agent,
+    llmResponse,
+    sentMessages,
+    saveOriginalMessageThread,
+  );
 }
 
 type HandleChatRequestOptions = {
@@ -1617,7 +1802,11 @@ async function handleChatRequest(
       resumableResponseId,
       taskCreated,
     );
-    if (!responseSent) {
+    const refundUnusedUsage = async () => {
+      if (responseSent) {
+        return;
+      }
+
       await refundUsage(ctx.database, chatId, "text_responses");
 
       if (imageUsageConsumedCount > 0) {
@@ -1628,9 +1817,10 @@ async function handleChatRequest(
           imageUsageConsumedCount,
         );
       }
-    }
+    };
 
     if (taskStatus === "canceled") {
+      await refundUnusedUsage();
       const canceledResponse = resumable
         ? `Canceled. Resume: ${getResumeCommand(message.message_id)}`
         : "Canceled.";
@@ -1644,11 +1834,38 @@ async function handleChatRequest(
       return;
     }
 
-    const errorResponse = resumable
-      ? `${getErrorResponseText(error)}\n\nResume: ${getResumeCommand(
-          message.message_id,
-        )}`
-      : getErrorResponseText(error);
+    let responseError = error;
+
+    if (!(error instanceof LlmRequestError) && !responseSent) {
+      try {
+        await sendRecoveredErrorResponse(
+          ctx,
+          chatId,
+          message,
+          options.taskText ?? stripMessageAgentName(text, ctx.me.username),
+          threadId,
+          activeAgent,
+          error,
+          taskAbortController.signal,
+          !resumable,
+        );
+        responseSent = true;
+        return;
+      } catch (recoveryError) {
+        responseError = recoveryError;
+        logError("Failed to recover from non-model error:", {
+          originalError: error,
+          recoveryError,
+        });
+      }
+    }
+
+    await refundUnusedUsage();
+
+    const errorResponse = formatModelFailureResponse(
+      responseError,
+      resumable ? getResumeCommand(message.message_id) : undefined,
+    );
 
     await ctx.reply(errorResponse, {
       ...linkPreviewOptions,

@@ -146,6 +146,7 @@ export type LlmResponse = {
   report?: LlmReport;
   images: LlmGeneratedImage[];
   stickers: LlmSticker[];
+  errors: string[];
   web_search: {
     used: boolean;
     citations: LlmCitation[];
@@ -215,6 +216,7 @@ type LlmRequestState = {
   report?: LlmReport;
   images: LlmGeneratedImage[];
   stickers: LlmSticker[];
+  errors: string[];
 };
 
 function getSystemInstructions(): string {
@@ -669,10 +671,34 @@ async function runFunctionToolCall(
   const args = parseJsonObject(call.function.arguments);
   logDebug("Running tool call", formatToolCallLog(call));
   const runner = FUNCTION_TOOL_RUNNERS[call.function.name];
-  const result = normalizeFunctionToolResult(
-    await runner(args, context, { signal, database, agentId, client }),
-  );
-  throwIfAborted(signal);
+
+  let result: FunctionToolResult;
+  try {
+    result = normalizeFunctionToolResult(
+      await runner(args, context, { signal, database, agentId, client }),
+    );
+    throwIfAborted(signal);
+  } catch (error) {
+    throwIfAborted(signal);
+    const details = getErrorDetail(error);
+    const message = `Tool ${call.function.name} failed: ${details}`;
+    state.errors.push(message);
+    logError("Function tool call failed", {
+      call: formatToolCallLog(call),
+      error,
+    });
+
+    return {
+      toolOutput: createToolOutput(
+        call,
+        JSON.stringify({
+          error: "Tool call failed",
+          tool: call.function.name,
+          details,
+        }),
+      ),
+    };
+  }
 
   if (result.report) {
     state.report = result.report;
@@ -1176,6 +1202,7 @@ async function requestLlmWithInstructions(
     sentImmediateContentFilterWarning: false,
     images: [],
     stickers: [],
+    errors: [],
   };
   const initialResponse = await createLlmResponseWithRetries(
     client,
@@ -1222,6 +1249,7 @@ async function requestLlmWithInstructions(
     report: state.report,
     images: state.images,
     stickers: state.stickers,
+    errors: state.errors,
     web_search: {
       used: calledTools.includes("web_search"),
       citations,
@@ -1266,6 +1294,7 @@ async function runAgent(
     stickers_attached: result.stickers.length,
     tools_used: result.tools,
     tool_call_count: result.tool_call_count,
+    errors: result.errors,
     web_search: result.web_search.used,
   });
 
