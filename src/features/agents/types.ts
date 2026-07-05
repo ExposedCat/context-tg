@@ -3,6 +3,7 @@ import type { LlmDeployment } from "../llm-deployments.ts";
 
 export type AgentId =
   | "normal"
+  | "tofu"
   | "trader"
   | "researcher"
   | "politician"
@@ -15,5 +16,6 @@ export type AgentDefinition = {
   name: string[];
   MODEL: AgentModel;
   tools: ToolName[];
+  usesMemory?: boolean;
   buildInstructions: () => string;
 };

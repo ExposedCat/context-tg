@@ -4,6 +4,7 @@ import { delay, throwIfAborted } from "../utils/async.ts";
 import {
   type AgentId,
   type AgentModel,
+  getAgentById,
   getCallableAgentById,
   normalAgent,
 } from "./agents/index.ts";
@@ -229,15 +230,21 @@ async function withMemoMetadata(
 ): Promise<string> {
   const database = options.database;
   const chatId = options.context?.chatId;
+  const agentId = options.agentId ?? normalAgent.id;
+  const agent = getAgentById(agentId);
 
   if (!database || chatId === undefined) {
+    return instructions;
+  }
+
+  if (agent?.usesMemory === false) {
     return instructions;
   }
 
   const memosSection = await buildMemosMetadataSection(
     database,
     chatId,
-    options.agentId ?? normalAgent.id,
+    agentId,
     options.context?.userId,
     options.context?.userName,
   );
