@@ -23,6 +23,14 @@ import { delay } from "./utils/async.ts";
 const RUNNER_CONCURRENCY = 500;
 const TELEGRAM_RATE_LIMIT_RETRY_DELAY_MS = 3000;
 const TELEGRAM_RATE_LIMIT_MAX_RETRIES = 5;
+const BOT_COMMANDS = [
+  { command: "configure", description: "Configure chat settings" },
+  { command: "stickers", description: "List sticker packs" },
+  { command: "packs", description: "List emoji packs" },
+  { command: "tasks", description: "Show recent tasks" },
+  { command: "schedule", description: "Show scheduled messages" },
+  { command: "usage", description: "Show usage quotas" },
+] as const;
 
 const logDebug = createDebug("app:bot:debug");
 const logError = createDebug("app:bot:error");
@@ -97,6 +105,7 @@ export function initBot(token: string, database: Database) {
 
   return async () => {
     await bot.init();
+    await bot.api.setMyCommands(BOT_COMMANDS);
     await startScheduleDispatcher(database, bot.api);
     await bot.api.deleteWebhook({ drop_pending_updates: true });
 

@@ -155,29 +155,38 @@ function parsePackName(args: string): string | undefined {
 }
 
 function getPackCommandUsage(
-  command: "pack_add" | "pack_remove" | "sticker_add" | "sticker_remove",
+  command: "pack_add" | "pack_rm" | "sticker_add" | "sticker_rm",
 ): string {
   return `Usage: /${command} NAME`;
-}
-
-function getStickersCommandUsage(): string {
-  return "Usage: /stickers [add NAME | remove NAME]";
 }
 
 function isAdmin(ctx: Context): boolean {
   return ctx.from?.id === APP_ENV.ADMIN_ID;
 }
 
+function getPackListFooter(kind: PackKind): string {
+  const addCommand = kind === "emoji" ? "pack_add" : "sticker_add";
+  const removeCommand = kind === "emoji" ? "pack_rm" : "sticker_rm";
+
+  return [`Add /${addCommand} NAME`, `Remove /${removeCommand} NAME`].join(
+    "\n",
+  );
+}
+
 function formatPacksList(packs: EmojiPack[], kind: PackKind): string {
   const label = kind === "emoji" ? "emoji" : "sticker";
 
   if (packs.length === 0) {
-    return `No active ${label} packs.`;
+    return [`No active ${label} packs.`, "", getPackListFooter(kind)].join(
+      "\n",
+    );
   }
 
   return [
     `Active ${label} packs:`,
-    ...packs.map((pack, index) => `${index + 1}. ${pack.name}`),
+    ...packs.map((pack) => `- ${pack.name}`),
+    "",
+    getPackListFooter(kind),
   ].join("\n");
 }
 
@@ -334,6 +343,95 @@ async function validateStickerPack(
   }
 
   return stickerCount;
+}
+
+function getPackAdminWarning(kind: PackKind): string {
+  const label = kind === "emoji" ? "emoji" : "sticker";
+
+  return `Only the admin can change ${label} packs.`;
+}
+
+function getPackNotFoundMessage(kind: PackKind, name: string): string {
+  return kind === "emoji"
+    ? `Could not add ${name}: custom emoji pack not found.`
+    : `Could not add ${name}: sticker pack not found.`;
+}
+
+async function validatePack(
+  api: StickerSetReader,
+  kind: PackKind,
+  name: string,
+): Promise<number> {
+  return kind === "emoji"
+    ? await validateEmojiPack(api, name)
+    : await validateStickerPack(api, name);
+}
+
+function getPackAddCommand(kind: PackKind): "pack_add" | "sticker_add" {
+  return kind === "emoji" ? "pack_add" : "sticker_add";
+}
+
+function getPackRemoveCommand(kind: PackKind): "pack_rm" | "sticker_rm" {
+  return kind === "emoji" ? "pack_rm" : "sticker_rm";
+}
+
+async function replyWithAddPack(ctx: Context, kind: PackKind) {
+  if (!isAdmin(ctx)) {
+    await ctx.reply(getPackAdminWarning(kind));
+    return;
+  }
+
+  const name = parsePackName(typeof ctx.match === "string" ? ctx.match : "");
+
+  if (!name) {
+    await ctx.reply(getPackCommandUsage(getPackAddCommand(kind)));
+    return;
+  }
+
+  let packItemCount: number;
+  try {
+    packItemCount = await validatePack(ctx.api, kind, name);
+  } catch (error) {
+    logError("Failed to validate pack", { name, kind, error });
+    await ctx.reply(getPackNotFoundMessage(kind, name));
+    return;
+  }
+
+  const result = await createEmojiPack(ctx.database, name);
+
+  if (result === "exists") {
+    await ctx.reply(`${name} is already active.`);
+    return;
+  }
+
+  invalidateEmojiRegistry();
+  await ctx.reply(
+    `Added ${name} (${packItemCount} ${
+      kind === "emoji" ? "emoji" : "stickers"
+    }).`,
+  );
+}
+
+async function replyWithRemovePack(ctx: Context, kind: PackKind) {
+  if (!isAdmin(ctx)) {
+    await ctx.reply(getPackAdminWarning(kind));
+    return;
+  }
+
+  const name = parsePackName(typeof ctx.match === "string" ? ctx.match : "");
+
+  if (!name) {
+    await ctx.reply(getPackCommandUsage(getPackRemoveCommand(kind)));
+    return;
+  }
+
+  if (!(await removeEmojiPack(ctx.database, name))) {
+    await ctx.reply(`${name} is not active.`);
+    return;
+  }
+
+  invalidateEmojiRegistry();
+  await ctx.reply(`Removed ${name}.`);
 }
 
 async function loadEmojiRegistry(
@@ -876,168 +974,26 @@ emojiPacksComposer.command("packs", async (ctx) => {
 });
 
 emojiPacksComposer.command("stickers", async (ctx) => {
-  const args = typeof ctx.match === "string" ? ctx.match.trim() : "";
-
-  if (!args) {
-    await ctx.reply(
-      formatPacksList(
-        await listPacksByKind(ctx.database, ctx.api, "sticker"),
-        "sticker",
-      ),
-    );
-    return;
-  }
-
-  if (!isAdmin(ctx)) {
-    await ctx.reply("Only the admin can change sticker packs.");
-    return;
-  }
-
-  const [action, ...nameParts] = args.split(/\s+/).filter(Boolean);
-  const name = parsePackName(nameParts.join(" "));
-
-  if (!name || (action !== "add" && action !== "remove")) {
-    await ctx.reply(getStickersCommandUsage());
-    return;
-  }
-
-  if (action === "add") {
-    let stickerCount: number;
-    try {
-      stickerCount = await validateStickerPack(ctx.api, name);
-    } catch (error) {
-      logError("Failed to validate sticker pack", { name, error });
-      await ctx.reply(`Could not add ${name}: sticker pack not found.`);
-      return;
-    }
-
-    const result = await createEmojiPack(ctx.database, name);
-
-    if (result === "exists") {
-      await ctx.reply(`${name} is already active.`);
-      return;
-    }
-
-    invalidateEmojiRegistry();
-    await ctx.reply(`Added ${name} (${stickerCount} stickers).`);
-    return;
-  }
-
-  if (!(await removeEmojiPack(ctx.database, name))) {
-    await ctx.reply(`${name} is not active.`);
-    return;
-  }
-
-  invalidateEmojiRegistry();
-  await ctx.reply(`Removed ${name}.`);
+  await ctx.reply(
+    formatPacksList(
+      await listPacksByKind(ctx.database, ctx.api, "sticker"),
+      "sticker",
+    ),
+  );
 });
 
 emojiPacksComposer.command("pack_add", async (ctx) => {
-  if (!isAdmin(ctx)) {
-    await ctx.reply("Only the admin can change emoji packs.");
-    return;
-  }
-
-  const name = parsePackName(typeof ctx.match === "string" ? ctx.match : "");
-
-  if (!name) {
-    await ctx.reply(getPackCommandUsage("pack_add"));
-    return;
-  }
-
-  let emojiCount: number;
-  try {
-    emojiCount = await validateEmojiPack(ctx.api, name);
-  } catch (error) {
-    logError("Failed to validate emoji pack", { name, error });
-    await ctx.reply(`Could not add ${name}: custom emoji pack not found.`);
-    return;
-  }
-
-  const result = await createEmojiPack(ctx.database, name);
-
-  if (result === "exists") {
-    await ctx.reply(`${name} is already active.`);
-    return;
-  }
-
-  invalidateEmojiRegistry();
-  await ctx.reply(`Added ${name} (${emojiCount} emoji).`);
+  await replyWithAddPack(ctx, "emoji");
 });
 
 emojiPacksComposer.command("sticker_add", async (ctx) => {
-  if (!isAdmin(ctx)) {
-    await ctx.reply("Only the admin can change sticker packs.");
-    return;
-  }
-
-  const name = parsePackName(typeof ctx.match === "string" ? ctx.match : "");
-
-  if (!name) {
-    await ctx.reply(getPackCommandUsage("sticker_add"));
-    return;
-  }
-
-  let stickerCount: number;
-  try {
-    stickerCount = await validateStickerPack(ctx.api, name);
-  } catch (error) {
-    logError("Failed to validate sticker pack", { name, error });
-    await ctx.reply(`Could not add ${name}: sticker pack not found.`);
-    return;
-  }
-
-  const result = await createEmojiPack(ctx.database, name);
-
-  if (result === "exists") {
-    await ctx.reply(`${name} is already active.`);
-    return;
-  }
-
-  invalidateEmojiRegistry();
-  await ctx.reply(`Added ${name} (${stickerCount} stickers).`);
+  await replyWithAddPack(ctx, "sticker");
 });
 
-emojiPacksComposer.command("pack_remove", async (ctx) => {
-  if (!isAdmin(ctx)) {
-    await ctx.reply("Only the admin can change emoji packs.");
-    return;
-  }
-
-  const name = parsePackName(typeof ctx.match === "string" ? ctx.match : "");
-
-  if (!name) {
-    await ctx.reply(getPackCommandUsage("pack_remove"));
-    return;
-  }
-
-  if (!(await removeEmojiPack(ctx.database, name))) {
-    await ctx.reply(`${name} is not active.`);
-    return;
-  }
-
-  invalidateEmojiRegistry();
-  await ctx.reply(`Removed ${name}.`);
+emojiPacksComposer.command("pack_rm", async (ctx) => {
+  await replyWithRemovePack(ctx, "emoji");
 });
 
-emojiPacksComposer.command("sticker_remove", async (ctx) => {
-  if (!isAdmin(ctx)) {
-    await ctx.reply("Only the admin can change sticker packs.");
-    return;
-  }
-
-  const name = parsePackName(typeof ctx.match === "string" ? ctx.match : "");
-
-  if (!name) {
-    await ctx.reply(getPackCommandUsage("sticker_remove"));
-    return;
-  }
-
-  if (!(await removeEmojiPack(ctx.database, name))) {
-    await ctx.reply(`${name} is not active.`);
-    return;
-  }
-
-  invalidateEmojiRegistry();
-  await ctx.reply(`Removed ${name}.`);
+emojiPacksComposer.command("sticker_rm", async (ctx) => {
+  await replyWithRemovePack(ctx, "sticker");
 });

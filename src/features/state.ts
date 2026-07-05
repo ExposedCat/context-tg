@@ -10,14 +10,12 @@ import {
   type ChatLlmSettingKey,
   getChatReasoningEffort,
   getGlobalReasoningEffort,
-  getReasoningEffort,
   isLlmSettingsDeployment,
   type LlmSettingsDeployment,
   parseReasoningSetting,
   persistChatReasoningEffort,
   persistGlobalReasoningEffort,
   persistLlmDeploymentName,
-  persistReasoningEffort,
   type ReasoningSetting,
 } from "./llm-models.ts";
 import { replyWithFlushAllMemos } from "./memos.ts";
@@ -170,6 +168,14 @@ function formatConfigureTitle(scope: ConfigureScope): string {
   return `Configure ${formatConfigureScopeTarget(scope)}:`;
 }
 
+function formatConfigureMenu(scope: ConfigureScope): string {
+  if (scope === "global") {
+    return formatConfigureTitle(scope);
+  }
+
+  return ["Stickers /stickers", "Emoji /packs", "Models /model"].join("\n");
+}
+
 function formatConfigureAdminWarning(scope: ConfigureScope): string {
   return `Only the admin can configure ${formatConfigureScopeTarget(scope)}.`;
 }
@@ -232,14 +238,6 @@ function buildSettingsKeyboard(
   }
 
   return { inline_keyboard: rows };
-}
-
-function buildReasoningKeyboard(): SettingsKeyboardMarkup {
-  return buildSettingsKeyboard(
-    REASONING_OPTIONS,
-    getReasoningEffort() ?? "null",
-    "reasoning",
-  );
 }
 
 function buildConfigureKeyboard(scope: ConfigureScope): SettingsKeyboardMarkup {
@@ -403,7 +401,7 @@ stateComposer.command("configure", async (ctx) => {
     return;
   }
 
-  await ctx.reply(formatConfigureTitle("configure"), {
+  await ctx.reply(formatConfigureMenu("configure"), {
     reply_markup: buildConfigureKeyboard("configure"),
   });
 });
@@ -414,7 +412,7 @@ stateComposer.command("global", async (ctx) => {
     return;
   }
 
-  await ctx.reply(formatConfigureTitle("global"), {
+  await ctx.reply(formatConfigureMenu("global"), {
     reply_markup: buildConfigureKeyboard("global"),
   });
 });
@@ -618,50 +616,13 @@ stateComposer.callbackQuery(
     await ctx.editMessageText(
       `${formatConfigureKindLabel(scope, kind)} for ${formatDeploymentLabel(
         deployment,
-      )} was set to ${updatedValue}.\n\n${formatConfigureTitle(scope)}`,
+      )} was set to ${updatedValue}.\n\n${formatConfigureMenu(scope)}`,
       {
         reply_markup: buildConfigureKeyboard(scope),
       },
     );
   },
 );
-
-stateComposer.hears(/^\/reasoning(?:@\w+)?(?:\s|$)/, async (ctx) => {
-  if (!isAdmin(ctx)) {
-    return;
-  }
-
-  await ctx.reply("Choose reasoning effort:", {
-    reply_markup: buildReasoningKeyboard(),
-  });
-});
-
-stateComposer.callbackQuery(/^reasoning:(.+)$/, async (ctx) => {
-  if (!isAdmin(ctx)) {
-    await ctx.answerCallbackQuery({
-      text: "Only the admin can change reasoning.",
-      show_alert: true,
-    });
-    return;
-  }
-
-  const rawEffort = ctx.match[1];
-
-  const effort = parseReasoningSetting(rawEffort);
-
-  if (effort === undefined) {
-    await ctx.answerCallbackQuery({
-      text: "Unknown reasoning option.",
-      show_alert: true,
-    });
-    return;
-  }
-
-  const updatedEffort = await persistReasoningEffort(ctx.database, effort);
-
-  await ctx.answerCallbackQuery();
-  await ctx.editMessageText(`Reasoning was set to ${updatedEffort ?? "null"}.`);
-});
 
 async function replyWithTrollingIntervalCommand(
   ctx: Context,
