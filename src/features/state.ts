@@ -173,7 +173,13 @@ function formatConfigureMenu(scope: ConfigureScope): string {
     return formatConfigureTitle(scope);
   }
 
-  return ["Stickers /stickers", "Emoji /packs", "Models /model"].join("\n");
+  return [
+    "Stickers /stickers",
+    "Emoji /packs",
+    "Models /model",
+    "Trolling /trolling",
+    "Proactive /proactive",
+  ].join("\n");
 }
 
 function formatConfigureAdminWarning(scope: ConfigureScope): string {
