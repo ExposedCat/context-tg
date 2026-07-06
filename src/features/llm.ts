@@ -202,6 +202,7 @@ const MAX_LLM_RETRIES = 10;
 const LLM_RATE_LIMIT_RETRY_DELAY_MS = 3000;
 const LLM_RATE_LIMIT_MAX_RETRIES = 5;
 const MAX_FUNCTION_TOOL_ROUNDS = 4;
+const DUPLICATE_STICKER_RESPONSE = "You have already sent a sticker";
 const RETRIABLE_EMPTY_RESPONSE_DETAILS = new Set([
   "empty response",
   "missing choice",
@@ -213,6 +214,7 @@ type LlmRequestState = {
   handoffAgentId?: AgentId;
   receivedResponse: boolean;
   sentImmediateContentFilterWarning: boolean;
+  hasStickerSlot: boolean;
   report?: LlmReport;
   images: LlmGeneratedImage[];
   stickers: LlmSticker[];
@@ -623,6 +625,20 @@ function normalizeFunctionToolResult(
   return typeof result === "string" ? { output: result } : result;
 }
 
+function addStickerToState(
+  state: LlmRequestState,
+  sticker: LlmSticker,
+  reservedStickerSlot = false,
+): boolean {
+  if (!reservedStickerSlot && state.hasStickerSlot) {
+    return false;
+  }
+
+  state.hasStickerSlot = true;
+  state.stickers.push(sticker);
+  return true;
+}
+
 async function runFunctionToolCall(
   client: OpenAI,
   call: FunctionToolCall,
@@ -636,6 +652,17 @@ async function runFunctionToolCall(
   const args = parseJsonObject(call.function.arguments);
   logDebug("Running tool call", formatToolCallLog(call));
   const runner = FUNCTION_TOOL_RUNNERS[call.function.name];
+  const reservedStickerSlot = call.function.name === "send_sticker";
+
+  if (reservedStickerSlot) {
+    if (state.hasStickerSlot) {
+      return {
+        toolOutput: createToolOutput(call, DUPLICATE_STICKER_RESPONSE),
+      };
+    }
+
+    state.hasStickerSlot = true;
+  }
 
   let result: FunctionToolResult;
   try {
@@ -648,6 +675,9 @@ async function runFunctionToolCall(
     const details = getErrorDetail(error);
     const message = `Tool ${call.function.name} failed: ${details}`;
     state.errors.push(message);
+    if (reservedStickerSlot) {
+      state.hasStickerSlot = state.stickers.length > 0;
+    }
     logError("Function tool call failed", {
       call: formatToolCallLog(call),
       error,
@@ -674,11 +704,17 @@ async function runFunctionToolCall(
   }
 
   if (result.sticker) {
-    state.stickers.push(result.sticker);
+    addStickerToState(state, result.sticker, reservedStickerSlot);
+  } else if (reservedStickerSlot) {
+    state.hasStickerSlot = state.stickers.length > 0;
   }
 
   if (result.stickers) {
-    state.stickers.push(...result.stickers);
+    for (const sticker of result.stickers) {
+      if (!addStickerToState(state, sticker)) {
+        break;
+      }
+    }
   }
 
   return {
@@ -1153,6 +1189,7 @@ async function requestLlmWithInstructions(
     messages: previousMessages,
     receivedResponse: false,
     sentImmediateContentFilterWarning: false,
+    hasStickerSlot: false,
     images: [],
     stickers: [],
     errors: [],

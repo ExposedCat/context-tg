@@ -63,6 +63,7 @@ const MEMO_PRUNING_RESPONSE_FORMAT = {
 const MEMO_AGENT_LABELS = {
   normal: "Laylo",
   tofu: "Tofu Laylo",
+  guest: "Guest Laylo",
   trader: "Trader Laylo",
   researcher: "Researcher Laylo",
   politician: "Politician Laylo",

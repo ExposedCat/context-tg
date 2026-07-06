@@ -4,6 +4,7 @@ import type { LlmDeployment } from "../llm-deployments.ts";
 export type AgentId =
   | "normal"
   | "tofu"
+  | "guest"
   | "trader"
   | "researcher"
   | "politician"

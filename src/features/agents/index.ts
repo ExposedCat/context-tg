@@ -1,3 +1,4 @@
+import { guestAgent } from "./guest.ts";
 import { normalAgent } from "./normal.ts";
 import { politicianAgent } from "./politician.ts";
 import { researcherAgent } from "./researcher.ts";
@@ -9,6 +10,7 @@ import { ultimateAgent } from "./ultimate.ts";
 
 export type { AgentDefinition, AgentId, AgentModel } from "./types.ts";
 export {
+  guestAgent,
   normalAgent,
   politicianAgent,
   researcherAgent,
@@ -21,6 +23,7 @@ export {
 export const AGENTS = [
   normalAgent,
   tofuAgent,
+  guestAgent,
   traderAgent,
   researcherAgent,
   politicianAgent,

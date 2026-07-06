@@ -5,10 +5,13 @@ import {
   escapeHtml,
   escapeHtmlAttribute,
   normalizeHtmlFilename,
+  normalizeWhitespace,
+  truncateCodePoints,
 } from "../utils/text.ts";
 import {
   type AgentDefinition,
   getAgentById,
+  guestAgent,
   normalAgent,
   resolveMessageAgent,
   stripMessageAgentName,
@@ -175,6 +178,7 @@ const logError = createDebug("app:chat:error");
 export const chatComposer = new Composer<Context>();
 
 const TELEGRAM_RICH_MESSAGE_CHUNK_SIZE_BYTES = 30_000;
+const GUEST_RESULT_DESCRIPTION_LENGTH = 120;
 const SLOW_RESPONSE_REACTION_DELAY_MS = 15_000;
 const PROACTIVE_CONTEXT_MESSAGE_COUNT = 10;
 const PROACTIVE_TASK_TEXT = "Proactive response";
@@ -1233,6 +1237,13 @@ function formatQuotaExceededResponse(
   return `Quota exceeded: ${key} ${status.used}/${status.quota}`;
 }
 
+function formatGuestModelFailureResponse(error: unknown): string {
+  return [
+    "Failed to generate response",
+    formatMarkdownBlockquote(getErrorDetails(error)),
+  ].join("\n\n");
+}
+
 function filterToolsForUsage(
   tools: ToolName[],
   options: {
@@ -1408,6 +1419,74 @@ async function sendRichMarkdownResponse(
   }
 
   return sentMessages;
+}
+
+function formatGuestResultDescription(richMarkdown: string): string {
+  const normalized = normalizeWhitespace(
+    richMarkdown
+      .replaceAll(/!\[[^\]]*]\([^)]+\)/g, "")
+      .replaceAll(/\[[^\]]*]\(([^)]+)\)/g, "$1")
+      .replaceAll(/[`*_~>#|[\]()]/g, " "),
+  );
+
+  return truncateCodePoints(normalized, GUEST_RESULT_DESCRIPTION_LENGTH);
+}
+
+function buildGuestArticleResult(
+  message: TextMessage,
+  richMarkdown: string,
+): Parameters<Context["answerGuestQuery"]>[0] {
+  const content = richMarkdown.trim() ? richMarkdown : "Done.";
+
+  return {
+    type: "article",
+    id: `guest-${message.message_id}`,
+    title: "Laylo",
+    description: formatGuestResultDescription(content),
+    input_message_content: {
+      rich_message: {
+        markdown: splitRichMarkdownMessage(content)[0],
+      },
+    },
+  };
+}
+
+async function sendGuestLlmResponse(
+  ctx: Context,
+  message: TextMessage,
+  llmResponse: LlmResponse,
+): Promise<void> {
+  const formattedResponse = formatLlmResponse(llmResponse);
+  const richMarkdown = formattedResponse.richMarkdown.trim();
+  const result = buildGuestArticleResult(
+    message,
+    formattedResponse.richMarkdown,
+  );
+
+  try {
+    await ctx.answerGuestQuery(result);
+  } catch (error) {
+    logError("Failed to answer guest query:", error);
+
+    if (richMarkdown) {
+      await sendRichMarkdownResponse(ctx, message, richMarkdown);
+    } else {
+      await ctx.reply("Done.");
+    }
+  }
+}
+
+async function sendGuestMarkdownResponse(
+  ctx: Context,
+  message: TextMessage,
+  richMarkdown: string,
+): Promise<void> {
+  try {
+    await ctx.answerGuestQuery(buildGuestArticleResult(message, richMarkdown));
+  } catch (error) {
+    logError("Failed to answer guest query:", error);
+    await sendRichMarkdownResponse(ctx, message, richMarkdown);
+  }
 }
 
 function getResumeCommand(messageId: number): string {
@@ -1924,6 +2003,86 @@ async function handleChatRequest(
   }
 }
 
+async function handleGuestChatRequest(
+  ctx: Context,
+  message: TextMessage,
+  text: string,
+): Promise<void> {
+  if (!ctx.chat) {
+    return;
+  }
+
+  const chatId = ctx.chat.id;
+  const textUsage = await consumeUsage(ctx.database, chatId, "text_responses");
+
+  if (!textUsage.ok) {
+    await sendGuestMarkdownResponse(
+      ctx,
+      message,
+      formatQuotaExceededResponse("text_responses", textUsage),
+    );
+    return;
+  }
+
+  let responseSent = false;
+
+  try {
+    const toolUsage = await getUsageStatus(ctx.database, chatId, "tool_usages");
+
+    if (guestAgent.tools.length > 0 && toolUsage.used >= toolUsage.quota) {
+      throw new Error(formatQuotaExceededResponse("tool_usages", toolUsage));
+    }
+
+    const agentTools = filterToolsForUsage(guestAgent.tools, {
+      toolUsageRemaining: toolUsage.used < toolUsage.quota,
+      imageUsageRemaining: false,
+    });
+    const toolContext = getLlmToolContext(chatId, message);
+    const request = await buildLlmRequestInputs(
+      ctx,
+      buildRootRequestMessages(message, text, undefined),
+    );
+    const llmResponse = await withTypingAction(
+      ctx,
+      async () =>
+        await requestLlm(
+          request,
+          agentTools,
+          undefined,
+          {
+            database: ctx.database,
+            context: toolContext,
+            agentId: guestAgent.id,
+          },
+          guestAgent.buildInstructions(),
+          guestAgent.MODEL,
+        ),
+    );
+
+    await recordUsage(
+      ctx.database,
+      chatId,
+      "tool_usages",
+      llmResponse.tool_call_count,
+    );
+
+    await sendGuestLlmResponse(ctx, message, llmResponse);
+    responseSent = true;
+  } catch (error) {
+    logError("Error handling guest message:", error);
+
+    if (!responseSent) {
+      await refundUsage(ctx.database, chatId, "text_responses");
+    }
+
+    await sendGuestMarkdownResponse(
+      ctx,
+      message,
+      formatGuestModelFailureResponse(error),
+    );
+  }
+}
+
 function getProactiveTools(): ToolName[] {
   return normalAgent.tools.filter(
     (tool) => !PROACTIVE_DISABLED_TOOLS.has(tool),
@@ -2057,6 +2216,28 @@ export async function replyWithResumeTask(
     taskText: `Resume: ${task.task_text}`,
   });
 }
+
+chatComposer.on("guest_message", async (ctx, next) => {
+  if (!ctx.chat || !ctx.guestMessage) {
+    await next();
+    return;
+  }
+
+  const message = ctx.guestMessage as TextMessage;
+  const text = getMessageText(message);
+  const requestText =
+    text ??
+    (hasImageAttachments(message)
+      ? "Please respond to the attached image."
+      : undefined);
+
+  if (!requestText || startsWithCommandPrefix(text)) {
+    await next();
+    return;
+  }
+
+  await handleGuestChatRequest(ctx, message, requestText);
+});
 
 chatComposer.on("message", async (ctx, next) => {
   if (!ctx.chat) {
