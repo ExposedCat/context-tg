@@ -1059,20 +1059,36 @@ function appendResponseFooterMarkdown(
   return sections.join("\n\n");
 }
 
-function normalizeStickerPlaceholder(text: string): string {
-  return text.replaceAll(/\s+/g, " ").trim();
-}
-
-function isStickerOnlyResponse(
+function removeStickerPlaceholders(
   response: string,
   stickers: LlmSticker[],
-): boolean {
-  const normalizedResponse = normalizeStickerPlaceholder(response);
-  return stickers.some(
-    (sticker) =>
-      normalizedResponse ===
-      normalizeStickerPlaceholder(formatStickerMarker(sticker.emoji)),
-  );
+): string {
+  const placeholders = new Set([
+    "[sticker]",
+    ...stickers.map((sticker) => formatStickerMarker(sticker.emoji)),
+  ]);
+  let text = response;
+  let removed = false;
+
+  for (const placeholder of placeholders) {
+    if (!text.includes(placeholder)) {
+      continue;
+    }
+
+    removed = true;
+    text = text.split(placeholder).join("");
+  }
+
+  if (!removed) {
+    return response;
+  }
+
+  return text
+    .split(/\r?\n/)
+    .map((line) => line.replaceAll(/[ \t]+([,.;:!?])/g, "$1").trimEnd())
+    .join("\n")
+    .replaceAll(/\n{3,}/g, "\n\n")
+    .trim();
 }
 
 function formatLlmResponse(
@@ -1082,9 +1098,10 @@ function formatLlmResponse(
   richMarkdown: string;
 } {
   const response = llmResponse.response ?? "";
-  const richMarkdown = isStickerOnlyResponse(response, llmResponse.stickers)
-    ? ""
-    : formatMarkdownCitations(response, llmResponse.web_search.citations);
+  const richMarkdown = removeStickerPlaceholders(
+    formatMarkdownCitations(response, llmResponse.web_search.citations),
+    llmResponse.stickers,
+  );
   const errors = [...llmResponse.errors, ...(options.errors ?? [])];
 
   return {
@@ -1324,8 +1341,12 @@ async function sendStickerMessages(
   ctx: Context,
   message: TextMessage,
   stickers: LlmSticker[],
-): Promise<Array<{ message_id: number }>> {
-  const sentMessages = [];
+): Promise<{
+  sentMessages: Array<{ message_id: number }>;
+  unsentStickers: LlmSticker[];
+}> {
+  const sentMessages: Array<{ message_id: number }> = [];
+  const unsentStickers: LlmSticker[] = [];
 
   for (const requestedSticker of stickers) {
     try {
@@ -1336,6 +1357,7 @@ async function sendStickerMessages(
       );
 
       if (!sticker) {
+        unsentStickers.push(requestedSticker);
         continue;
       }
 
@@ -1346,6 +1368,7 @@ async function sendStickerMessages(
       });
       sentMessages.push(sentSticker);
     } catch (error) {
+      unsentStickers.push(requestedSticker);
       logError("Failed to send sticker:", {
         emoji: requestedSticker.emoji,
         error,
@@ -1353,7 +1376,7 @@ async function sendStickerMessages(
     }
   }
 
-  return sentMessages;
+  return { sentMessages, unsentStickers };
 }
 
 async function sendRichMarkdownResponse(
@@ -1694,8 +1717,6 @@ async function handleChatRequest(
       }
     })();
 
-    const formattedResponse = formatLlmResponse(llmResponse);
-
     await recordUsage(
       ctx.database,
       chatId,
@@ -1725,8 +1746,19 @@ async function handleChatRequest(
 
     const sentMessages = [
       ...(await sendGeneratedImagePhotos(ctx, message, llmResponse.images)),
-      ...(await sendStickerMessages(ctx, message, llmResponse.stickers)),
     ];
+    const stickerMessages = await sendStickerMessages(
+      ctx,
+      message,
+      llmResponse.stickers,
+    );
+    sentMessages.push(...stickerMessages.sentMessages);
+
+    const formattedResponse = formatLlmResponse(llmResponse);
+    const missingStickerFallback =
+      stickerMessages.sentMessages.length === 0
+        ? stickerMessages.unsentStickers[0]?.emoji
+        : undefined;
 
     if (llmResponse.report) {
       sentMessages.push(
@@ -1754,6 +1786,14 @@ async function handleChatRequest(
           ctx,
           message,
           formattedResponse.richMarkdown,
+        )),
+      );
+    } else if (missingStickerFallback) {
+      sentMessages.push(
+        ...(await sendRichMarkdownResponse(
+          ctx,
+          message,
+          missingStickerFallback,
         )),
       );
     }

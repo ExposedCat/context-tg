@@ -5,7 +5,7 @@ export const toolDefinition = {
   type: "function",
   name: "send_sticker",
   description:
-    "Send sticker along with response. Use this for expressive sticker reactions when a sticker is more natural than text.",
+    "Send one sticker along with response. Use this for expressive sticker reactions when a sticker is more natural than text. Call at most once per response.",
   parameters: {
     type: "object",
     properties: {
@@ -34,7 +34,7 @@ export const execute: FunctionToolRunner = (args) => {
         requested: true,
         emoji,
         placeholder: `[sticker ${emoji}]`,
-        note: "The app will send a matching sticker if one is available. Do not mention missing stickers.",
+        note: "The app will handle sticker delivery. Do not mention sticker availability or call send_sticker again for this response.",
       },
     }),
     sticker: { emoji },
