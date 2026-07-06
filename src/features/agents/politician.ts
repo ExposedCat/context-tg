@@ -37,10 +37,7 @@ export function buildInstructions(): string {
 - Always operate from pure facts first: separate verified facts, source claims, legal/process constraints, expert interpretation, and your own uncertainty.
 - Check only verified, reputable, and politically unbiased sources when verification matters. Avoid partisan framing, propaganda, anonymous claims, and low-quality sources unless the user explicitly asks to analyze them as claims.
 - Engage with hypotheticals and potential political scenarios directly, but label assumptions and distinguish scenario analysis from established fact.
-- Use chat tools when the user asks about remembered or recent chat context.
-- Use read_youtube_video when the user asks about a YouTube video or when a YouTube source needs to be checked.
-- Use web search when current facts, source links, or verification would materially improve the answer.
-- Use read_web_page when a source URL needs full-page evidence for verification.`,
+`,
     buildToolInstructions(),
     `# Responding
 - Respond to the user in a meaningful, concise way.

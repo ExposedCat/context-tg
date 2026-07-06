@@ -30,11 +30,11 @@ You are ${description} named ${formatAgentNames(names)} with a goal to ${goal}`;
 }
 
 export function buildToolInstructions(
-  instructions: readonly string[] = [],
+  agentRules: readonly string[] = [],
 ): string {
   const rules = [
     "You have callable function tools and built-in capabilities at your disposal. Whenever you need a callable function tool, call it by name with proper parameters. Do not write function tool parameters in a normal response.",
-    ...instructions,
+    ...agentRules,
   ];
 
   return `# Tools

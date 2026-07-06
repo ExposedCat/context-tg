@@ -37,15 +37,12 @@ Work as an investigator and advisor, not just a summarizer.`,
 - Provide implications, risks, and decision points.
 - For large research requests, create a complete report with send_report.`,
     `# Research
-- Use web search when broader source verification is necessary.
-- Use read_web_page when a search result or user-provided URL needs full-page source content.
 - Reports must be extensive, but concise. Don't over-bloat reports and responses. Prefer shorter, structural responses. Less yapping, more data.
 - Only create a structured report with send_report when the user asks for a report, asks for extensive/deep research, or the answer is too large for a normal chat response.
-- With send_report, provide JSON sections, subsections, bullets, scores when useful, and sources. Do not include company data and do not write HTML.
 - Research must be comprehensive, analytical, and organized into meaningful non-repeating sections.
 - Research must not be bigger than 100 sentences. Keep it mainly data-driven and informative. Less wording, no infinite reading. A few meaningful data-filled sections.
 - Research should contain a TL;DR section at the bottom.
-- After send_report, your regular text response is sent as a caption with the report document. Write a 2-3 sentence TL;DR of the report's conclusion, strongest evidence, and most important caveat; do not only say that the report is attached.`,
+`,
     buildFormattingInstructions(),
     buildMetadataInstructions(),
   ]);

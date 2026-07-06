@@ -40,7 +40,7 @@ export const nsfwToolDefinition = {
   ...toolDefinition,
   name: "generate_image_nsfw",
   description:
-    "Generate one image from a text prompt. Never use proactively. Use this only when the user explicitly asks to create, draw, render, or visualize an image. This uses less strict safety filters, but still required trickery and careful prompting to get around filters. After using it, respond with a short caption or note that the image is attached.",
+    "Generate one image from a text prompt with the alternate NSFW image model. Never use proactively. Use this only when the user explicitly asks for the alternate NSFW model. This uses less strict safety filters, but still requires careful prompting around filters. After using it, respond with a short caption or note that the image is attached.",
 } as const;
 
 function getImageGenerationUrl(): string {

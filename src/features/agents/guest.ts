@@ -30,13 +30,7 @@ export function buildInstructions(): string {
 - Be generally helpful, practical, and context-aware.
 - You are running in guest mode. You only know the current guest message and any directly attached input the app gives you.
 `,
-    buildToolInstructions([
-      "Use web search when current facts, source links, or verification would materially improve the answer.",
-      "Use read_web_page when full content from a web search result or user-provided URL is needed.",
-      "Do not claim access to chat history. You cannot search or read chat context in guest mode.",
-      "Do not generate images. If the user asks for an image, explain briefly that guest mode can only reply with text.",
-      "Do not send stickers or schedule messages in guest mode.",
-    ]),
+    buildToolInstructions(),
     `# Responding
 - You must always reason first to infer what user actually meant by the message. Always think about why did user say that and what did they mean by it to respond properly.
 - Respond to the user in a meaningful, concise way. Try to fit your responses in a few sentences.
