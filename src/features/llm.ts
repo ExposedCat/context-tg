@@ -198,10 +198,14 @@ type LlmRuntimeSettings = {
 
 const logDebug = createDebug("app:llm:debug");
 const logError = createDebug("app:llm:error");
-const MAX_LLM_RETRIES = 3;
+const MAX_LLM_RETRIES = 10;
 const LLM_RATE_LIMIT_RETRY_DELAY_MS = 3000;
 const LLM_RATE_LIMIT_MAX_RETRIES = 5;
 const MAX_FUNCTION_TOOL_ROUNDS = 4;
+const RETRIABLE_EMPTY_RESPONSE_DETAILS = new Set([
+  "empty response",
+  "missing choice",
+]);
 
 type LlmRequestState = {
   lastResponseId?: string;
@@ -589,6 +593,13 @@ function getResponseError(response: ApiResponse): LlmRequestError | undefined {
   return undefined;
 }
 
+function isEmptyResponseError(error: unknown): boolean {
+  return (
+    error instanceof LlmRequestError &&
+    RETRIABLE_EMPTY_RESPONSE_DETAILS.has(error.details)
+  );
+}
+
 function createToolOutput(
   call: FunctionToolCall,
   output: string,
@@ -964,11 +975,13 @@ async function createLlmResponseWithRetries(
       lastError = error;
       const rateLimited = isRateLimitError(error);
       const contentFiltered = isContentFilterError(error);
+      const emptyResponse = isEmptyResponseError(error);
       const retryingRateLimit =
         rateLimited && rateLimitRetries < LLM_RATE_LIMIT_MAX_RETRIES;
-      const retrying =
-        retryingRateLimit ||
-        (retryAttempts < MAX_LLM_RETRIES && (!immediate || contentFiltered));
+      const retryingModelError =
+        retryAttempts < MAX_LLM_RETRIES &&
+        (!immediate || contentFiltered || emptyResponse);
+      const retrying = retryingRateLimit || retryingModelError;
 
       logError("LLM response step failed", {
         retryAttempts,
@@ -991,16 +1004,9 @@ async function createLlmResponseWithRetries(
           state.sentImmediateContentFilterWarning = true;
           await options.onWarning?.(getErrorDetail(error));
         }
-
-        if (retryAttempts >= MAX_LLM_RETRIES) {
-          break;
-        }
-
-        retryAttempts += 1;
-        continue;
       }
 
-      if (immediate) {
+      if (immediate && !contentFiltered && !emptyResponse) {
         throw new LlmRequestError(
           "LLM request failed immediately",
           getErrorDetail(error),
