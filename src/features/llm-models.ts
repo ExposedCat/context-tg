@@ -135,6 +135,7 @@ export async function migrateLlmSettings(database: LlmSettingsDatabase) {
     .deleteFrom("chat_llm_settings")
     .where("key", "=", "websearch")
     .execute();
+  await normalizeAllReasoningSettings(database);
 }
 
 export async function loadLlmSettings(database: LlmSettingsDatabase) {
@@ -170,6 +171,48 @@ function getGlobalLlmSettingKey(
   }
 
   return `${key}:${deployment}`;
+}
+
+function getGlobalLlmDeploymentSettingKeys(
+  key: "reasoning",
+): LlmDeploymentSettingKey[] {
+  return LLM_DEPLOYMENT_OPTIONS.map(
+    (deployment) => `${key}:${deployment.id}` as LlmDeploymentSettingKey,
+  );
+}
+
+async function normalizeAllReasoningSettings(database: LlmSettingsDatabase) {
+  const globalAllReasoning = await database
+    .selectFrom("llm_settings")
+    .select("key")
+    .where("key", "=", "reasoning")
+    .executeTakeFirst();
+
+  if (globalAllReasoning) {
+    await database
+      .deleteFrom("llm_settings")
+      .where("key", "in", getGlobalLlmDeploymentSettingKeys("reasoning"))
+      .execute();
+  }
+
+  const chatAllReasoningRows = await database
+    .selectFrom("chat_llm_settings")
+    .select("chat_id")
+    .where("key", "=", "reasoning")
+    .where("deployment", "=", "all")
+    .execute();
+  const chatIds = [...new Set(chatAllReasoningRows.map((row) => row.chat_id))];
+
+  if (chatIds.length === 0) {
+    return;
+  }
+
+  await database
+    .deleteFrom("chat_llm_settings")
+    .where("chat_id", "in", chatIds)
+    .where("key", "=", "reasoning")
+    .where("deployment", "!=", "all")
+    .execute();
 }
 
 async function getDirectGlobalLlmSetting(
@@ -211,7 +254,25 @@ async function persistGlobalLlmSetting(
 ) {
   const settingKey = getGlobalLlmSettingKey(key, deployment);
 
-  await persistLlmSetting(database, settingKey, value);
+  if (deployment !== "all") {
+    await persistLlmSetting(database, settingKey, value);
+    return;
+  }
+
+  await database.transaction().execute(async (transaction) => {
+    if (key === "reasoning") {
+      await transaction
+        .deleteFrom("llm_settings")
+        .where("key", "in", getGlobalLlmDeploymentSettingKeys(key))
+        .execute();
+    }
+
+    await transaction
+      .insertInto("llm_settings")
+      .values({ key: settingKey, value })
+      .onConflict((conflict) => conflict.column("key").doUpdateSet({ value }))
+      .execute();
+  });
 }
 
 async function getDirectChatLlmSetting(
@@ -256,13 +317,32 @@ async function persistChatLlmSetting(
   key: ChatLlmSettingKey,
   value: string | null,
 ) {
-  await database
-    .insertInto("chat_llm_settings")
-    .values({ chat_id: chatId, deployment, key, value })
-    .onConflict((conflict) =>
-      conflict.columns(["chat_id", "deployment", "key"]).doUpdateSet({ value }),
-    )
-    .execute();
+  const persist = (target: LlmSettingsDatabase) =>
+    target
+      .insertInto("chat_llm_settings")
+      .values({ chat_id: chatId, deployment, key, value })
+      .onConflict((conflict) =>
+        conflict
+          .columns(["chat_id", "deployment", "key"])
+          .doUpdateSet({ value }),
+      )
+      .execute();
+
+  if (deployment !== "all") {
+    await persist(database);
+    return;
+  }
+
+  await database.transaction().execute(async (transaction) => {
+    await transaction
+      .deleteFrom("chat_llm_settings")
+      .where("chat_id", "=", chatId)
+      .where("key", "=", key)
+      .where("deployment", "!=", "all")
+      .execute();
+
+    await persist(transaction);
+  });
 }
 
 function parseStoredReasoningSetting(
