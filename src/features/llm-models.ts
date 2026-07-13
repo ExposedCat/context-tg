@@ -35,7 +35,7 @@ type LlmSettingKey =
   | LlmDeploymentSettingKey
   | LlmModelSettingKey;
 
-let reasoningEffort: ReasoningSetting = "high";
+let reasoningEffort: ReasoningSetting = null;
 const OBSOLETE_WEB_SEARCH_SETTING_KEYS = [
   "websearch",
   ...LLM_DEPLOYMENT_OPTIONS.map((deployment) => `websearch:${deployment.id}`),
@@ -172,14 +172,6 @@ function getGlobalLlmSettingKey(
   return `${key}:${deployment}`;
 }
 
-function getGlobalLlmDeploymentSettingKeys(
-  key: "reasoning",
-): LlmDeploymentSettingKey[] {
-  return LLM_DEPLOYMENT_OPTIONS.map(
-    (deployment) => `${key}:${deployment.id}` as LlmDeploymentSettingKey,
-  );
-}
-
 async function getDirectGlobalLlmSetting(
   database: LlmSettingsDatabase,
   deployment: LlmSettingsDeployment,
@@ -219,25 +211,7 @@ async function persistGlobalLlmSetting(
 ) {
   const settingKey = getGlobalLlmSettingKey(key, deployment);
 
-  if (deployment !== "all") {
-    await persistLlmSetting(database, settingKey, value);
-    return;
-  }
-
-  await database.transaction().execute(async (transaction) => {
-    if (key === "reasoning") {
-      await transaction
-        .deleteFrom("llm_settings")
-        .where("key", "in", getGlobalLlmDeploymentSettingKeys(key))
-        .execute();
-    }
-
-    await transaction
-      .insertInto("llm_settings")
-      .values({ key: settingKey, value })
-      .onConflict((conflict) => conflict.column("key").doUpdateSet({ value }))
-      .execute();
-  });
+  await persistLlmSetting(database, settingKey, value);
 }
 
 async function getDirectChatLlmSetting(
@@ -282,32 +256,13 @@ async function persistChatLlmSetting(
   key: ChatLlmSettingKey,
   value: string | null,
 ) {
-  const persist = (target: LlmSettingsDatabase) =>
-    target
-      .insertInto("chat_llm_settings")
-      .values({ chat_id: chatId, deployment, key, value })
-      .onConflict((conflict) =>
-        conflict
-          .columns(["chat_id", "deployment", "key"])
-          .doUpdateSet({ value }),
-      )
-      .execute();
-
-  if (deployment !== "all") {
-    await persist(database);
-    return;
-  }
-
-  await database.transaction().execute(async (transaction) => {
-    await transaction
-      .deleteFrom("chat_llm_settings")
-      .where("chat_id", "=", chatId)
-      .where("key", "=", key)
-      .where("deployment", "!=", "all")
-      .execute();
-
-    await persist(transaction);
-  });
+  await database
+    .insertInto("chat_llm_settings")
+    .values({ chat_id: chatId, deployment, key, value })
+    .onConflict((conflict) =>
+      conflict.columns(["chat_id", "deployment", "key"]).doUpdateSet({ value }),
+    )
+    .execute();
 }
 
 function parseStoredReasoningSetting(
