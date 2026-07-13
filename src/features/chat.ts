@@ -1077,12 +1077,86 @@ function formatDebugValue(value: unknown): string {
   }
 }
 
+function formatDebugSetting(value: string | null | undefined): string {
+  return value ?? "unset";
+}
+
+function formatDebugBoolean(value: boolean): string {
+  return value ? "yes" : "no";
+}
+
+function formatDebugUsage(debug: LlmDebugInfo["responses"][number]): string[] {
+  const usage = debug.usage;
+
+  if (!usage) {
+    return [];
+  }
+
+  const lines: string[] = [];
+
+  if (usage.prompt_tokens !== undefined) {
+    lines.push(`prompt_tokens: ${usage.prompt_tokens}`);
+  }
+  if (usage.completion_tokens !== undefined) {
+    lines.push(`completion_tokens: ${usage.completion_tokens}`);
+  }
+  if (usage.reasoning_tokens !== undefined) {
+    lines.push(`reasoning_tokens: ${usage.reasoning_tokens}`);
+  }
+  if (usage.cached_tokens !== undefined) {
+    lines.push(`cached_tokens: ${usage.cached_tokens}`);
+  }
+  if (usage.total_tokens !== undefined) {
+    lines.push(`total_tokens: ${usage.total_tokens}`);
+  }
+
+  return lines;
+}
+
+function formatDebugModelResponse(
+  response: LlmDebugInfo["responses"][number],
+  index: number,
+): string {
+  const lines = [
+    `${index + 1}. ${response.deployment}`,
+    `requested_model: ${response.requested_model}`,
+  ];
+
+  if (
+    response.response_model &&
+    response.response_model !== response.requested_model
+  ) {
+    lines.push(`response_model: ${response.response_model}`);
+  }
+
+  lines.push(
+    `reasoning_effort: ${formatDebugSetting(response.reasoning_effort)}`,
+    `reasoning_sent: ${formatDebugBoolean(response.reasoning_sent)}`,
+  );
+
+  if (response.finish_reason) {
+    lines.push(`finish_reason: ${response.finish_reason}`);
+  }
+
+  lines.push(...formatDebugUsage(response));
+
+  if (response.response_id) {
+    lines.push(`response_id: ${response.response_id}`);
+  }
+
+  return lines.join("\n");
+}
+
 function formatDebugMarkdown(debug: LlmDebugInfo): string {
   const sections: string[] = ["Debug"];
-  const reasoning = getUniqueNonEmptyLines(debug.reasoning);
 
-  if (reasoning.length > 0) {
-    sections.push(["Reasoning", ...reasoning].join("\n\n"));
+  if (debug.responses.length > 0) {
+    sections.push(
+      [
+        "Model responses",
+        ...debug.responses.map(formatDebugModelResponse),
+      ].join("\n\n"),
+    );
   }
 
   if (debug.tool_calls.length > 0) {

@@ -141,8 +141,27 @@ export type LlmDebugToolCall = {
   input: unknown;
 };
 
+export type LlmDebugUsage = {
+  prompt_tokens?: number;
+  completion_tokens?: number;
+  total_tokens?: number;
+  cached_tokens?: number;
+  reasoning_tokens?: number;
+};
+
+export type LlmDebugModelResponse = {
+  response_id?: string;
+  deployment: string;
+  requested_model: string;
+  response_model?: string;
+  reasoning_effort: ReasoningSetting;
+  reasoning_sent: boolean;
+  finish_reason?: string | null;
+  usage?: LlmDebugUsage;
+};
+
 export type LlmDebugInfo = {
-  reasoning: string[];
+  responses: LlmDebugModelResponse[];
   tool_calls: LlmDebugToolCall[];
 };
 
@@ -468,65 +487,6 @@ function parseJsonObject(data: string): Record<string, unknown> | null {
   }
 }
 
-const REASONING_TEXT_KEYS = [
-  "text",
-  "content",
-  "summary",
-  "reasoning",
-  "reasoning_content",
-  "reasoning_text",
-  "reasoning_details",
-  "reasoning_summary",
-  "thinking",
-  "thoughts",
-] as const;
-
-function collectReasoningText(value: unknown, depth = 0): string[] {
-  if (depth > 4) {
-    return [];
-  }
-
-  if (typeof value === "string") {
-    const trimmed = value.trim();
-    return trimmed ? [trimmed] : [];
-  }
-
-  if (Array.isArray(value)) {
-    return value.flatMap((item) => collectReasoningText(item, depth + 1));
-  }
-
-  if (!isRecord(value)) {
-    return [];
-  }
-
-  return REASONING_TEXT_KEYS.flatMap((key) =>
-    key in value ? collectReasoningText(value[key], depth + 1) : [],
-  );
-}
-
-function getUniqueNonEmptyValues(values: string[]): string[] {
-  const trimmed = values.map((value) => value.trim()).filter(Boolean);
-  return [...new Set(trimmed)];
-}
-
-function getResponseReasoning(response: ApiResponse): string[] {
-  const message = getResponseMessage(response) as
-    | Record<string, unknown>
-    | undefined;
-  const responseRecord = response as unknown as Record<string, unknown>;
-
-  return getUniqueNonEmptyValues([
-    ...collectReasoningText(message?.reasoning_content),
-    ...collectReasoningText(message?.reasoning),
-    ...collectReasoningText(message?.reasoning_details),
-    ...collectReasoningText(message?.reasoning_summary),
-    ...collectReasoningText(message?.reasoning_text),
-    ...collectReasoningText(message?.thinking),
-    ...collectReasoningText(message?.thoughts),
-    ...collectReasoningText(responseRecord.reasoning),
-  ]);
-}
-
 function createDebugToolCall(call: FunctionToolCall): LlmDebugToolCall {
   return {
     name: call.function.name,
@@ -534,8 +494,62 @@ function createDebugToolCall(call: FunctionToolCall): LlmDebugToolCall {
   };
 }
 
-function recordResponseDebug(response: ApiResponse, state: LlmRequestState) {
-  state.debug.reasoning.push(...getResponseReasoning(response));
+function getNumberValue(value: unknown): number | undefined {
+  return typeof value === "number" ? value : undefined;
+}
+
+function getResponseUsage(response: ApiResponse): LlmDebugUsage | undefined {
+  const usage = (response as unknown as { usage?: unknown }).usage;
+
+  if (!isRecord(usage)) {
+    return undefined;
+  }
+
+  const promptDetails = isRecord(usage.prompt_tokens_details)
+    ? usage.prompt_tokens_details
+    : {};
+  const completionDetails = isRecord(usage.completion_tokens_details)
+    ? usage.completion_tokens_details
+    : {};
+  const debugUsage: LlmDebugUsage = {
+    prompt_tokens: getNumberValue(usage.prompt_tokens),
+    completion_tokens: getNumberValue(usage.completion_tokens),
+    total_tokens: getNumberValue(usage.total_tokens),
+    cached_tokens: getNumberValue(promptDetails.cached_tokens),
+    reasoning_tokens: getNumberValue(completionDetails.reasoning_tokens),
+  };
+
+  return Object.values(debugUsage).some((value) => value !== undefined)
+    ? debugUsage
+    : undefined;
+}
+
+function createDebugModelResponse(
+  response: ApiResponse,
+  model: AgentModel,
+  settings: LlmRuntimeSettings,
+): LlmDebugModelResponse {
+  return {
+    response_id: response.id || undefined,
+    deployment: model.id,
+    requested_model: getConfiguredDeploymentName(model),
+    response_model: response.model || undefined,
+    reasoning_effort: settings.reasoning,
+    reasoning_sent: model.withReasoning && settings.reasoning !== null,
+    finish_reason: getResponseChoice(response)?.finish_reason,
+    usage: getResponseUsage(response),
+  };
+}
+
+function recordResponseDebug(
+  response: ApiResponse,
+  state: LlmRequestState,
+  model: AgentModel,
+  settings: LlmRuntimeSettings,
+) {
+  state.debug.responses.push(
+    createDebugModelResponse(response, model, settings),
+  );
   state.debug.tool_calls.push(
     ...getFunctionToolCalls(response).map(createDebugToolCall),
   );
@@ -1086,7 +1100,7 @@ async function createLlmResponseWithRetries(
         throw responseError;
       }
 
-      recordResponseDebug(response, state);
+      recordResponseDebug(response, state, model, settings);
       state.receivedResponse = true;
       currentResponseId = await recordChatResponse(
         response,
@@ -1284,7 +1298,7 @@ async function requestLlmWithInstructions(
     stickers: [],
     errors: [],
     debug: {
-      reasoning: [],
+      responses: [],
       tool_calls: [],
     },
   };
@@ -1341,10 +1355,7 @@ async function requestLlmWithInstructions(
     },
     tools: calledTools,
     tool_call_count: toolCallCount,
-    debug: {
-      reasoning: getUniqueNonEmptyValues(state.debug.reasoning),
-      tool_calls: state.debug.tool_calls,
-    },
+    debug: state.debug,
   };
 }
 
