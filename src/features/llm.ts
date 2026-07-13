@@ -136,6 +136,16 @@ export type LlmSource = {
   link: string;
 };
 
+export type LlmDebugToolCall = {
+  name: string;
+  input: unknown;
+};
+
+export type LlmDebugInfo = {
+  reasoning: string[];
+  tool_calls: LlmDebugToolCall[];
+};
+
 export type LlmResponse = {
   response_id?: string;
   handoff_agent_id?: AgentId;
@@ -151,6 +161,7 @@ export type LlmResponse = {
   };
   tools: ToolName[];
   tool_call_count: number;
+  debug: LlmDebugInfo;
 };
 
 type FunctionToolDefinition =
@@ -219,6 +230,7 @@ type LlmRequestState = {
   images: LlmGeneratedImage[];
   stickers: LlmSticker[];
   errors: string[];
+  debug: LlmDebugInfo;
 };
 
 function getSystemInstructions(): string {
@@ -341,6 +353,10 @@ function getResponseText(response: ApiResponse): string | undefined {
   return typeof content === "string" && content ? content : undefined;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 function getToolCallName(call: ChatCompletionMessageToolCall): string {
   return call.type === "function" ? call.function.name : call.custom.name;
 }
@@ -450,6 +466,79 @@ function parseJsonObject(data: string): Record<string, unknown> | null {
   } catch {
     return null;
   }
+}
+
+const REASONING_TEXT_KEYS = [
+  "text",
+  "content",
+  "summary",
+  "reasoning",
+  "reasoning_content",
+  "reasoning_text",
+  "reasoning_details",
+  "reasoning_summary",
+  "thinking",
+  "thoughts",
+] as const;
+
+function collectReasoningText(value: unknown, depth = 0): string[] {
+  if (depth > 4) {
+    return [];
+  }
+
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed ? [trimmed] : [];
+  }
+
+  if (Array.isArray(value)) {
+    return value.flatMap((item) => collectReasoningText(item, depth + 1));
+  }
+
+  if (!isRecord(value)) {
+    return [];
+  }
+
+  return REASONING_TEXT_KEYS.flatMap((key) =>
+    key in value ? collectReasoningText(value[key], depth + 1) : [],
+  );
+}
+
+function getUniqueNonEmptyValues(values: string[]): string[] {
+  const trimmed = values.map((value) => value.trim()).filter(Boolean);
+  return [...new Set(trimmed)];
+}
+
+function getResponseReasoning(response: ApiResponse): string[] {
+  const message = getResponseMessage(response) as
+    | Record<string, unknown>
+    | undefined;
+  const responseRecord = response as unknown as Record<string, unknown>;
+
+  return getUniqueNonEmptyValues([
+    ...collectReasoningText(message?.reasoning_content),
+    ...collectReasoningText(message?.reasoning),
+    ...collectReasoningText(message?.reasoning_details),
+    ...collectReasoningText(message?.reasoning_summary),
+    ...collectReasoningText(message?.reasoning_text),
+    ...collectReasoningText(message?.thinking),
+    ...collectReasoningText(message?.thoughts),
+    ...collectReasoningText(responseRecord.reasoning),
+  ]);
+}
+
+function createDebugToolCall(call: FunctionToolCall): LlmDebugToolCall {
+  return {
+    name: call.function.name,
+    input: parseJsonObject(call.function.arguments) ?? call.function.arguments,
+  };
+}
+
+function recordResponseDebug(response: ApiResponse, state: LlmRequestState) {
+  state.debug.reasoning.push(...getResponseReasoning(response));
+  state.debug.tool_calls.push(
+    ...getFunctionToolCalls(response).map(createDebugToolCall),
+  );
 }
 
 function formatToolCallLog(call: FunctionToolCall): Record<string, unknown> {
@@ -997,6 +1086,7 @@ async function createLlmResponseWithRetries(
         throw responseError;
       }
 
+      recordResponseDebug(response, state);
       state.receivedResponse = true;
       currentResponseId = await recordChatResponse(
         response,
@@ -1193,6 +1283,10 @@ async function requestLlmWithInstructions(
     images: [],
     stickers: [],
     errors: [],
+    debug: {
+      reasoning: [],
+      tool_calls: [],
+    },
   };
   const initialResponse = await createLlmResponseWithRetries(
     client,
@@ -1247,6 +1341,10 @@ async function requestLlmWithInstructions(
     },
     tools: calledTools,
     tool_call_count: toolCallCount,
+    debug: {
+      reasoning: getUniqueNonEmptyValues(state.debug.reasoning),
+      tool_calls: state.debug.tool_calls,
+    },
   };
 }
 

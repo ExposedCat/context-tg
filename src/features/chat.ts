@@ -21,6 +21,7 @@ import { APP_ENV } from "./env.ts";
 import { readLastMessages } from "./last-messages.ts";
 import {
   type LlmCitation,
+  type LlmDebugInfo,
   type LlmGeneratedImage,
   type LlmImageInput,
   type LlmReport,
@@ -34,6 +35,7 @@ import {
   requestLlm,
   type ToolName,
 } from "./llm.ts";
+import { getChatDebugMode } from "./llm-models.ts";
 import { formatMessageLine } from "./llm-tools/chat.ts";
 import { startsWithCommandPrefix } from "./message-filter.ts";
 import type { MessageMetadata } from "./messages.ts";
@@ -1063,6 +1065,48 @@ function appendResponseFooterMarkdown(
   return sections.join("\n\n");
 }
 
+function formatDebugValue(value: unknown): string {
+  if (typeof value === "string") {
+    return value;
+  }
+
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
+}
+
+function formatDebugMarkdown(debug: LlmDebugInfo): string {
+  const sections: string[] = ["Debug"];
+  const reasoning = getUniqueNonEmptyLines(debug.reasoning);
+
+  if (reasoning.length > 0) {
+    sections.push(["Reasoning", ...reasoning].join("\n\n"));
+  }
+
+  if (debug.tool_calls.length > 0) {
+    const lines = ["Tool calls"];
+
+    for (const [index, toolCall] of debug.tool_calls.entries()) {
+      lines.push(
+        `${index + 1}. ${toolCall.name}`,
+        formatDebugValue(toolCall.input),
+      );
+    }
+
+    sections.push(lines.join("\n"));
+  }
+
+  if (sections.length === 1) {
+    return "";
+  }
+
+  return `<blockquote expandable>${escapeHtml(
+    sections.join("\n\n"),
+  )}</blockquote>`;
+}
+
 function removeStickerPlaceholders(
   response: string,
   stickers: LlmSticker[],
@@ -1097,7 +1141,7 @@ function removeStickerPlaceholders(
 
 function formatLlmResponse(
   llmResponse: LlmResponse,
-  options: { errors?: string[] } = {},
+  options: { debug?: boolean; errors?: string[] } = {},
 ): {
   richMarkdown: string;
 } {
@@ -1107,13 +1151,19 @@ function formatLlmResponse(
     llmResponse.stickers,
   );
   const errors = [...llmResponse.errors, ...(options.errors ?? [])];
+  const responseWithFooter = appendResponseFooterMarkdown(
+    richMarkdown,
+    llmResponse.tools,
+    errors,
+  );
+  const debugMarkdown = options.debug
+    ? formatDebugMarkdown(llmResponse.debug)
+    : "";
 
   return {
-    richMarkdown: appendResponseFooterMarkdown(
-      richMarkdown,
-      llmResponse.tools,
-      errors,
-    ),
+    richMarkdown: [debugMarkdown, responseWithFooter]
+      .filter(Boolean)
+      .join("\n\n"),
   };
 }
 
@@ -1626,6 +1676,7 @@ async function sendRecoveredErrorResponse(
       ),
   );
   const formattedResponse = formatLlmResponse(llmResponse, {
+    debug: await getChatDebugMode(ctx.database, chatId),
     errors: [getErrorDetails(error)],
   });
   const sentMessages = await sendRichMarkdownResponse(
@@ -1833,7 +1884,9 @@ async function handleChatRequest(
     );
     sentMessages.push(...stickerMessages.sentMessages);
 
-    const formattedResponse = formatLlmResponse(llmResponse);
+    const formattedResponse = formatLlmResponse(llmResponse, {
+      debug: await getChatDebugMode(ctx.database, chatId),
+    });
     const missingStickerFallback =
       stickerMessages.sentMessages.length === 0
         ? stickerMessages.unsentStickers[0]?.emoji

@@ -14,7 +14,7 @@ export type ReasoningEffort =
   | "high"
   | "xhigh";
 export type ReasoningSetting = ReasoningEffort | null;
-export type ChatLlmSettingKey = "reasoning";
+export type ChatLlmSettingKey = "reasoning" | "debug";
 export type LlmSettingsDeployment = LlmDeploymentId | "all";
 export type LlmSettingsTable = {
   key: string;
@@ -29,7 +29,7 @@ export type ChatLlmSettingsTable = {
 
 type LlmSettingsDatabase = Database;
 type LlmModelSettingKey = `model:${LlmDeploymentId}`;
-type LlmDeploymentSettingKey = `${ChatLlmSettingKey}:${LlmDeploymentId}`;
+type LlmDeploymentSettingKey = `reasoning:${LlmDeploymentId}`;
 type LlmSettingKey =
   | ChatLlmSettingKey
   | LlmDeploymentSettingKey
@@ -60,6 +60,17 @@ export function parseReasoningSetting(
   }
 
   return isReasoningEffort(value) ? value : undefined;
+}
+
+export function parseDebugModeSetting(value: string): boolean | undefined {
+  switch (value.toLocaleLowerCase()) {
+    case "on":
+      return true;
+    case "off":
+      return false;
+    default:
+      return undefined;
+  }
 }
 
 export function isLlmSettingsDeployment(
@@ -150,11 +161,19 @@ function getGlobalLlmSettingKey(
   key: ChatLlmSettingKey,
   deployment: LlmSettingsDeployment,
 ): ChatLlmSettingKey | LlmDeploymentSettingKey {
-  return deployment === "all" ? key : `${key}:${deployment}`;
+  if (deployment === "all") {
+    return key;
+  }
+
+  if (key !== "reasoning") {
+    throw new Error(`Setting "${key}" is not deployment-scoped.`);
+  }
+
+  return `${key}:${deployment}`;
 }
 
 function getGlobalLlmDeploymentSettingKeys(
-  key: ChatLlmSettingKey,
+  key: "reasoning",
 ): LlmDeploymentSettingKey[] {
   return LLM_DEPLOYMENT_OPTIONS.map(
     (deployment) => `${key}:${deployment.id}` as LlmDeploymentSettingKey,
@@ -206,10 +225,12 @@ async function persistGlobalLlmSetting(
   }
 
   await database.transaction().execute(async (transaction) => {
-    await transaction
-      .deleteFrom("llm_settings")
-      .where("key", "in", getGlobalLlmDeploymentSettingKeys(key))
-      .execute();
+    if (key === "reasoning") {
+      await transaction
+        .deleteFrom("llm_settings")
+        .where("key", "in", getGlobalLlmDeploymentSettingKeys(key))
+        .execute();
+    }
 
     await transaction
       .insertInto("llm_settings")
@@ -299,6 +320,14 @@ function parseStoredReasoningSetting(
   return isReasoningEffort(value) ? value : undefined;
 }
 
+function formatStoredDebugMode(enabled: boolean): string {
+  return enabled ? "on" : "off";
+}
+
+function parseStoredDebugMode(value: string | null): boolean | undefined {
+  return value === null ? undefined : parseDebugModeSetting(value);
+}
+
 export async function getChatReasoningEffort(
   database: LlmSettingsDatabase,
   chatId: number,
@@ -318,6 +347,22 @@ export async function getChatReasoningEffort(
     : setting;
 }
 
+export async function getChatDebugMode(
+  database: LlmSettingsDatabase,
+  chatId: number,
+): Promise<boolean> {
+  const stored = await getResolvedChatLlmSetting(
+    database,
+    chatId,
+    "all",
+    "debug",
+  );
+  const setting =
+    stored === undefined ? undefined : parseStoredDebugMode(stored);
+
+  return setting === undefined ? await getGlobalDebugMode(database) : setting;
+}
+
 export async function getGlobalReasoningEffort(
   database: LlmSettingsDatabase,
   deployment: LlmSettingsDeployment,
@@ -331,6 +376,16 @@ export async function getGlobalReasoningEffort(
     stored === undefined ? undefined : parseStoredReasoningSetting(stored);
 
   return setting === undefined ? getReasoningEffort() : setting;
+}
+
+export async function getGlobalDebugMode(
+  database: LlmSettingsDatabase,
+): Promise<boolean> {
+  const stored = await getDirectGlobalLlmSetting(database, "all", "debug");
+  const setting =
+    stored === undefined ? undefined : parseStoredDebugMode(stored);
+
+  return setting ?? false;
 }
 
 export async function persistGlobalReasoningEffort(
@@ -347,6 +402,19 @@ export async function persistGlobalReasoningEffort(
   return effort;
 }
 
+export async function persistGlobalDebugMode(
+  database: LlmSettingsDatabase,
+  enabled: boolean,
+): Promise<boolean> {
+  await persistGlobalLlmSetting(
+    database,
+    "all",
+    "debug",
+    formatStoredDebugMode(enabled),
+  );
+  return enabled;
+}
+
 export async function persistChatReasoningEffort(
   database: LlmSettingsDatabase,
   chatId: number,
@@ -361,6 +429,21 @@ export async function persistChatReasoningEffort(
     effort,
   );
   return effort;
+}
+
+export async function persistChatDebugMode(
+  database: LlmSettingsDatabase,
+  chatId: number,
+  enabled: boolean,
+): Promise<boolean> {
+  await persistChatLlmSetting(
+    database,
+    chatId,
+    "all",
+    "debug",
+    formatStoredDebugMode(enabled),
+  );
+  return enabled;
 }
 
 function loadLlmSetting(key: string, value: string | null) {

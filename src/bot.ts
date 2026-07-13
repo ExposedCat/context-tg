@@ -25,6 +25,7 @@ const TELEGRAM_RATE_LIMIT_RETRY_DELAY_MS = 3000;
 const TELEGRAM_RATE_LIMIT_MAX_RETRIES = 5;
 const BOT_COMMANDS = [
   { command: "configure", description: "Configure chat settings" },
+  { command: "debug", description: "Toggle debug details" },
   { command: "stickers", description: "List sticker packs" },
   { command: "packs", description: "List emoji packs" },
   { command: "tasks", description: "Show recent tasks" },

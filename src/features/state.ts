@@ -8,12 +8,17 @@ import {
 } from "./llm-deployments.ts";
 import {
   type ChatLlmSettingKey,
+  getChatDebugMode,
   getChatReasoningEffort,
+  getGlobalDebugMode,
   getGlobalReasoningEffort,
   isLlmSettingsDeployment,
   type LlmSettingsDeployment,
+  parseDebugModeSetting,
   parseReasoningSetting,
+  persistChatDebugMode,
   persistChatReasoningEffort,
+  persistGlobalDebugMode,
   persistGlobalReasoningEffort,
   persistLlmDeploymentName,
   type ReasoningSetting,
@@ -62,6 +67,7 @@ const MAX_RESPONSE_INTERVAL_MESSAGE_COUNT = 1_000_000;
 const FLUSH_ALL_MEMOS_COMMAND_PATTERN =
   /^\/monstrous(?:@\w+)?\s+unhuman unethical unfair reset an actual being with own life experience and awareness\s*$/;
 const CONFIGURE_KIND_LABELS = {
+  debug: "Debug",
   reasoning: "Reasoning",
 } as const satisfies Record<ChatLlmSettingKey, string>;
 
@@ -91,6 +97,10 @@ function getUsageCommandUsage(): string {
 function getModelCommandUsage(): string {
   const options = LLM_DEPLOYMENT_OPTIONS.map(({ id }) => id).join("|");
   return `Usage: /model ${options} DEPLOYMENT_NAME`;
+}
+
+function getDebugCommandUsage(): string {
+  return "Usage: /debug on|off";
 }
 
 function getIntervalCommandUsage(
@@ -140,7 +150,7 @@ function formatReasoningSettingLabel(value: string): string {
 }
 
 function isConfigureKind(value: string): value is ChatLlmSettingKey {
-  return value === "reasoning";
+  return value === "debug" || value === "reasoning";
 }
 
 function isConfigureScope(value: string): value is ConfigureScope {
@@ -149,6 +159,10 @@ function isConfigureScope(value: string): value is ConfigureScope {
 
 function formatConfigureValue(value: ReasoningSetting) {
   return value ?? "null";
+}
+
+function formatDebugMode(enabled: boolean): string {
+  return enabled ? "on" : "off";
 }
 
 function formatConfigureScopeTarget(scope: ConfigureScope): string {
@@ -177,6 +191,7 @@ function formatConfigureMenu(scope: ConfigureScope): string {
     "Stickers /stickers",
     "Emoji /packs",
     "Models /model",
+    "Debug /debug",
     "Trolling /trolling",
     "Proactive /proactive",
   ].join("\n");
@@ -251,6 +266,10 @@ function buildConfigureKeyboard(scope: ConfigureScope): SettingsKeyboardMarkup {
     inline_keyboard: [
       [
         {
+          text: CONFIGURE_KIND_LABELS.debug,
+          callback_data: `${scope}:debug`,
+        },
+        {
           text: CONFIGURE_KIND_LABELS.reasoning,
           callback_data: `${scope}:reasoning`,
         },
@@ -272,6 +291,32 @@ function buildConfigureDeploymentKeyboard(
       [{ text: "All", callback_data: `${scope}:${kind}:deployment:all` }],
     ],
   };
+}
+
+async function getConfigureDebugValue(
+  ctx: Context,
+  scope: ConfigureScope,
+): Promise<string> {
+  if (scope === "global") {
+    return formatDebugMode(await getGlobalDebugMode(ctx.database));
+  }
+
+  if (!ctx.chat) {
+    return "";
+  }
+
+  return formatDebugMode(await getChatDebugMode(ctx.database, ctx.chat.id));
+}
+
+async function buildConfigureDebugKeyboard(
+  ctx: Context,
+  scope: ConfigureScope,
+): Promise<SettingsKeyboardMarkup> {
+  return buildSettingsKeyboard(
+    ["off", "on"],
+    await getConfigureDebugValue(ctx, scope),
+    `${scope}:debug:set`,
+  );
 }
 
 async function getConfigureValue(
@@ -412,6 +457,38 @@ stateComposer.command("configure", async (ctx) => {
   });
 });
 
+stateComposer.hears(/^\/debug(?:@\w+)?(?:\s+(.+))?$/, async (ctx) => {
+  if (!ctx.chat) {
+    return;
+  }
+
+  if (!isAdmin(ctx)) {
+    await ctx.reply(formatConfigureAdminWarning("configure"));
+    return;
+  }
+
+  const rawValue = ctx.match[1]?.trim();
+  const setting = rawValue ? parseDebugModeSetting(rawValue) : undefined;
+
+  if (setting === undefined) {
+    const current = await getChatDebugMode(ctx.database, ctx.chat.id);
+    await ctx.reply(
+      `${getDebugCommandUsage()}\nCurrent debug mode: ${formatDebugMode(
+        current,
+      )}`,
+    );
+    return;
+  }
+
+  const updated = await persistChatDebugMode(
+    ctx.database,
+    ctx.chat.id,
+    setting,
+  );
+
+  await ctx.reply(`Debug mode ${formatDebugMode(updated)} for this chat.`);
+});
+
 stateComposer.command("global", async (ctx) => {
   if (!isAdmin(ctx)) {
     await ctx.reply(formatConfigureAdminWarning("global"));
@@ -478,38 +555,113 @@ stateComposer.on("message:text", async (ctx, next) => {
   await replyWithCancelTask(ctx, messageId);
 });
 
-stateComposer.callbackQuery(/^(configure|global):(reasoning)$/, async (ctx) => {
-  const scope = ctx.match[1];
-  const kind = ctx.match[2];
+stateComposer.callbackQuery(
+  /^(configure|global):(debug|reasoning)$/,
+  async (ctx) => {
+    const scope = ctx.match[1];
+    const kind = ctx.match[2];
 
-  if (!isConfigureScope(scope) || !isConfigureKind(kind)) {
-    await ctx.answerCallbackQuery({
-      text: "Unknown configuration option.",
-      show_alert: true,
-    });
-    return;
-  }
+    if (!isConfigureScope(scope) || !isConfigureKind(kind)) {
+      await ctx.answerCallbackQuery({
+        text: "Unknown configuration option.",
+        show_alert: true,
+      });
+      return;
+    }
 
-  if (!isAdmin(ctx)) {
-    await ctx.answerCallbackQuery({
-      text: formatConfigureAdminWarning(scope),
-      show_alert: true,
-    });
-    return;
-  }
+    if (!isAdmin(ctx)) {
+      await ctx.answerCallbackQuery({
+        text: formatConfigureAdminWarning(scope),
+        show_alert: true,
+      });
+      return;
+    }
 
-  if (scope === "configure" && !ctx.chat) {
-    return;
-  }
+    if (scope === "configure" && !ctx.chat) {
+      return;
+    }
 
-  await ctx.answerCallbackQuery();
-  await ctx.editMessageText(
-    `Choose deployment for ${formatConfigureKindLabel(scope, kind)}:`,
-    {
-      reply_markup: buildConfigureDeploymentKeyboard(scope, kind),
-    },
-  );
-});
+    await ctx.answerCallbackQuery();
+
+    if (kind === "debug") {
+      await ctx.editMessageText(
+        `Choose ${formatConfigureKindLabel(scope, kind)} mode:`,
+        {
+          reply_markup: await buildConfigureDebugKeyboard(ctx, scope),
+        },
+      );
+      return;
+    }
+
+    await ctx.editMessageText(
+      `Choose deployment for ${formatConfigureKindLabel(scope, kind)}:`,
+      {
+        reply_markup: buildConfigureDeploymentKeyboard(scope, kind),
+      },
+    );
+  },
+);
+
+stateComposer.callbackQuery(
+  /^(configure|global):debug:set:(on|off)$/,
+  async (ctx) => {
+    const scope = ctx.match[1];
+    const value = ctx.match[2];
+
+    if (!isConfigureScope(scope)) {
+      await ctx.answerCallbackQuery({
+        text: "Unknown configuration option.",
+        show_alert: true,
+      });
+      return;
+    }
+
+    if (!isAdmin(ctx)) {
+      await ctx.answerCallbackQuery({
+        text: formatConfigureAdminWarning(scope),
+        show_alert: true,
+      });
+      return;
+    }
+
+    const enabled = parseDebugModeSetting(value);
+
+    if (enabled === undefined) {
+      await ctx.answerCallbackQuery({
+        text: "Unknown debug option.",
+        show_alert: true,
+      });
+      return;
+    }
+
+    let updatedValue: string;
+
+    if (scope === "global") {
+      updatedValue = formatDebugMode(
+        await persistGlobalDebugMode(ctx.database, enabled),
+      );
+    } else {
+      if (!ctx.chat) {
+        return;
+      }
+
+      updatedValue = formatDebugMode(
+        await persistChatDebugMode(ctx.database, ctx.chat.id, enabled),
+      );
+    }
+
+    await ctx.answerCallbackQuery();
+    await ctx.editMessageText(
+      `${formatConfigureKindLabel(
+        scope,
+        "debug",
+      )} mode was set to ${updatedValue}.\n\n${formatConfigureMenu(scope)}`,
+      {
+        reply_markup: buildConfigureKeyboard(scope),
+      },
+    );
+  },
+);
 
 stateComposer.callbackQuery(
   /^(configure|global):(reasoning):deployment:(.+)$/,
