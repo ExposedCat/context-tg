@@ -19,7 +19,7 @@ export const LLM_DEPLOYMENTS = {
   openMinded: {
     id: "openminded",
     deploymentName: "",
-    withReasoning: false,
+    withReasoning: true,
   },
   image: {
     id: "image",
