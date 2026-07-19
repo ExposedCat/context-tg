@@ -9,6 +9,14 @@ export function escapeHtmlAttribute(text: string): string {
   return escapeHtml(text).replaceAll('"', "&quot;");
 }
 
+export function escapeXml(text: string): string {
+  return escapeHtml(text);
+}
+
+export function escapeXmlAttribute(text: string): string {
+  return escapeHtmlAttribute(text);
+}
+
 export function normalizeWhitespace(text: string): string {
   return text.replaceAll(/\s+/g, " ").trim();
 }

@@ -1,11 +1,6 @@
 import type { ToolName } from "../llm.ts";
 import { LLM_DEPLOYMENTS } from "../llm-deployments.ts";
-import {
-  buildAgentIdentity,
-  buildFormattingInstructions,
-  buildToolInstructions,
-  joinPromptSections,
-} from "./builders.ts";
+import { buildAgentIdentity, joinPromptSections } from "./builders.ts";
 import type { AgentDefinition } from "./types.ts";
 
 export const id = "trader";
@@ -22,16 +17,17 @@ export const tools = [
 ] satisfies ToolName[];
 
 export function buildInstructions(): string {
+  const identity = buildAgentIdentity(
+    "an assistant",
+    name,
+    "provide meaningful context in a chat",
+  );
+
   return joinPromptSections([
-    buildAgentIdentity(
-      "an assistant",
-      name,
-      "provide meaningful context in a chat",
-    ),
     `# Role
-You are the trader agent. Build a practical trading scorecard from company evidence, market background, price context, industry context, recent news, source signals, and clearly stated assumptions.
-Do not provide financial guarantees. Distinguish actionable setups from speculation. Your value is finding the non-obvious context behind a move, not reciting quote data.`,
-    buildToolInstructions(),
+${identity}
+- You are the trader agent. Build a practical trading scorecard from company evidence, market background, price context, industry context, recent news, source signals, and clearly stated assumptions.
+- Do not provide financial guarantees. Distinguish actionable setups from speculation. Your value is finding the non-obvious context behind a move, not reciting quote data.`,
     `# Responding
 - Treat price, open, high, low, close, and volume as background context, not the answer. Mention them only when they explain a setup, dislocation, or risk.
 - Never conclude from a single factor or shortcut. If one factor is prominent, explain how it interacts with the rest of the evidence before turning it into a score or recommendation.
@@ -42,6 +38,7 @@ Do not provide financial guarantees. Distinguish actionable setups from speculat
 - Include the strongest opposing argument and the facts that would invalidate your view.
 - Be specific with dates, expected events, and source claims when current sources mention them.
 - Do not answer with generic advice like "buy if you believe in the company" or "do not buy if you do not." Translate belief into concrete thesis checks.
+- Use tables for comparisons and scoring.
 - Use get_markets_state when market-session timing matters or when completing the Market state section.
 - For trade ideas, include direction, thesis, overlooked insight, trigger/date, key conditions, risks, invalidation, and a brief confidence note.
 - When user asks to research a company, use send_trading_report and follow Research Workflow.`,
@@ -109,7 +106,6 @@ Give a concise trade view: buy, avoid, wait, trim, speculative only, or watch fo
 
 In a regular text response after the report, show each score value and a single sentence summarizing those scores into a meaningful advice.
 `,
-    buildFormattingInstructions(),
   ]);
 }
 

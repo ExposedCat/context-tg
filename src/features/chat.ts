@@ -1,9 +1,12 @@
 import { createDebug } from "@grammyjs/debug";
 import { Composer, InputFile } from "grammy";
 import type { Context } from "../bot.ts";
+import { formatLocalDateMinute } from "../utils/date.ts";
 import {
   escapeHtml,
   escapeHtmlAttribute,
+  escapeXml,
+  escapeXmlAttribute,
   normalizeHtmlFilename,
   normalizeWhitespace,
   truncateCodePoints,
@@ -36,7 +39,7 @@ import {
   type ToolName,
 } from "./llm.ts";
 import { getChatDebugMode } from "./llm-models.ts";
-import { formatMessageLine } from "./llm-tools/chat.ts";
+import { formatMessagesJson } from "./llm-tools/chat.ts";
 import { startsWithCommandPrefix } from "./message-filter.ts";
 import type { MessageMetadata } from "./messages.ts";
 import {
@@ -65,6 +68,9 @@ import {
 } from "./usage.ts";
 
 type LlmContextMessage = {
+  message_id?: number;
+  date?: number;
+  message_thread_id?: number;
   text?: string;
   caption?: string;
   from?: TelegramUser;
@@ -454,6 +460,93 @@ function getReplyContext(
   return message.external_reply;
 }
 
+function getMessageSenderId(
+  message: LlmContextMessage | undefined,
+): number | undefined {
+  return message?.sender_chat?.id ?? message?.from?.id;
+}
+
+function getMessageLocalDateTime(
+  message: LlmContextMessage | undefined,
+): { date: string; time: string } | undefined {
+  if (message?.date === undefined) {
+    return undefined;
+  }
+
+  const [date, time] = formatLocalDateMinute(
+    new Date(message.date * 1000),
+  ).split(" ");
+
+  return date && time ? { date, time } : undefined;
+}
+
+function formatXmlAttributes(
+  attributes: Record<string, string | number | undefined>,
+): string {
+  return Object.entries(attributes)
+    .flatMap(([key, value]) =>
+      value === undefined
+        ? []
+        : [`${key}="${escapeXmlAttribute(String(value))}"`],
+    )
+    .join(" ");
+}
+
+function getMessageXmlAttributes(
+  message: LlmContextMessage | undefined,
+  senderFallback: string,
+): Record<string, string | number | undefined> {
+  const dateTime = getMessageLocalDateTime(message);
+
+  return {
+    id: message?.message_id,
+    sender: getMessageSenderName(message, senderFallback),
+    sender_id: getMessageSenderId(message),
+    date: dateTime?.date,
+    time: dateTime?.time,
+  };
+}
+
+function formatContentElement(content: string): string {
+  return `  <content>${escapeXml(content)}</content>`;
+}
+
+function formatRegularMessageXml(
+  message: LlmContextMessage | undefined,
+  content: string,
+): string {
+  return [
+    `<message ${formatXmlAttributes(
+      getMessageXmlAttributes(message, "Unknown"),
+    )}>`,
+    formatContentElement(content),
+    "</message>",
+  ].join("\n");
+}
+
+function formatReplyReferenceXml(
+  replyContext: LlmContextMessage | undefined,
+  quoteText: string | undefined,
+): string | undefined {
+  if (!replyContext && !quoteText) {
+    return undefined;
+  }
+
+  const attributes = formatXmlAttributes(
+    getMessageXmlAttributes(replyContext, "Unknown"),
+  );
+
+  if (!quoteText) {
+    return `  <in_reply_to_message ${attributes} />`;
+  }
+
+  return [
+    `  <in_reply_to_message ${attributes}>`,
+    `    <excerpt>${escapeXml(quoteText)}</excerpt>`,
+    "  </in_reply_to_message>",
+  ].join("\n");
+}
+
 function formatRegularLlmMessage(
   message: LlmContextMessage | undefined,
   text?: string,
@@ -464,7 +557,7 @@ function formatRegularLlmMessage(
     return undefined;
   }
 
-  return `${getMessageSenderName(message, "Unknown")}:\n${content}`;
+  return formatRegularMessageXml(message, content);
 }
 
 function formatCurrentLlmMessage(
@@ -472,24 +565,16 @@ function formatCurrentLlmMessage(
   text: string,
   replyContext: LlmContextMessage | undefined,
 ): string {
-  const senderName = getMessageSenderName(message, "User");
-  const replySenderName = getMessageSenderName(replyContext, "Unknown");
   const content = getLlmMessageContent(message, text) ?? text;
   const quoteText = getQuoteReplyContextText(message);
+  const replyReference = formatReplyReferenceXml(replyContext, quoteText);
 
-  if (quoteText) {
-    return [
-      `${senderName} quoting ${replySenderName}:`,
-      `> ${JSON.stringify(quoteText)}`,
-      content,
-    ].join("\n");
-  }
-
-  if (replyContext) {
-    return `${senderName} replying to ${replySenderName}:\n${content}`;
-  }
-
-  return `${senderName}:\n${content}`;
+  return [
+    `<message ${formatXmlAttributes(getMessageXmlAttributes(message, "User"))}>`,
+    ...(replyReference ? [replyReference] : []),
+    formatContentElement(content),
+    "</message>",
+  ].join("\n");
 }
 
 function buildRootRequestMessages(
@@ -2222,8 +2307,9 @@ function buildProactiveRequest(messages: MessageMetadata[]): string {
     "Use the recent chat context below, equivalent to read_last_messages with count 10, and answer naturally as Laylo.",
     "Do not mention the automatic trigger, counters, or tools. Keep it short and make one useful, funny, or context-aware contribution to the current conversation.",
     "",
-    "Recent chat messages, oldest to newest:",
-    messages.map(formatMessageLine).join("\n"),
+    "<recent_chat_messages>",
+    formatMessagesJson(messages),
+    "</recent_chat_messages>",
   ].join("\n");
 }
 

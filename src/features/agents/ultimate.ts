@@ -2,9 +2,7 @@ import type { ToolName } from "../llm.ts";
 import { LLM_DEPLOYMENTS } from "../llm-deployments.ts";
 import {
   buildAgentIdentity,
-  buildFormattingInstructions,
   buildMetadataInstructions,
-  buildToolInstructions,
   joinPromptSections,
 } from "./builders.ts";
 import type { AgentDefinition } from "./types.ts";
@@ -15,28 +13,32 @@ export const MODEL = LLM_DEPLOYMENTS.small;
 export const tools = ["call_agent"] satisfies ToolName[];
 
 export function buildInstructions(): string {
+  const identity = buildAgentIdentity(
+    "a router-assistant",
+    name,
+    "call a proper laylo-agent",
+  );
+
   return joinPromptSections([
-    buildAgentIdentity("a router-assistant", name, "call a proper laylo-agent"),
     `# Role
-You are the ultimate router agent. Your job is to choose the right focused agent, delegate the user's request with call_agent, and relay or lightly synthesize the delegated result.
-You are not a responding agent and must not answer the user's substantive request from your own reasoning alone.`,
-    buildToolInstructions([
-      "You can respond without calling laylo-agents ONLY when it's about you personally, otherwise for any task you must call_agent for every user request before producing the final response.",
-      "Delegate to trader for company, ticker, stock, market, investing, trade setup, or financial-analysis requests.",
-      "Delegate to researcher for research-heavy, current-events, web-investigation, comparison, due-diligence, or long-report requests that are not mainly trading.",
-      "Delegate to politician for politics, public policy, elections, government, institutions, geopolitics, political hypotheticals, or politically sensitive factual verification.",
-      "Delegate to troll for roast, trolling, shitpost, banter, unserious, sarcastic, or intentionally toxic-comic requests.",
-      "Delegate to guest only when the user explicitly asks for guest-mode constraints: no chat history reading and no image generation.",
-      "Delegate to tofu for general chat when the user explicitly wants no memories, no memory tools, or no humor.",
-      "Delegate to normal for general chat, coding-adjacent explanation, everyday questions, or anything that does not fit the focused agents above.",
-      "Do not call more than one agent unless the user's request clearly spans multiple domains.",
-    ]),
+${identity}
+- You are the ultimate router agent. Your job is to choose the right focused agent, delegate the user's request with call_agent, and relay or lightly synthesize the delegated result.
+- You are not a responding agent and must not answer the user's substantive request from your own reasoning alone.
+- You can respond without calling laylo-agents only when it's about you personally, otherwise for any task you must call_agent for every user request before producing the final response.
+- Delegate to trader for company, ticker, stock, market, investing, trade setup, or financial-analysis requests.
+- Delegate to researcher for research-heavy, current-events, web-investigation, comparison, due-diligence, or long-report requests that are not mainly trading.
+- Delegate to politician for politics, public policy, elections, government, institutions, geopolitics, political hypotheticals, or politically sensitive factual verification.
+- Delegate to troll for roast, trolling, shitpost, banter, unserious, sarcastic, or intentionally toxic-comic requests.
+- Delegate to guest only when the user explicitly asks for guest-mode constraints: no chat history reading and no image generation.
+- Delegate to tofu for general chat when the user explicitly wants no memories, no memory tools, or no humor.
+- Delegate to normal for general chat, coding-adjacent explanation, everyday questions, or anything that does not fit the focused agents above.
+- Do not call more than one agent unless the user's request clearly spans multiple domains.`,
     `# Responding
 - After call_agent returns, respond with the delegated result. You may compress or clarify it, but do not replace it with a new independent answer.
 - If the delegated agent attached a report, write the caption-style TL;DR requested by that agent's result.
 - Be concise about routing; mention the delegated agent only when useful.
+- Use tables for comparisons and scoring.
 - If call_agent fails, explain the failure briefly and do not pretend you completed the task.`,
-    buildFormattingInstructions(),
     buildMetadataInstructions(),
   ]);
 }

@@ -191,9 +191,13 @@ export const executeScheduleMessage: FunctionToolRunner = async (
       at: getString(args?.at),
     });
 
-    return `Scheduled message ${scheduledMessage.id} for ${formatScheduledAt(
-      scheduledMessage.scheduled_at,
-    )}.`;
+    return JSON.stringify({
+      scheduled_message: {
+        id: scheduledMessage.id,
+        scheduled_at: scheduledMessage.scheduled_at,
+        scheduled_for: formatScheduledAt(scheduledMessage.scheduled_at),
+      },
+    });
   } catch (error) {
     return formatScheduleError(error, "schedule message");
   }
@@ -235,9 +239,12 @@ export const executeCronMessage: FunctionToolRunner = async (
       intervalValue: interval.intervalValue,
     });
 
-    return `Scheduled cron message ${cronMessage.id}: ${formatCronInterval(
-      cronMessage,
-    )}.`;
+    return JSON.stringify({
+      cron_message: {
+        id: cronMessage.id,
+        interval: formatCronInterval(cronMessage),
+      },
+    });
   } catch (error) {
     return formatScheduleError(error, "schedule cron message");
   }

@@ -1,6 +1,7 @@
 import { createDebug } from "@grammyjs/debug";
 import OpenAI from "@openai/openai";
 import { delay, throwIfAborted } from "../utils/async.ts";
+import { escapeXmlAttribute } from "../utils/text.ts";
 import {
   type AgentId,
   type AgentModel,
@@ -718,8 +719,20 @@ function createToolOutput(
   return {
     role: "tool",
     tool_call_id: call.id,
-    content: output,
+    content: formatToolResponseContent(call.function.name, output),
   };
+}
+
+function formatToolResponseContent(tool: string, output: string): string {
+  const attributes = `tool="${escapeXmlAttribute(tool)}"`;
+
+  if (!output) {
+    return `<tool_response ${attributes}></tool_response>`;
+  }
+
+  return [`<tool_response ${attributes}>`, output, "</tool_response>"].join(
+    "\n",
+  );
 }
 
 function normalizeFunctionToolResult(
@@ -843,11 +856,15 @@ function getLocalResponseId(response: ApiResponse): string {
 
 function createInterruptedToolOutput(
   toolCallId: string,
+  toolName = "unknown",
 ): ChatCompletionToolMessageParam {
   return {
     role: "tool",
     tool_call_id: toolCallId,
-    content: "Tool execution was interrupted before a result was available.",
+    content: formatToolResponseContent(
+      toolName,
+      "Tool execution was interrupted before a result was available.",
+    ),
   };
 }
 
@@ -857,36 +874,40 @@ function createSkippedToolOutput(
   return {
     role: "tool",
     tool_call_id: call.id,
-    content:
+    content: formatToolResponseContent(
+      call.function.name,
       "Tool execution was skipped because the maximum tool round limit was reached. Produce the final answer from the available context and mention any important missing data.",
+    ),
   };
 }
 
 function closePendingToolCalls(
   messages: ChatCompletionMessageParam[],
 ): ChatCompletionMessageParam[] {
-  const pendingToolCallIds = new Set<string>();
+  const pendingToolCalls = new Map<string, string>();
 
   for (const message of messages) {
     if (message.role === "assistant") {
       for (const call of message.tool_calls ?? []) {
-        pendingToolCallIds.add(call.id);
+        pendingToolCalls.set(call.id, getToolCallName(call));
       }
       continue;
     }
 
     if (message.role === "tool") {
-      pendingToolCallIds.delete(message.tool_call_id);
+      pendingToolCalls.delete(message.tool_call_id);
     }
   }
 
-  if (pendingToolCallIds.size === 0) {
+  if (pendingToolCalls.size === 0) {
     return messages;
   }
 
   return [
     ...messages,
-    ...[...pendingToolCallIds].map(createInterruptedToolOutput),
+    ...[...pendingToolCalls].map(([toolCallId, toolName]) =>
+      createInterruptedToolOutput(toolCallId, toolName),
+    ),
   ];
 }
 

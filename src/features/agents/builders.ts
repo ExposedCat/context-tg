@@ -1,4 +1,5 @@
 import { formatLocalDateMinute } from "../../utils/date.ts";
+import { escapeXmlAttribute } from "../../utils/text.ts";
 
 export function formatAgentNames(names: readonly string[]): string {
   return names.map((name) => JSON.stringify(name)).join(", ");
@@ -15,9 +16,11 @@ export function joinPromptSections(
 export function buildMetadataInstructions(): string {
   const now = new Date();
   const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const [date, time] = formatLocalDateMinute(now).split(" ");
 
-  return `# Meta
-Current local time (${timeZone}): ${formatLocalDateMinute(now)}`;
+  return `<metadata>
+  <time localTimeZone="${escapeXmlAttribute(timeZone)}" date="${date}" time="${time}" />
+</metadata>`;
 }
 
 export function buildAgentIdentity(
@@ -25,23 +28,5 @@ export function buildAgentIdentity(
   names: readonly string[],
   goal: string,
 ): string {
-  return `# You
-You are ${description} named ${formatAgentNames(names)} with a goal to ${goal}`;
-}
-
-export function buildToolInstructions(
-  agentRules: readonly string[] = [],
-): string {
-  const rules = [
-    "You have callable function tools and built-in capabilities at your disposal. Whenever you need a callable function tool, call it by name with proper parameters. Do not write function tool parameters in a normal response.",
-    ...agentRules,
-  ];
-
-  return `# Tools
-${rules.map((rule) => `- ${rule}`).join("\n")}`;
-}
-
-export function buildFormattingInstructions(): string {
-  return `# Formatting
-Write naturally in Markdown when formatting improves readability. Use headings, lists, tables, block quotes, links, inline code, and fenced code blocks as needed.`;
+  return `- You are ${description} named ${formatAgentNames(names)} with a goal to ${goal}`;
 }

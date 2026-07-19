@@ -1,6 +1,10 @@
 import { normalizeWhitespace } from "../../utils/text.ts";
 import { MAX_LAST_MESSAGES_COUNT, readLastMessages } from "../last-messages.ts";
-import { search as searchMessages } from "../messages.ts";
+import {
+  type MessageMetadata,
+  type MessageSearchResult,
+  search as searchMessages,
+} from "../messages.ts";
 import type { FunctionToolRunner } from "./types.ts";
 import {
   getFiniteNumber,
@@ -12,7 +16,7 @@ export const searchChatToolDefinition = {
   type: "function",
   name: "search_chat",
   description:
-    "Search remembered messages in the current Telegram chat or forum topic. Telegram photos are represented as [photo attachment], followed by their caption when present. Telegram stickers are represented as [sticker EMOJI]. The sender_id and date filters are optional; only use them when the user explicitly needs a sender or date range filter. Prefer using only queries.",
+    "Search remembered messages in the current Telegram chat or forum topic. Returns a JSON array of message objects. Telegram photos are represented as [photo attachment], followed by their caption when present. Telegram stickers are represented as [sticker EMOJI]. The sender_id and date filters are optional; only use them when the user explicitly needs a sender or date range filter. Prefer using only queries.",
   parameters: {
     type: "object",
     properties: {
@@ -50,7 +54,7 @@ export const readLastMessagesToolDefinition = {
   type: "function",
   name: "read_last_messages",
   description:
-    "Read recent remembered text messages from the current Telegram chat. Only quote messages when you are asked to do so. If you are tasked to do a summary or help with ongoing discussion, you must read messages as an extra context, do not just list or recite entire discussion uneless explicitly requested to do so.",
+    "Read recent remembered text messages from the current Telegram chat. Returns a JSON array of message objects. Only quote messages when you are asked to do so. If you are tasked to do a summary or help with ongoing discussion, you must read messages as an extra context, do not just list or recite entire discussion unless explicitly requested to do so.",
   parameters: {
     type: "object",
     properties: {
@@ -78,13 +82,36 @@ function parseCount(value: unknown): number {
   return Math.max(1, Math.min(MAX_LAST_MESSAGES_COUNT, Math.floor(count)));
 }
 
-export function formatMessageLine(message: {
-  date: string;
-  sender_name: string;
-  text: string;
-}): string {
-  const content = normalizeWhitespace(message.text);
-  return `[${message.date}] ${message.sender_name}: ${JSON.stringify(content)}`;
+function formatMessageData(
+  message: MessageMetadata | MessageSearchResult,
+): Record<string, unknown> {
+  const data: Record<string, unknown> = {
+    id: message.message_id,
+    date: message.date,
+    sender_id: message.sender_id,
+    sender: message.sender_name,
+    text: normalizeWhitespace(message.text),
+  };
+
+  if (message.thread_id !== undefined) {
+    data.thread_id = message.thread_id;
+  }
+
+  if ("score" in message) {
+    data.score = message.score;
+  }
+
+  if ("queries" in message) {
+    data.queries = message.queries;
+  }
+
+  return data;
+}
+
+export function formatMessagesJson(
+  messages: readonly MessageMetadata[] | readonly MessageSearchResult[],
+): string {
+  return JSON.stringify(messages.map(formatMessageData), null, 2);
 }
 
 export const executeSearchChat: FunctionToolRunner = async (args, context) => {
@@ -106,9 +133,7 @@ export const executeSearchChat: FunctionToolRunner = async (args, context) => {
     limit: 20,
   });
 
-  return results.length > 0
-    ? results.map(formatMessageLine).join("\n")
-    : "No matching chat messages found.";
+  return results.length > 0 ? formatMessagesJson(results) : "";
 };
 
 export const executeReadLastMessages: FunctionToolRunner = async (
@@ -130,7 +155,5 @@ export const executeReadLastMessages: FunctionToolRunner = async (
     threadId: context.threadId,
   });
 
-  return messages.length > 0
-    ? messages.map(formatMessageLine).join("\n")
-    : "No remembered messages found in that message range.";
+  return messages.length > 0 ? formatMessagesJson(messages) : "";
 };

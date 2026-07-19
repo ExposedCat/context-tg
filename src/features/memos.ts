@@ -7,7 +7,12 @@ import {
 } from "@kysely/kysely";
 import OpenAI from "@openai/openai";
 import type { Context } from "../bot.ts";
-import { escapeHtml, normalizeWhitespace } from "../utils/text.ts";
+import { formatLocalDateMinute } from "../utils/date.ts";
+import {
+  escapeHtml,
+  escapeXmlAttribute,
+  normalizeWhitespace,
+} from "../utils/text.ts";
 import type { AgentId } from "./agents/types.ts";
 import type { Database } from "./database.ts";
 import { APP_ENV } from "./env.ts";
@@ -508,19 +513,35 @@ export async function flushAllMemos(
   return getDeletedRowCount(result);
 }
 
-function formatMemoryBullet(memo: Memo): string {
-  return `- (id: ${memo.id}) ${memo.text}`;
+function formatMemoAddedAt(value: string): { date: string; time: string } {
+  const date = new Date(value);
+  const localValue = Number.isNaN(date.getTime())
+    ? value.replace("T", " ").slice(0, 16)
+    : formatLocalDateMinute(date);
+  const [addedDate = "", addedTime = ""] = localValue.split(" ");
+
+  return { date: addedDate, time: addedTime };
+}
+
+function formatMemoryMemo(memo: Memo): string {
+  const addedAt = formatMemoAddedAt(memo.created_at);
+
+  return `    <memo id="${memo.id}" value="${escapeXmlAttribute(
+    memo.text,
+  )}" addedDate="${escapeXmlAttribute(addedAt.date)}" addedTime="${escapeXmlAttribute(
+    addedAt.time,
+  )}" />`;
 }
 
 function formatMemorySubsection(
-  title: string,
+  tagName: "chat" | "personal",
   memos: readonly Memo[],
-): string | undefined {
-  if (memos.length === 0) {
-    return undefined;
-  }
-
-  return [`## ${title}`, ...memos.map(formatMemoryBullet)].join("\n");
+): string {
+  return [
+    `  <${tagName}>`,
+    ...memos.map(formatMemoryMemo),
+    `  </${tagName}>`,
+  ].join("\n");
 }
 
 function formatMemoryUserName(userName: string | undefined): string {
@@ -528,27 +549,32 @@ function formatMemoryUserName(userName: string | undefined): string {
   return normalized || "current user";
 }
 
+function formatMemoryUserSubsection(
+  userName: string | undefined,
+  memos: readonly Memo[],
+): string {
+  return [
+    `  <user name="${escapeXmlAttribute(formatMemoryUserName(userName))}">`,
+    ...memos.map(formatMemoryMemo),
+    "  </user>",
+  ].join("\n");
+}
+
 export function formatMemosMetadataSection(
   memos: readonly Memo[],
   userName?: string,
-): string | undefined {
+): string {
   const chatMemos = memos.filter((memo) => memo.bucket === "chat");
   const userMemos = memos.filter((memo) => memo.bucket === "user");
   const selfMemos = memos.filter((memo) => memo.bucket === "self");
-  const sections = [
-    formatMemorySubsection("Chat", chatMemos),
-    formatMemorySubsection(
-      `User (${formatMemoryUserName(userName)})`,
-      userMemos,
-    ),
-    formatMemorySubsection("Your Personality", selfMemos),
-  ].filter((section): section is string => section !== undefined);
 
-  if (sections.length === 0) {
-    return undefined;
-  }
-
-  return ["# Your Memory", ...sections].join("\n");
+  return [
+    "<memory>",
+    formatMemorySubsection("chat", chatMemos),
+    formatMemoryUserSubsection(userName, userMemos),
+    formatMemorySubsection("personal", selfMemos),
+    "</memory>",
+  ].join("\n");
 }
 
 export async function buildMemosMetadataSection(
