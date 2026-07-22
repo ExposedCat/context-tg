@@ -2523,21 +2523,17 @@ async function handleGuestChatRequest(
           ctx,
           buildRootRequestMessages(message, text, replyContext),
         );
-    const llmResponse = await withTypingAction(
-      ctx,
-      async () =>
-        await requestLlm(
-          request,
-          agentTools,
-          responseId,
-          {
-            database: ctx.database,
-            context: toolContext,
-            agentId: guestAgent.id,
-          },
-          guestAgent.buildInstructions(),
-          guestAgent.MODEL,
-        ),
+    const llmResponse = await requestLlm(
+      request,
+      agentTools,
+      responseId,
+      {
+        database: ctx.database,
+        context: toolContext,
+        agentId: guestAgent.id,
+      },
+      guestAgent.buildInstructions(),
+      guestAgent.MODEL,
     );
 
     await recordUsage(
