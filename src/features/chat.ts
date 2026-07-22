@@ -215,22 +215,6 @@ type GuestResponseDelivery = {
   responseReferences: GuestResponseReference[];
 };
 
-type SentRichMarkdownMessage = {
-  message_id: number;
-  text: string;
-};
-
-type GuestResponseReference = {
-  text: string;
-  message_id?: number;
-  inline_message_id?: string;
-};
-
-type GuestResponseDelivery = {
-  sentMessages: SentRichMarkdownMessage[];
-  responseReferences: GuestResponseReference[];
-};
-
 type BotReaction = "🤔";
 
 const logError = createDebug("app:chat:error");
@@ -2378,6 +2362,30 @@ function getThreadResponseId(
   return thread?.response_id ?? undefined;
 }
 
+async function backfillGuestReplyThread(
+  ctx: Context,
+  chatId: number,
+  reply: TextMessage,
+  guestThread: GuestResponseThread,
+): Promise<Thread | GuestResponseThread> {
+  try {
+    return await saveThread(ctx.database, {
+      chat_id: chatId,
+      message_id: reply.message_id,
+      thread_id: guestThread.thread_id,
+      response_id: guestThread.response_id,
+      agent_id: guestThread.agent_id ?? guestAgent.id,
+    });
+  } catch (error) {
+    logError("Failed to backfill guest reply thread:", {
+      messageId: reply.message_id,
+      responseId: guestThread.response_id,
+      error,
+    });
+    return guestThread;
+  }
+}
+
 async function getGuestReplyThread(
   ctx: Context,
   chatId: number,
@@ -2392,20 +2400,20 @@ async function getGuestReplyThread(
     return thread;
   }
 
-  const fingerprint = await getGuestResponseFingerprint(
-    getLlmMessageContent(reply),
-  );
-
-  if (!fingerprint) {
+  if (reply.date === undefined) {
     return thread;
   }
 
-  return (
-    (await getGuestResponseThread(ctx.database, {
-      chat_id: chatId,
-      response_fingerprint: fingerprint,
-    })) ?? thread
-  );
+  const dateThread = await getGuestResponseThreadByDate(ctx.database, {
+    chat_id: chatId,
+    date: new Date(reply.date * 1000),
+  });
+
+  if (!dateThread) {
+    return thread;
+  }
+
+  return await backfillGuestReplyThread(ctx, chatId, reply, dateThread);
 }
 
 async function saveGuestChatResponseThread(
