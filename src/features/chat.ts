@@ -1,12 +1,9 @@
 import { createDebug } from "@grammyjs/debug";
 import { Composer, InputFile } from "grammy";
 import type { Context } from "../bot.ts";
-import { formatLocalDateMinute } from "../utils/date.ts";
 import {
   escapeHtml,
   escapeHtmlAttribute,
-  escapeXml,
-  escapeXmlAttribute,
   normalizeHtmlFilename,
   normalizeWhitespace,
   truncateCodePoints,
@@ -39,7 +36,12 @@ import {
   type ToolName,
 } from "./llm.ts";
 import { getChatDebugMode } from "./llm-models.ts";
-import { formatMessagesJson } from "./llm-tools/chat.ts";
+import {
+  formatPromptMessageXml,
+  formatSystemPromptMessageXml,
+  getPromptDateTimeFromEpochSeconds,
+  type PromptMessageAttributes,
+} from "./llm-prompt.ts";
 import { startsWithCommandPrefix } from "./message-filter.ts";
 import type { MessageMetadata } from "./messages.ts";
 import {
@@ -56,7 +58,15 @@ import {
   type TaskStatus,
 } from "./tasks.ts";
 import { disabledLinkPreviewOptions as linkPreviewOptions } from "./telegram.ts";
-import { createThread, getThread, saveThread, type Thread } from "./threads.ts";
+import {
+  createThread,
+  type GuestResponseThread,
+  getGuestResponseThread,
+  getThread,
+  saveGuestResponseThread,
+  saveThread,
+  type Thread,
+} from "./threads.ts";
 import {
   consumeUsage,
   getUsageStatus,
@@ -84,6 +94,10 @@ type LlmContextMessage = {
   video?: unknown;
   voice?: unknown;
   sticker?: TelegramSticker;
+  rich_message?: TelegramRichMessage;
+  via_bot?: TelegramUser;
+  guest_bot_caller_user?: TelegramUser;
+  guest_bot_caller_chat?: TelegramChat;
 };
 
 type TextMessage = LlmContextMessage & {
@@ -174,9 +188,31 @@ type TelegramSticker = {
   emoji?: string;
 };
 
+type TelegramRichMessage = {
+  blocks?: unknown[];
+  markdown?: string;
+  html?: string;
+};
+
 type TelegramImageAttachment = {
   fileId: string;
   mimeType?: string;
+};
+
+type SentRichMarkdownMessage = {
+  message_id: number;
+  text: string;
+};
+
+type GuestResponseReference = {
+  text: string;
+  message_id?: number;
+  inline_message_id?: string;
+};
+
+type GuestResponseDelivery = {
+  sentMessages: SentRichMarkdownMessage[];
+  responseReferences: GuestResponseReference[];
 };
 
 type BotReaction = "🤔";
@@ -211,8 +247,125 @@ const UNSUPPORTED_CAPTIONED_MEDIA_TYPES = [
   label: string;
 }>;
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 function getMessageText(message: LlmContextMessage): string | undefined {
   return message.text ?? message.caption;
+}
+
+function joinTextParts(parts: Array<string | undefined>, separator: string) {
+  const text = parts
+    .filter((part): part is string => part !== undefined && part.trim() !== "")
+    .join(separator)
+    .trim();
+
+  return text || undefined;
+}
+
+function getRichTextText(value: unknown): string | undefined {
+  if (typeof value === "string") {
+    return value;
+  }
+
+  if (Array.isArray(value)) {
+    return joinTextParts(value.map(getRichTextText), "");
+  }
+
+  if (!isRecord(value)) {
+    return undefined;
+  }
+
+  if (typeof value.alternative_text === "string") {
+    return value.alternative_text;
+  }
+
+  return (
+    getRichTextText(value.text) ??
+    (typeof value.expression === "string" ? value.expression : undefined)
+  );
+}
+
+function getRichCaptionText(value: unknown): string | undefined {
+  if (!isRecord(value)) {
+    return getRichTextText(value);
+  }
+
+  return joinTextParts(
+    [getRichTextText(value.text), getRichTextText(value.credit)],
+    "\n",
+  );
+}
+
+function getRichListItemText(value: unknown): string | undefined {
+  if (!isRecord(value) || !Array.isArray(value.blocks)) {
+    return undefined;
+  }
+
+  return getRichBlocksText(value.blocks);
+}
+
+function getRichTableCellsText(value: unknown): string | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+
+  return joinTextParts(
+    value.map((row) => {
+      if (!Array.isArray(row)) {
+        return undefined;
+      }
+
+      return joinTextParts(
+        row.map((cell) =>
+          isRecord(cell) ? getRichTextText(cell.text) : undefined,
+        ),
+        " | ",
+      );
+    }),
+    "\n",
+  );
+}
+
+function getRichBlockText(block: unknown): string | undefined {
+  if (!isRecord(block)) {
+    return undefined;
+  }
+
+  return joinTextParts(
+    [
+      getRichTextText(block.text),
+      typeof block.expression === "string" ? block.expression : undefined,
+      getRichTextText(block.summary),
+      Array.isArray(block.blocks) ? getRichBlocksText(block.blocks) : undefined,
+      Array.isArray(block.items)
+        ? joinTextParts(block.items.map(getRichListItemText), "\n")
+        : undefined,
+      getRichTableCellsText(block.cells),
+      getRichCaptionText(block.caption),
+      getRichTextText(block.credit),
+    ],
+    "\n",
+  );
+}
+
+function getRichBlocksText(blocks: unknown[]): string | undefined {
+  return joinTextParts(blocks.map(getRichBlockText), "\n");
+}
+
+function getRichMessageText(
+  richMessage: TelegramRichMessage | undefined,
+): string | undefined {
+  if (!richMessage) {
+    return undefined;
+  }
+
+  if (Array.isArray(richMessage.blocks)) {
+    return getRichBlocksText(richMessage.blocks);
+  }
+
+  return richMessage.markdown ?? richMessage.html;
 }
 
 function formatStickerMarker(emoji: string | undefined): string {
@@ -249,7 +402,9 @@ function buildLlmMessageText(message: LlmContextMessage, text: string): string {
 function getLlmContextText(
   message: LlmContextMessage | undefined,
 ): string | undefined {
-  const text = message && getMessageText(message);
+  const text =
+    message &&
+    (getMessageText(message) ?? getRichMessageText(message.rich_message));
   return message && text && !startsWithCommandPrefix(text)
     ? buildLlmMessageText(message, text)
     : undefined;
@@ -469,33 +624,13 @@ function getMessageSenderId(
 function getMessageLocalDateTime(
   message: LlmContextMessage | undefined,
 ): { date: string; time: string } | undefined {
-  if (message?.date === undefined) {
-    return undefined;
-  }
-
-  const [date, time] = formatLocalDateMinute(
-    new Date(message.date * 1000),
-  ).split(" ");
-
-  return date && time ? { date, time } : undefined;
-}
-
-function formatXmlAttributes(
-  attributes: Record<string, string | number | undefined>,
-): string {
-  return Object.entries(attributes)
-    .flatMap(([key, value]) =>
-      value === undefined
-        ? []
-        : [`${key}="${escapeXmlAttribute(String(value))}"`],
-    )
-    .join(" ");
+  return getPromptDateTimeFromEpochSeconds(message?.date);
 }
 
 function getMessageXmlAttributes(
   message: LlmContextMessage | undefined,
   senderFallback: string,
-): Record<string, string | number | undefined> {
+): PromptMessageAttributes {
   const dateTime = getMessageLocalDateTime(message);
 
   return {
@@ -507,44 +642,14 @@ function getMessageXmlAttributes(
   };
 }
 
-function formatContentElement(content: string): string {
-  return `  <content>${escapeXml(content)}</content>`;
-}
-
 function formatRegularMessageXml(
   message: LlmContextMessage | undefined,
   content: string,
 ): string {
-  return [
-    `<message ${formatXmlAttributes(
-      getMessageXmlAttributes(message, "Unknown"),
-    )}>`,
-    formatContentElement(content),
-    "</message>",
-  ].join("\n");
-}
-
-function formatReplyReferenceXml(
-  replyContext: LlmContextMessage | undefined,
-  quoteText: string | undefined,
-): string | undefined {
-  if (!replyContext && !quoteText) {
-    return undefined;
-  }
-
-  const attributes = formatXmlAttributes(
-    getMessageXmlAttributes(replyContext, "Unknown"),
+  return formatPromptMessageXml(
+    getMessageXmlAttributes(message, "Unknown"),
+    content,
   );
-
-  if (!quoteText) {
-    return `  <in_reply_to_message ${attributes} />`;
-  }
-
-  return [
-    `  <in_reply_to_message ${attributes}>`,
-    `    <excerpt>${escapeXml(quoteText)}</excerpt>`,
-    "  </in_reply_to_message>",
-  ].join("\n");
 }
 
 function formatRegularLlmMessage(
@@ -567,14 +672,21 @@ function formatCurrentLlmMessage(
 ): string {
   const content = getLlmMessageContent(message, text) ?? text;
   const quoteText = getQuoteReplyContextText(message);
-  const replyReference = formatReplyReferenceXml(replyContext, quoteText);
+  const reply =
+    replyContext || quoteText
+      ? {
+          attributes: getMessageXmlAttributes(replyContext, "Unknown"),
+          excerpt: quoteText,
+        }
+      : undefined;
 
-  return [
-    `<message ${formatXmlAttributes(getMessageXmlAttributes(message, "User"))}>`,
-    ...(replyReference ? [replyReference] : []),
-    formatContentElement(content),
-    "</message>",
-  ].join("\n");
+  return formatPromptMessageXml(
+    getMessageXmlAttributes(message, "User"),
+    content,
+    {
+      reply,
+    },
+  );
 }
 
 function buildRootRequestMessages(
@@ -1603,12 +1715,12 @@ async function sendRichMarkdownResponse(
   ctx: Context,
   message: TextMessage,
   richMarkdown: string,
-): Promise<Array<{ message_id: number }>> {
+): Promise<SentRichMarkdownMessage[]> {
   if (!ctx.chat) {
     return [];
   }
 
-  const sentMessages = [];
+  const sentMessages: SentRichMarkdownMessage[] = [];
   const content = richMarkdown.trim() ? richMarkdown : "Done.";
 
   for (const chunk of splitRichMarkdownMessage(content)) {
@@ -1624,7 +1736,10 @@ async function sendRichMarkdownResponse(
       },
     );
 
-    sentMessages.push(sentMessage);
+    sentMessages.push({
+      message_id: sentMessage.message_id,
+      text: chunk,
+    });
   }
 
   return sentMessages;
@@ -1641,11 +1756,45 @@ function formatGuestResultDescription(richMarkdown: string): string {
   return truncateCodePoints(normalized, GUEST_RESULT_DESCRIPTION_LENGTH);
 }
 
+function getGuestArticleRichMarkdown(richMarkdown: string): string {
+  const content = richMarkdown.trim() ? richMarkdown : "Done.";
+
+  return splitRichMarkdownMessage(content)[0] ?? content;
+}
+
+function normalizeGuestResponseFingerprintText(text: string): string {
+  return normalizeWhitespace(
+    text
+      .replaceAll(/!\[[^\]]*]\([^)]+\)/g, "")
+      .replaceAll(/\[([^\]]+)]\([^)]+\)/g, "$1")
+      .replaceAll(/(^|\n)\s*(?:[-+*]|\d+[.)])\s+/g, "$1")
+      .replaceAll(/<[^>]+>/g, " ")
+      .replaceAll(/[`*_~>#|[\]().,!?;:"'{}<>\\/-]/g, " "),
+  ).toLocaleLowerCase();
+}
+
+async function getGuestResponseFingerprint(
+  text: string | undefined,
+): Promise<string | undefined> {
+  const normalized = text
+    ? normalizeGuestResponseFingerprintText(text)
+    : undefined;
+
+  if (!normalized) {
+    return undefined;
+  }
+
+  const bytes = new TextEncoder().encode(normalized);
+  const hash = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
+
+  return [...hash].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
 function buildGuestArticleResult(
   message: TextMessage,
   richMarkdown: string,
 ): Parameters<Context["answerGuestQuery"]>[0] {
-  const content = richMarkdown.trim() ? richMarkdown : "Done.";
+  const content = getGuestArticleRichMarkdown(richMarkdown);
 
   return {
     type: "article",
@@ -1654,7 +1803,7 @@ function buildGuestArticleResult(
     description: formatGuestResultDescription(content),
     input_message_content: {
       rich_message: {
-        markdown: splitRichMarkdownMessage(content)[0],
+        markdown: content,
       },
     },
   };
@@ -1664,24 +1813,44 @@ async function sendGuestLlmResponse(
   ctx: Context,
   message: TextMessage,
   llmResponse: LlmResponse,
-): Promise<void> {
+): Promise<GuestResponseDelivery> {
   const formattedResponse = formatLlmResponse(llmResponse);
   const richMarkdown = formattedResponse.richMarkdown.trim();
+  const guestResponseText = getGuestArticleRichMarkdown(
+    formattedResponse.richMarkdown,
+  );
   const result = buildGuestArticleResult(
     message,
     formattedResponse.richMarkdown,
   );
 
   try {
-    await ctx.answerGuestQuery(result);
+    const sentGuestMessage = await ctx.answerGuestQuery(result);
+    return {
+      sentMessages: [],
+      responseReferences: [
+        {
+          text: guestResponseText,
+          inline_message_id: sentGuestMessage.inline_message_id,
+        },
+      ],
+    };
   } catch (error) {
     logError("Failed to answer guest query:", error);
 
-    if (richMarkdown) {
-      await sendRichMarkdownResponse(ctx, message, richMarkdown);
-    } else {
-      await ctx.reply("Done.");
-    }
+    const sentMessages = await sendRichMarkdownResponse(
+      ctx,
+      message,
+      richMarkdown,
+    );
+
+    return {
+      sentMessages,
+      responseReferences: sentMessages.map((sentMessage) => ({
+        message_id: sentMessage.message_id,
+        text: sentMessage.text,
+      })),
+    };
   }
 }
 
@@ -1821,7 +1990,7 @@ async function sendRecoveredErrorResponse(
     ctx,
     async () =>
       await requestLlm(
-        getErrorRecoveryPrompt(taskText, error),
+        formatSystemPromptMessageXml(getErrorRecoveryPrompt(taskText, error)),
         [],
         undefined,
         {
@@ -2215,6 +2384,103 @@ async function handleChatRequest(
   }
 }
 
+function getThreadResponseId(
+  thread: Thread | GuestResponseThread | undefined,
+): string | undefined {
+  return thread?.response_id ?? undefined;
+}
+
+async function getGuestReplyThread(
+  ctx: Context,
+  chatId: number,
+  reply: TextMessage,
+): Promise<Thread | GuestResponseThread | undefined> {
+  const thread = await getThread(ctx.database, {
+    chat_id: chatId,
+    message_id: reply.message_id,
+  });
+
+  if (thread?.response_id) {
+    return thread;
+  }
+
+  const fingerprint = await getGuestResponseFingerprint(
+    getLlmMessageContent(reply),
+  );
+
+  if (!fingerprint) {
+    return thread;
+  }
+
+  return (
+    (await getGuestResponseThread(ctx.database, {
+      chat_id: chatId,
+      response_fingerprint: fingerprint,
+    })) ?? thread
+  );
+}
+
+async function saveGuestChatResponseThread(
+  ctx: Context,
+  chatId: number,
+  message: TextMessage,
+  threadId: number,
+  llmResponse: LlmResponse,
+  delivery: GuestResponseDelivery,
+): Promise<void> {
+  if (!llmResponse.response_id) {
+    return;
+  }
+
+  const responseAgent =
+    getAgentById(llmResponse.handoff_agent_id) ?? guestAgent;
+
+  try {
+    await saveThread(ctx.database, {
+      chat_id: chatId,
+      message_id: message.message_id,
+      thread_id: threadId,
+      response_id: llmResponse.response_id,
+      agent_id: responseAgent.id,
+    });
+
+    for (const sentMessage of delivery.sentMessages) {
+      await createThread(ctx.database, {
+        chat_id: chatId,
+        message_id: sentMessage.message_id,
+        thread_id: threadId,
+        response_id: llmResponse.response_id,
+        agent_id: responseAgent.id,
+      });
+    }
+
+    for (const responseReference of delivery.responseReferences) {
+      const fingerprint = await getGuestResponseFingerprint(
+        responseReference.text,
+      );
+
+      if (!fingerprint) {
+        continue;
+      }
+
+      await saveGuestResponseThread(ctx.database, {
+        chat_id: chatId,
+        response_fingerprint: fingerprint,
+        trigger_message_id: message.message_id,
+        thread_id: threadId,
+        response_id: llmResponse.response_id,
+        agent_id: responseAgent.id,
+        inline_message_id: responseReference.inline_message_id,
+      });
+    }
+  } catch (error) {
+    logError("Failed to save guest response thread:", {
+      responseId: llmResponse.response_id,
+      error,
+    });
+  }
+}
+
 async function handleGuestChatRequest(
   ctx: Context,
   message: TextMessage,
@@ -2239,6 +2505,17 @@ async function handleGuestChatRequest(
   let responseSent = false;
 
   try {
+    const reply = getActualReply(message);
+    const replyContext = getReplyContext(message, reply);
+    const thread = reply
+      ? await getGuestReplyThread(ctx, chatId, reply)
+      : undefined;
+    const threadId =
+      thread?.thread_id ??
+      getForumThreadId(message, reply) ??
+      message.message_thread_id ??
+      message.message_id;
+    const responseId = getThreadResponseId(thread);
     const toolUsage = await getUsageStatus(ctx.database, chatId, "tool_usages");
 
     if (guestAgent.tools.length > 0 && toolUsage.used >= toolUsage.quota) {
@@ -2250,17 +2527,23 @@ async function handleGuestChatRequest(
       imageUsageRemaining: false,
     });
     const toolContext = getLlmToolContext(chatId, message);
-    const request = await buildLlmRequestInputs(
-      ctx,
-      buildRootRequestMessages(message, text, undefined),
-    );
+    const request = responseId
+      ? await buildLlmRequestInput(
+          ctx,
+          buildThreadRequest(message, text, replyContext),
+          message,
+        )
+      : await buildLlmRequestInputs(
+          ctx,
+          buildRootRequestMessages(message, text, replyContext),
+        );
     const llmResponse = await withTypingAction(
       ctx,
       async () =>
         await requestLlm(
           request,
           agentTools,
-          undefined,
+          responseId,
           {
             database: ctx.database,
             context: toolContext,
@@ -2278,8 +2561,16 @@ async function handleGuestChatRequest(
       llmResponse.tool_call_count,
     );
 
-    await sendGuestLlmResponse(ctx, message, llmResponse);
+    const delivery = await sendGuestLlmResponse(ctx, message, llmResponse);
     responseSent = true;
+    await saveGuestChatResponseThread(
+      ctx,
+      chatId,
+      message,
+      threadId,
+      llmResponse,
+      delivery,
+    );
   } catch (error) {
     logError("Error handling guest message:", error);
 
@@ -2301,16 +2592,38 @@ function getProactiveTools(): ToolName[] {
   );
 }
 
-function buildProactiveRequest(messages: MessageMetadata[]): string {
-  return [
+function formatStoredMessageXml(message: MessageMetadata): string {
+  const dateTime = getPromptDateTimeFromEpochSeconds(message.date_timestamp);
+
+  return formatPromptMessageXml(
+    {
+      id: message.message_id,
+      sender: message.sender_name,
+      sender_id: message.sender_id,
+      date: dateTime?.date,
+      time: dateTime?.time,
+    },
+    normalizeWhitespace(message.text),
+  );
+}
+
+function buildProactiveRequestMessages(messages: MessageMetadata[]): Array<{
+  text: string;
+  message: undefined;
+}> {
+  const instructions = [
     "Automatic internal trigger: you were called into the chat after the configured message interval.",
-    "Use the recent chat context below, equivalent to read_last_messages with count 10, and answer naturally as Laylo.",
+    "Use the recent chat context in the following messages, equivalent to read_last_messages with count 10, and answer naturally as Laylo.",
     "Do not mention the automatic trigger, counters, or tools. Keep it short and make one useful, funny, or context-aware contribution to the current conversation.",
-    "",
-    "<recent_chat_messages>",
-    formatMessagesJson(messages),
-    "</recent_chat_messages>",
   ].join("\n");
+
+  return [
+    { text: formatSystemPromptMessageXml(instructions), message: undefined },
+    ...messages.map((message) => ({
+      text: formatStoredMessageXml(message),
+      message: undefined,
+    })),
+  ];
 }
 
 function shouldSkipProactiveAgentResponse(
@@ -2361,9 +2674,7 @@ export async function maybeSendProactiveAgentResponse(
   }
 
   await handleChatRequest(ctx, textMessage, PROACTIVE_TASK_TEXT, {
-    requestMessages: [
-      { text: buildProactiveRequest(messages), message: undefined },
-    ],
+    requestMessages: buildProactiveRequestMessages(messages),
     taskText: PROACTIVE_TASK_TEXT,
     threadId,
     tools: getProactiveTools(),

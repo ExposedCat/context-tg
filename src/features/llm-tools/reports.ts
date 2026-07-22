@@ -1104,8 +1104,11 @@ export const execute: FunctionToolRunner = (args) => {
   }
 
   return {
-    output:
-      "Report accepted. Final response must be a 2-3 sentence TL;DR of the report's conclusion, strongest evidence, and most important caveat; do not respond with only a generic attachment notice.",
+    output: JSON.stringify({
+      report: { accepted: true },
+      final_response_instruction:
+        "Final response must be a 2-3 sentence TL;DR of the report's conclusion, strongest evidence, and most important caveat; do not respond with only a generic attachment notice.",
+    }),
     report: {
       documentHtml: renderReportDocument(report),
       filename: report.filename,
@@ -1151,8 +1154,11 @@ export const executeTrading: FunctionToolRunner = (args) => {
   }
 
   return {
-    output:
-      "Trading report accepted. Final response must show State Score, Background Score, Market Score, and Industry Score, then give one concise actionable sentence based on those scores.",
+    output: JSON.stringify({
+      trading_report: { accepted: true },
+      final_response_instruction:
+        "Final response must show State Score, Background Score, Market Score, and Industry Score, then give one concise actionable sentence based on those scores.",
+    }),
     report: {
       documentHtml: renderReportDocument(report),
       filename: report.filename,

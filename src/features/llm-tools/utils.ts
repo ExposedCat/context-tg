@@ -46,12 +46,14 @@ export function getMissingContextResponse(
 ): string | undefined {
   return context
     ? undefined
-    : `Cannot ${tool}: current chat context is unavailable.`;
+    : getJsonError(`Cannot ${tool}: current chat context is unavailable.`);
 }
 
 export function getMissingDatabaseResponse(
   tool: string,
   database: unknown,
 ): string | undefined {
-  return database ? undefined : `Cannot ${tool}: database is unavailable.`;
+  return database
+    ? undefined
+    : getJsonError(`Cannot ${tool}: database is unavailable.`);
 }

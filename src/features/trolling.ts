@@ -5,6 +5,11 @@ import { trollAgent } from "./agents/index.ts";
 import type { Database } from "./database.ts";
 import { readLastMessages } from "./last-messages.ts";
 import { requestLlm } from "./llm.ts";
+import {
+  formatPromptMessageXml,
+  formatSystemPromptMessageXml,
+  getPromptDateTimeFromEpochSeconds,
+} from "./llm-prompt.ts";
 import type { MessageMetadata } from "./messages.ts";
 
 type Sender = {
@@ -79,10 +84,18 @@ function formatSenderName(sender: Sender): string {
 }
 
 function formatContextMessage(message: MessageMetadata): string {
-  const content = message.text.replaceAll(/\s+/g, " ").trim();
-  return `[${message.message_id}] ${message.sender_name}: ${JSON.stringify(
-    content,
-  )}`;
+  const dateTime = getPromptDateTimeFromEpochSeconds(message.date_timestamp);
+
+  return formatPromptMessageXml(
+    {
+      id: message.message_id,
+      sender: message.sender_name,
+      sender_id: message.sender_id,
+      date: dateTime?.date,
+      time: dateTime?.time,
+    },
+    message.text.replaceAll(/\s+/g, " ").trim(),
+  );
 }
 
 async function incrementTrollingMessageCount(
@@ -201,15 +214,17 @@ function shouldTriggerTrolling(
 function buildTrollingRequest(
   targetName: string,
   messages: MessageMetadata[],
-): string {
+): string[] {
   return [
-    `Troll the last user by name: ${targetName} (don't apply formatting on a name).`,
-    "The final context message is the trigger message. Roast that user's last message, not the whole chat.",
-    "Never answer the message seriously. Keep it extremely short.",
-    "",
-    "Chat context, oldest to newest:",
-    messages.map(formatContextMessage).join("\n"),
-  ].join("\n");
+    formatSystemPromptMessageXml(
+      [
+        `Troll the last user by name: ${targetName} (don't apply formatting on a name).`,
+        "The final context message is the trigger message. Roast that user's last message, not the whole chat.",
+        "Never answer the message seriously. Keep it extremely short.",
+      ].join("\n"),
+    ),
+    ...messages.map(formatContextMessage),
+  ];
 }
 
 export async function maybeSendPeriodicTroll(

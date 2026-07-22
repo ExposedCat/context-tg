@@ -7,6 +7,7 @@ import {
 import type { FunctionToolRunner } from "./types.ts";
 import {
   getFiniteNumber,
+  getJsonError,
   getMissingContextResponse,
   getMissingDatabaseResponse,
   getString,
@@ -69,11 +70,11 @@ function formatMemo(memo: Memo): Record<string, unknown> {
 
 function formatMemoError(error: unknown, action: string): string {
   if (error instanceof MemoValidationError) {
-    return `Cannot ${action}: ${error.message}`;
+    return getJsonError(`Cannot ${action}: ${error.message}`);
   }
 
   const details = error instanceof Error ? error.message : String(error);
-  return `Cannot ${action}: ${details}`;
+  return getJsonError(`Cannot ${action}: ${details}`);
 }
 
 export const executeSaveMemo: FunctionToolRunner = async (
@@ -95,7 +96,7 @@ export const executeSaveMemo: FunctionToolRunner = async (
   }
 
   if (!options.agentId) {
-    return "Cannot save memo: agent context is unavailable.";
+    return getJsonError("Cannot save memo: agent context is unavailable.");
   }
 
   try {
@@ -135,12 +136,12 @@ export const executeForgetMemo: FunctionToolRunner = async (
   }
 
   if (!options.agentId) {
-    return "Cannot forget memo: agent context is unavailable.";
+    return getJsonError("Cannot forget memo: agent context is unavailable.");
   }
 
   const id = getFiniteNumber(args?.id);
   if (id === undefined || !Number.isInteger(id) || id < 1) {
-    return "Cannot forget memo: id must be a positive integer.";
+    return getJsonError("Cannot forget memo: id must be a positive integer.");
   }
 
   const removed = await forgetMemo(

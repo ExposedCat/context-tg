@@ -20,6 +20,10 @@ import {
   getReasoningEffort,
   type ReasoningSetting,
 } from "./llm-models.ts";
+import {
+  formatPromptMessageXml,
+  formatSystemPromptMessageXml,
+} from "./llm-prompt.ts";
 import * as agentTool from "./llm-tools/agent.ts";
 import {
   executeReadLastMessages,
@@ -233,11 +237,15 @@ const MAX_LLM_RETRIES = 10;
 const LLM_RATE_LIMIT_RETRY_DELAY_MS = 3000;
 const LLM_RATE_LIMIT_MAX_RETRIES = 5;
 const MAX_FUNCTION_TOOL_ROUNDS = 4;
-const DUPLICATE_STICKER_RESPONSE = "You have already sent a sticker";
+const DUPLICATE_STICKER_RESPONSE = JSON.stringify({
+  error: "Duplicate sticker",
+  details: "You have already sent a sticker.",
+});
 const RETRIABLE_EMPTY_RESPONSE_DETAILS = new Set([
   "empty response",
   "missing choice",
 ]);
+const MARKDOWN_TOOL_OUTPUTS = new Set<string>(["read_web_page"]);
 
 type LlmRequestState = {
   lastResponseId?: string;
@@ -429,16 +437,28 @@ function getToolCallCount(response: ApiResponse): number {
   );
 }
 
+function isPromptMessageXml(content: string): boolean {
+  return /^\s*<message(?:\s|>)/.test(content);
+}
+
+function formatInputTextContent(content: string, fallback = ""): string {
+  const text = content.trim() || fallback;
+
+  return isPromptMessageXml(text)
+    ? text
+    : formatPromptMessageXml({ sender: "User" }, text);
+}
+
 function createInputMessage(
   request: LlmRequestMessageInput,
 ): ChatCompletionMessageParam {
   if (typeof request === "string") {
-    return { role: "user", content: request };
+    return { role: "user", content: formatInputTextContent(request) };
   }
 
   const images = request.images ?? [];
   if (images.length === 0) {
-    return { role: "user", content: request.text };
+    return { role: "user", content: formatInputTextContent(request.text) };
   }
 
   return {
@@ -446,7 +466,10 @@ function createInputMessage(
     content: [
       {
         type: "text",
-        text: request.text.trim() || "Please respond to the attached image.",
+        text: formatInputTextContent(
+          request.text,
+          "Please respond to the attached image.",
+        ),
       },
       ...images.map(createImageContentPart),
     ],
@@ -455,6 +478,36 @@ function createInputMessage(
 
 function createInputMessages(request: LlmRequestInput): LlmApiInput {
   return (Array.isArray(request) ? request : [request]).map(createInputMessage);
+}
+
+function normalizeUserMessageForRequest(
+  message: ChatCompletionMessageParam,
+): ChatCompletionMessageParam {
+  if (message.role !== "user") {
+    return message;
+  }
+
+  const content = message.content;
+
+  if (typeof content === "string") {
+    return {
+      ...message,
+      content: formatInputTextContent(content),
+    };
+  }
+
+  if (!Array.isArray(content)) {
+    return message;
+  }
+
+  return {
+    ...message,
+    content: content.map((part) =>
+      part.type === "text"
+        ? { ...part, text: formatInputTextContent(part.text) }
+        : part,
+    ),
+  };
 }
 
 function getFunctionToolCalls(response: ApiResponse): FunctionToolCall[] {
@@ -723,16 +776,34 @@ function createToolOutput(
   };
 }
 
+function isJsonContent(content: string): boolean {
+  try {
+    JSON.parse(content);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function formatJsonToolResponseBody(output: string): string {
+  if (!output) {
+    return "null";
+  }
+
+  return isJsonContent(output) ? output : JSON.stringify({ result: output });
+}
+
 function formatToolResponseContent(tool: string, output: string): string {
   const attributes = `tool="${escapeXmlAttribute(tool)}"`;
+  const body = MARKDOWN_TOOL_OUTPUTS.has(tool)
+    ? output
+    : formatJsonToolResponseBody(output);
 
-  if (!output) {
+  if (!body) {
     return `<tool_response ${attributes}></tool_response>`;
   }
 
-  return [`<tool_response ${attributes}>`, output, "</tool_response>"].join(
-    "\n",
-  );
+  return [`<tool_response ${attributes}>`, body, "</tool_response>"].join("\n");
 }
 
 function normalizeFunctionToolResult(
@@ -863,7 +934,11 @@ function createInterruptedToolOutput(
     tool_call_id: toolCallId,
     content: formatToolResponseContent(
       toolName,
-      "Tool execution was interrupted before a result was available.",
+      JSON.stringify({
+        error: "Tool execution interrupted",
+        details:
+          "Tool execution was interrupted before a result was available.",
+      }),
     ),
   };
 }
@@ -876,7 +951,11 @@ function createSkippedToolOutput(
     tool_call_id: call.id,
     content: formatToolResponseContent(
       call.function.name,
-      "Tool execution was skipped because the maximum tool round limit was reached. Produce the final answer from the available context and mention any important missing data.",
+      JSON.stringify({
+        error: "Tool execution skipped",
+        details:
+          "Tool execution was skipped because the maximum tool round limit was reached. Produce the final answer from the available context and mention any important missing data.",
+      }),
     ),
   };
 }
@@ -1068,8 +1147,8 @@ async function createLlmResponse(
           role: "system",
           content: instructions,
         },
-        ...messages,
-        ...input,
+        ...messages.map(normalizeUserMessageForRequest),
+        ...input.map(normalizeUserMessageForRequest),
       ],
       // temperature: APP_ENV.LLM_TEMPERATURE,
       tools: toolDefinitions.length > 0 ? toolDefinitions : undefined,
@@ -1399,7 +1478,9 @@ async function runAgent(
   }
 
   const result = await requestLlmWithInstructions(
-    `Delegated task from ultimate agent:\n${task}\n\nReturn a concise result for the ultimate agent to synthesize.`,
+    formatSystemPromptMessageXml(
+      `Delegated task from ultimate agent:\n${task}\n\nReturn a concise result for the ultimate agent to synthesize.`,
+    ),
     agent.tools,
     undefined,
     { context, database, signal, agentId: agent.id },

@@ -18,9 +18,35 @@ export type ThreadsTable = {
   >;
 };
 
+export type GuestResponseThreadsTable = {
+  chat_id: number;
+  response_fingerprint: string;
+  trigger_message_id: number;
+  thread_id: number;
+  agent_id: ColumnType<
+    AgentId | null,
+    AgentId | null | undefined,
+    AgentId | null
+  >;
+  response_id: string;
+  inline_message_id: ColumnType<
+    string | null,
+    string | null | undefined,
+    string | null
+  >;
+  created_at: ColumnType<string, string | undefined, string>;
+  updated_at: ColumnType<string, string | undefined, string>;
+};
+
 export type Thread = Selectable<ThreadsTable>;
 export type CreateThread = Insertable<ThreadsTable>;
 export type ThreadKey = Pick<Thread, "chat_id" | "message_id">;
+export type GuestResponseThread = Selectable<GuestResponseThreadsTable>;
+export type CreateGuestResponseThread = Insertable<GuestResponseThreadsTable>;
+export type GuestResponseThreadKey = Pick<
+  GuestResponseThread,
+  "chat_id" | "response_fingerprint"
+>;
 
 export async function migrateThreads(database: Database) {
   await database.schema
@@ -57,6 +83,24 @@ export async function migrateThreads(database: Database) {
   } catch {
     // Column already exists on fresh or previously migrated databases.
   }
+
+  await database.schema
+    .createTable("guest_response_threads")
+    .ifNotExists()
+    .addColumn("chat_id", "integer", (column) => column.notNull())
+    .addColumn("response_fingerprint", "text", (column) => column.notNull())
+    .addColumn("trigger_message_id", "integer", (column) => column.notNull())
+    .addColumn("thread_id", "integer", (column) => column.notNull())
+    .addColumn("agent_id", "text")
+    .addColumn("response_id", "text", (column) => column.notNull())
+    .addColumn("inline_message_id", "text")
+    .addColumn("created_at", "text", (column) => column.notNull())
+    .addColumn("updated_at", "text", (column) => column.notNull())
+    .addPrimaryKeyConstraint("guest_response_threads_primary_key", [
+      "chat_id",
+      "response_fingerprint",
+    ])
+    .execute();
 }
 
 export async function getThread(
@@ -103,6 +147,49 @@ export async function saveThread(
       conflict.columns(["chat_id", "message_id"]).doUpdateSet({
         agent_id: row.agent_id,
         response_id: row.response_id,
+      }),
+    )
+    .execute();
+
+  return row;
+}
+
+export async function getGuestResponseThread(
+  database: Database,
+  { chat_id, response_fingerprint }: GuestResponseThreadKey,
+): Promise<GuestResponseThread | undefined> {
+  return await database
+    .selectFrom("guest_response_threads")
+    .selectAll()
+    .where("chat_id", "=", chat_id)
+    .where("response_fingerprint", "=", response_fingerprint)
+    .executeTakeFirst();
+}
+
+export async function saveGuestResponseThread(
+  database: Database,
+  thread: CreateGuestResponseThread,
+): Promise<GuestResponseThread> {
+  const now = new Date().toISOString();
+  const row: GuestResponseThread = {
+    ...thread,
+    agent_id: thread.agent_id ?? null,
+    inline_message_id: thread.inline_message_id ?? null,
+    created_at: thread.created_at ?? now,
+    updated_at: thread.updated_at ?? now,
+  };
+
+  await database
+    .insertInto("guest_response_threads")
+    .values(row)
+    .onConflict((conflict) =>
+      conflict.columns(["chat_id", "response_fingerprint"]).doUpdateSet({
+        trigger_message_id: row.trigger_message_id,
+        thread_id: row.thread_id,
+        agent_id: row.agent_id,
+        response_id: row.response_id,
+        inline_message_id: row.inline_message_id,
+        updated_at: row.updated_at,
       }),
     )
     .execute();

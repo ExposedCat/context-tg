@@ -9,6 +9,7 @@ import {
 import type { FunctionToolRunner } from "./types.ts";
 import {
   getFiniteNumber,
+  getJsonError,
   getMissingContextResponse,
   getMissingDatabaseResponse,
   getString,
@@ -137,12 +138,16 @@ function getCronInterval(
   );
 
   if (selected.length !== 1) {
-    return "Cannot schedule cron message: set exactly one every_* interval.";
+    return getJsonError(
+      "Cannot schedule cron message: set exactly one every_* interval.",
+    );
   }
 
   const interval = selected[0];
   if (interval.intervalValue === undefined) {
-    return "Cannot schedule cron message: set exactly one every_* interval.";
+    return getJsonError(
+      "Cannot schedule cron message: set exactly one every_* interval.",
+    );
   }
 
   return {
@@ -153,11 +158,11 @@ function getCronInterval(
 
 function formatScheduleError(error: unknown, action: string): string {
   if (error instanceof ScheduleValidationError) {
-    return `Cannot ${action}: ${error.message}`;
+    return getJsonError(`Cannot ${action}: ${error.message}`);
   }
 
   const details = error instanceof Error ? error.message : String(error);
-  return `Cannot ${action}: ${details}`;
+  return getJsonError(`Cannot ${action}: ${details}`);
 }
 
 function getShortElaboration(args: Record<string, unknown> | null): string {

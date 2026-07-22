@@ -24,7 +24,11 @@ import {
   type ScheduledMessagesTable,
 } from "./schedules.ts";
 import { migrateTasks, type TasksTable } from "./tasks.ts";
-import { migrateThreads, type ThreadsTable } from "./threads.ts";
+import {
+  type GuestResponseThreadsTable,
+  migrateThreads,
+  type ThreadsTable,
+} from "./threads.ts";
 import { type ChatTrollingTable, migrateTrolling } from "./trolling.ts";
 import {
   type ChatUsageLimitsTable,
@@ -34,6 +38,7 @@ import {
 
 export type DatabaseSchema = {
   threads: ThreadsTable;
+  guest_response_threads: GuestResponseThreadsTable;
   llm_chat_responses: LlmChatResponsesTable;
   llm_settings: LlmSettingsTable;
   chat_llm_settings: ChatLlmSettingsTable;

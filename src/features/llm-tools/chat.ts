@@ -133,7 +133,7 @@ export const executeSearchChat: FunctionToolRunner = async (args, context) => {
     limit: 20,
   });
 
-  return results.length > 0 ? formatMessagesJson(results) : "";
+  return formatMessagesJson(results);
 };
 
 export const executeReadLastMessages: FunctionToolRunner = async (
@@ -155,5 +155,5 @@ export const executeReadLastMessages: FunctionToolRunner = async (
     threadId: context.threadId,
   });
 
-  return messages.length > 0 ? formatMessagesJson(messages) : "";
+  return formatMessagesJson(messages);
 };
