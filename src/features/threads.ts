@@ -43,10 +43,13 @@ export type CreateThread = Insertable<ThreadsTable>;
 export type ThreadKey = Pick<Thread, "chat_id" | "message_id">;
 export type GuestResponseThread = Selectable<GuestResponseThreadsTable>;
 export type CreateGuestResponseThread = Insertable<GuestResponseThreadsTable>;
-export type GuestResponseThreadKey = Pick<
+export type GuestResponseThreadDateKey = Pick<
   GuestResponseThread,
-  "chat_id" | "response_fingerprint"
->;
+  "chat_id"
+> & {
+  date: Date;
+  toleranceSeconds?: number;
+};
 
 export async function migrateThreads(database: Database) {
   await database.schema
@@ -154,16 +157,25 @@ export async function saveThread(
   return row;
 }
 
-export async function getGuestResponseThread(
+export async function getGuestResponseThreadByDate(
   database: Database,
-  { chat_id, response_fingerprint }: GuestResponseThreadKey,
+  { chat_id, date, toleranceSeconds = 30 }: GuestResponseThreadDateKey,
 ): Promise<GuestResponseThread | undefined> {
-  return await database
+  const start = new Date(date.getTime() - toleranceSeconds * 1000);
+  const end = new Date(date.getTime() + toleranceSeconds * 1000);
+  const rows = await database
     .selectFrom("guest_response_threads")
     .selectAll()
     .where("chat_id", "=", chat_id)
-    .where("response_fingerprint", "=", response_fingerprint)
-    .executeTakeFirst();
+    .where("created_at", ">=", start.toISOString())
+    .where("created_at", "<=", end.toISOString())
+    .execute();
+
+  return rows.toSorted(
+    (left, right) =>
+      Math.abs(new Date(left.created_at).getTime() - date.getTime()) -
+      Math.abs(new Date(right.created_at).getTime() - date.getTime()),
+  )[0];
 }
 
 export async function saveGuestResponseThread(
@@ -189,6 +201,7 @@ export async function saveGuestResponseThread(
         agent_id: row.agent_id,
         response_id: row.response_id,
         inline_message_id: row.inline_message_id,
+        created_at: row.created_at,
         updated_at: row.updated_at,
       }),
     )

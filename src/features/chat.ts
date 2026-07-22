@@ -61,7 +61,7 @@ import { disabledLinkPreviewOptions as linkPreviewOptions } from "./telegram.ts"
 import {
   createThread,
   type GuestResponseThread,
-  getGuestResponseThread,
+  getGuestResponseThreadByDate,
   getThread,
   saveGuestResponseThread,
   saveThread,
@@ -197,6 +197,22 @@ type TelegramRichMessage = {
 type TelegramImageAttachment = {
   fileId: string;
   mimeType?: string;
+};
+
+type SentRichMarkdownMessage = {
+  message_id: number;
+  text: string;
+};
+
+type GuestResponseReference = {
+  text: string;
+  message_id?: number;
+  inline_message_id?: string;
+};
+
+type GuestResponseDelivery = {
+  sentMessages: SentRichMarkdownMessage[];
+  responseReferences: GuestResponseReference[];
 };
 
 type SentRichMarkdownMessage = {
@@ -1762,34 +1778,6 @@ function getGuestArticleRichMarkdown(richMarkdown: string): string {
   return splitRichMarkdownMessage(content)[0] ?? content;
 }
 
-function normalizeGuestResponseFingerprintText(text: string): string {
-  return normalizeWhitespace(
-    text
-      .replaceAll(/!\[[^\]]*]\([^)]+\)/g, "")
-      .replaceAll(/\[([^\]]+)]\([^)]+\)/g, "$1")
-      .replaceAll(/(^|\n)\s*(?:[-+*]|\d+[.)])\s+/g, "$1")
-      .replaceAll(/<[^>]+>/g, " ")
-      .replaceAll(/[`*_~>#|[\]().,!?;:"'{}<>\\/-]/g, " "),
-  ).toLocaleLowerCase();
-}
-
-async function getGuestResponseFingerprint(
-  text: string | undefined,
-): Promise<string | undefined> {
-  const normalized = text
-    ? normalizeGuestResponseFingerprintText(text)
-    : undefined;
-
-  if (!normalized) {
-    return undefined;
-  }
-
-  const bytes = new TextEncoder().encode(normalized);
-  const hash = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
-
-  return [...hash].map((byte) => byte.toString(16).padStart(2, "0")).join("");
-}
-
 function buildGuestArticleResult(
   message: TextMessage,
   richMarkdown: string,
@@ -2454,25 +2442,15 @@ async function saveGuestChatResponseThread(
       });
     }
 
-    for (const responseReference of delivery.responseReferences) {
-      const fingerprint = await getGuestResponseFingerprint(
-        responseReference.text,
-      );
-
-      if (!fingerprint) {
-        continue;
-      }
-
-      await saveGuestResponseThread(ctx.database, {
-        chat_id: chatId,
-        response_fingerprint: fingerprint,
-        trigger_message_id: message.message_id,
-        thread_id: threadId,
-        response_id: llmResponse.response_id,
-        agent_id: responseAgent.id,
-        inline_message_id: responseReference.inline_message_id,
-      });
-    }
+    await saveGuestResponseThread(ctx.database, {
+      chat_id: chatId,
+      response_fingerprint: llmResponse.response_id,
+      trigger_message_id: message.message_id,
+      thread_id: threadId,
+      response_id: llmResponse.response_id,
+      agent_id: responseAgent.id,
+      inline_message_id: delivery.responseReferences[0]?.inline_message_id,
+    });
   } catch (error) {
     logError("Failed to save guest response thread:", {
       responseId: llmResponse.response_id,
