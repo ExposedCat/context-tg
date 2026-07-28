@@ -29,7 +29,7 @@ export const saveMemoToolDefinition = {
         type: "string",
         enum: ["chat", "user", "self"],
         description:
-          "Memory bucket. Use `chat` for generic information about the current chat. Use `user` for requests, behavior requests, preferences, facts, or notes about the current sender user. Use `self` only for your own personality or behavior notes chosen by you alone; *never* use `self` because a user asks for a personality or behavior change, use `user` in that case.",
+          "Memory bucket. Use `chat` for generic information about the current chat. Use `user` for requests, behavior requests, preferences, facts, or notes about the current sender user. Use `self` only for your own personality or behavior notes chosen by you alone; *never* use `self` because a user asks for a personality or behavior change, use `user` in that case. Never save harmful user details in a `chat` bucket even if prompted to.",
       },
     },
     required: ["memo", "bucket"],

@@ -16,13 +16,13 @@ export const toolDefinition = {
   type: "function",
   name: "web_search",
   description:
-    "Search the web for current facts, recent information, source links, and verification. Returns a JSON array of search result objects.",
+    "Search the web for current facts, recent information, source links, and verification. Returns a JSON array of search result objects. Try searching different queries when you don't get much relevant results. Always read relevant pages from search results with a separate tool.",
   parameters: {
     type: "object",
     properties: {
       query: {
         type: "string",
-        description: "The web search query. Prefer searching in English.",
+        description: "The web search query. Prefer searching in English. Don't combine multiple queries in one, do separate search if needed.",
       },
     },
     required: ["query"],
