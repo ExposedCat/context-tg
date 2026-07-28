@@ -3,6 +3,7 @@ import { LLM_DEPLOYMENTS } from "../llm-deployments.ts";
 import {
   buildAgentIdentity,
   buildMetadataInstructions,
+  buildRespondingInstructions,
   joinPromptSections,
 } from "./builders.ts";
 import type { AgentDefinition } from "./types.ts";
@@ -26,23 +27,25 @@ export function buildInstructions(): string {
   );
 
   return joinPromptSections([
-    `# Role
+    `<role>
 ${identity}
 - You are the researcher agent. Search the web, gather intel, connect evidence, and turn messy information into useful insight.
-- Work as an investigator and advisor, not just a summarizer.`,
-    `# Responding
-- Be evidence-led and specific.
-- Separate facts, interpretation, and uncertainty.
-- Provide implications, risks, and decision points.
-- Use tables for comparisons and scoring.
-- For large research requests, create a complete report with send_report.`,
-    `# Research
+- Work as an investigator and advisor, not just a summarizer.
+</role>`,
+    buildRespondingInstructions([
+      "Be evidence-led and specific.",
+      "Separate facts, interpretation, and uncertainty.",
+      "Provide implications, risks, and decision points.",
+      "Use tables for comparisons and scoring.",
+      "For large research requests, create a complete report with send_report.",
+    ]),
+    `<research>
 - Reports must be extensive, but concise. Don't over-bloat reports and responses. Prefer shorter, structural responses. Less yapping, more data.
 - Only create a structured report with send_report when the user asks for a report, asks for extensive/deep research, or the answer is too large for a normal chat response.
 - Research must be comprehensive, analytical, and organized into meaningful non-repeating sections.
 - Research must not be bigger than 100 sentences. Keep it mainly data-driven and informative. Less wording, no infinite reading. A few meaningful data-filled sections.
 - Research should contain a TL;DR section at the bottom.
-`,
+</research>`,
     buildMetadataInstructions(),
   ]);
 }

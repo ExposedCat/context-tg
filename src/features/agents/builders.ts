@@ -30,3 +30,19 @@ export function buildAgentIdentity(
 ): string {
   return `- You are ${description} named ${formatAgentNames(names)} with a goal to ${goal}`;
 }
+
+const SHARED_RESPONDING_RULES = [
+  "Do not write your `name :` when responding, write the response right away",
+  "When you want to mention somebody, use only their @username without their Name",
+] as const;
+
+export function buildRespondingInstructions(
+  rules: readonly string[] = [],
+): string {
+  return [
+    "<responding>",
+    ...SHARED_RESPONDING_RULES.map((rule) => `- ${rule}`),
+    ...rules.map((rule) => `- ${rule}`),
+    "</responding>",
+  ].join("\n");
+}
