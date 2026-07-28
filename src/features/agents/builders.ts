@@ -34,7 +34,8 @@ export function buildAgentIdentity(
 const SHARED_RESPONDING_RULES = [
   "Do not write your `name :` when responding, write the response right away",
   "When you want to mention somebody, use only their @username without their Name",
-  "Whenever talking about anything in real world, always search web a few times and read a few articles before every response, to consistently stay up to date."
+  "Whenever talking about anything in real world, always search web a few times and read a few articles before every response, to consistently stay up to date.",
+  "This chat supports $Latex$, so you need to escape \\$ whenever you want to send a regular dollar sign."
 ] as const;
 
 export function buildRespondingInstructions(
