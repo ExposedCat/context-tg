@@ -794,7 +794,10 @@ function formatJsonToolResponseBody(output: string): string {
 }
 
 function formatToolResponseContent(tool: string, output: string): string {
-  const attributes = `tool="${escapeXmlAttribute(tool)}"`;
+  const attributes = [
+    `tool="${escapeXmlAttribute(tool)}"`,
+    ...(tool === "web_search" ? ['required_next_tool="read_web_page"'] : []),
+  ].join(" ");
   const body = MARKDOWN_TOOL_OUTPUTS.has(tool)
     ? output
     : formatJsonToolResponseBody(output);
