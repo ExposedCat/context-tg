@@ -4,6 +4,7 @@ import type { Context } from "../bot.ts";
 import {
   escapeHtml,
   escapeHtmlAttribute,
+  escapeSingleDollarSigns,
   normalizeHtmlFilename,
   normalizeWhitespace,
   truncateCodePoints,
@@ -1721,7 +1722,9 @@ async function sendRichMarkdownResponse(
   }
 
   const sentMessages: SentRichMarkdownMessage[] = [];
-  const content = richMarkdown.trim() ? richMarkdown : "Done.";
+  const content = escapeSingleDollarSigns(
+    richMarkdown.trim() ? richMarkdown : "Done.",
+  );
 
   for (const chunk of splitRichMarkdownMessage(content)) {
     const sentMessage = await ctx.api.sendRichMessage(
@@ -1757,7 +1760,9 @@ function formatGuestResultDescription(richMarkdown: string): string {
 }
 
 function getGuestArticleRichMarkdown(richMarkdown: string): string {
-  const content = richMarkdown.trim() ? richMarkdown : "Done.";
+  const content = escapeSingleDollarSigns(
+    richMarkdown.trim() ? richMarkdown : "Done.",
+  );
 
   return splitRichMarkdownMessage(content)[0] ?? content;
 }

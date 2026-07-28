@@ -21,6 +21,39 @@ export function normalizeWhitespace(text: string): string {
   return text.replaceAll(/\s+/g, " ").trim();
 }
 
+function isEscapedCharacter(text: string, index: number): boolean {
+  let slashCount = 0;
+
+  for (let cursor = index - 1; cursor >= 0 && text[cursor] === "\\"; cursor--) {
+    slashCount++;
+  }
+
+  return slashCount % 2 === 1;
+}
+
+export function escapeSingleDollarSigns(text: string): string {
+  let escaped = "";
+
+  for (let index = 0; index < text.length; index++) {
+    const character = text[index];
+
+    if (character !== "$") {
+      escaped += character;
+      continue;
+    }
+
+    if (text[index + 1] === "$") {
+      escaped += "$$";
+      index++;
+      continue;
+    }
+
+    escaped += isEscapedCharacter(text, index) ? "$" : "\\$";
+  }
+
+  return escaped;
+}
+
 export function truncateCodePoints(text: string, length: number): string {
   return Array.from(text).slice(0, length).join("");
 }
