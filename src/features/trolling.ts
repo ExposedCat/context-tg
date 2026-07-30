@@ -5,6 +5,9 @@ import { trollAgent } from "./agents/index.ts";
 import type { Database } from "./database.ts";
 import { readLastMessages } from "./last-messages.ts";
 import { requestLlm } from "./llm.ts";
+import { createLlmInputDump } from "./llm-debug.ts";
+import { sendLlmInputDump } from "./llm-debug-delivery.ts";
+import { getChatBooleanLlmSetting } from "./llm-models.ts";
 import {
   formatPromptMessageXml,
   formatSystemPromptMessageXml,
@@ -250,35 +253,46 @@ export async function maybeSendPeriodicTroll(
     return;
   }
 
-  const response = await requestLlm(
-    buildTrollingRequest(formatSenderName(sender), messages),
-    [],
-    undefined,
-    {
-      database: ctx.database,
-      context: {
-        chatId,
-        messageId: message.message_id,
-        threadId: message.message_thread_id,
-      },
-      agentId: trollAgent.id,
-    },
-    trollAgent.buildInstructions(),
-    trollAgent.MODEL,
+  const inputDump = createLlmInputDump(
+    await getChatBooleanLlmSetting(ctx.database, chatId, "input_dump"),
   );
 
-  const text = response.response?.trim();
+  try {
+    const response = await requestLlm(
+      buildTrollingRequest(formatSenderName(sender), messages),
+      [],
+      undefined,
+      {
+        database: ctx.database,
+        context: {
+          chatId,
+          messageId: message.message_id,
+          threadId: message.message_thread_id,
+        },
+        agentId: trollAgent.id,
+        inputDump,
+      },
+      trollAgent.buildInstructions(),
+      trollAgent.MODEL,
+    );
 
-  if (!text) {
-    return;
+    const text = response.response?.trim();
+
+    if (!text) {
+      return;
+    }
+
+    await ctx.reply(text, {
+      link_preview_options: { is_disabled: true },
+      reply_parameters: {
+        message_id: message.message_id,
+      },
+    });
+  } finally {
+    if (inputDump) {
+      await sendLlmInputDump(ctx, chatId, message.message_id, inputDump);
+    }
   }
-
-  await ctx.reply(text, {
-    link_preview_options: { is_disabled: true },
-    reply_parameters: {
-      message_id: message.message_id,
-    },
-  });
 }
 
 export async function safelyMaybeSendPeriodicTroll(

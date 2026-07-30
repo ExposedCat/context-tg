@@ -16,6 +16,7 @@ import {
 import type { AgentId } from "./agents/types.ts";
 import type { Database } from "./database.ts";
 import { APP_ENV } from "./env.ts";
+import { createLlmInputDumpFetch, type LlmInputDump } from "./llm-debug.ts";
 import { LLM_DEPLOYMENTS } from "./llm-deployments.ts";
 
 export const MEMO_BUCKETS = ["chat", "user", "self"] as const;
@@ -204,10 +205,11 @@ function normalizeMemoText(text: string): string {
   return normalized;
 }
 
-function getMemoPruningClient(): OpenAI {
+function getMemoPruningClient(inputDump?: LlmInputDump): OpenAI {
   return new OpenAI({
     apiKey: APP_ENV.LLM_API_KEY,
     baseURL: APP_ENV.LLM_BASE_URL,
+    ...(inputDump ? { fetch: createLlmInputDumpFetch(inputDump) } : {}),
   });
 }
 
@@ -248,6 +250,7 @@ function parseMemoPruningResponse(responseText: string): number[] {
 async function requestMemoIdsToRemove(
   memos: readonly Memo[],
   candidateIds: ReadonlySet<number>,
+  inputDump?: LlmInputDump,
 ): Promise<number[] | undefined> {
   const deploymentName = getMemoPruningDeploymentName();
 
@@ -256,7 +259,7 @@ async function requestMemoIdsToRemove(
     return undefined;
   }
 
-  const response = await getMemoPruningClient().responses.create({
+  const response = await getMemoPruningClient(inputDump).responses.create({
     model: deploymentName,
     instructions: [
       "You are a strict memory pruning filter for a Telegram chat assistant.",
@@ -299,6 +302,7 @@ async function pruneExpiredMemosForChat(
   database: Database,
   chatId: number,
   cutoff: string,
+  inputDump?: LlmInputDump,
 ): Promise<void> {
   const memos = await database
     .selectFrom("memos")
@@ -319,7 +323,11 @@ async function pruneExpiredMemosForChat(
   let requestedRemoveIds: number[] | undefined;
 
   try {
-    requestedRemoveIds = await requestMemoIdsToRemove(memos, candidateIds);
+    requestedRemoveIds = await requestMemoIdsToRemove(
+      memos,
+      candidateIds,
+      inputDump,
+    );
   } catch (error) {
     logError("Failed to prune expired memos with LLM", { chatId, error });
     return;
@@ -356,6 +364,7 @@ async function pruneExpiredMemosForChat(
 export async function dropExpiredMemos(
   database: Database,
   chatId?: number,
+  inputDump?: LlmInputDump,
 ): Promise<void> {
   const cutoff = getActiveMemoCutoff();
   const dueQuery = database
@@ -370,7 +379,12 @@ export async function dropExpiredMemos(
   ).execute();
 
   for (const dueChat of dueChats) {
-    await pruneExpiredMemosForChat(database, dueChat.chat_id, cutoff);
+    await pruneExpiredMemosForChat(
+      database,
+      dueChat.chat_id,
+      cutoff,
+      inputDump,
+    );
   }
 }
 
@@ -379,8 +393,9 @@ export async function listMemos(
   chatId: number,
   agentId: AgentId,
   userId?: number,
+  inputDump?: LlmInputDump,
 ): Promise<Memo[]> {
-  await dropExpiredMemos(database, chatId);
+  await dropExpiredMemos(database, chatId, inputDump);
 
   const memos = await database
     .selectFrom("memos")
@@ -421,8 +436,9 @@ export async function saveMemo(
   bucket: string,
   userId: number | undefined,
   text: string,
+  inputDump?: LlmInputDump,
 ): Promise<Memo> {
-  await dropExpiredMemos(database, chatId);
+  await dropExpiredMemos(database, chatId, inputDump);
 
   const normalizedBucket = normalizeMemoBucket(bucket);
   const memo = await database
@@ -447,8 +463,9 @@ export async function forgetMemo(
   agentId: AgentId,
   userId: number | undefined,
   id: number,
+  inputDump?: LlmInputDump,
 ): Promise<boolean> {
-  await dropExpiredMemos(database, chatId);
+  await dropExpiredMemos(database, chatId, inputDump);
   const memo = await database
     .selectFrom("memos")
     .select(["bucket", "user_id"])
@@ -583,8 +600,9 @@ export async function buildMemosMetadataSection(
   agentId: AgentId,
   userId?: number,
   userName?: string,
+  inputDump?: LlmInputDump,
 ): Promise<string | undefined> {
-  const memos = await listMemos(database, chatId, agentId, userId);
+  const memos = await listMemos(database, chatId, agentId, userId, inputDump);
 
   return formatMemosMetadataSection(memos, userName);
 }

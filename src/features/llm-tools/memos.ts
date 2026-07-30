@@ -107,6 +107,7 @@ export const executeSaveMemo: FunctionToolRunner = async (
       getString(args?.bucket),
       context.userId,
       getString(args?.memo),
+      options.inputDump,
     );
 
     return JSON.stringify({
@@ -150,6 +151,7 @@ export const executeForgetMemo: FunctionToolRunner = async (
     options.agentId,
     context.userId,
     id,
+    options.inputDump,
   );
 
   return JSON.stringify({

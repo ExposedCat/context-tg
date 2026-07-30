@@ -14,7 +14,8 @@ export type ReasoningEffort =
   | "high"
   | "xhigh";
 export type ReasoningSetting = ReasoningEffort | null;
-export type ChatLlmSettingKey = "reasoning" | "debug";
+export type BooleanLlmSettingKey = "debug" | "input_dump";
+export type ChatLlmSettingKey = "reasoning" | BooleanLlmSettingKey;
 export type LlmSettingsDeployment = LlmDeploymentId | "all";
 export type LlmSettingsTable = {
   key: string;
@@ -62,7 +63,7 @@ export function parseReasoningSetting(
   return isReasoningEffort(value) ? value : undefined;
 }
 
-export function parseDebugModeSetting(value: string): boolean | undefined {
+export function parseBooleanModeSetting(value: string): boolean | undefined {
   switch (value.toLocaleLowerCase()) {
     case "on":
       return true;
@@ -71,6 +72,16 @@ export function parseDebugModeSetting(value: string): boolean | undefined {
     default:
       return undefined;
   }
+}
+
+export function parseDebugModeSetting(value: string): boolean | undefined {
+  return parseBooleanModeSetting(value);
+}
+
+export function isBooleanLlmSettingKey(
+  value: string,
+): value is BooleanLlmSettingKey {
+  return value === "debug" || value === "input_dump";
 }
 
 export function isLlmSettingsDeployment(
@@ -355,12 +366,12 @@ function parseStoredReasoningSetting(
   return isReasoningEffort(value) ? value : undefined;
 }
 
-function formatStoredDebugMode(enabled: boolean): string {
+function formatStoredBooleanMode(enabled: boolean): string {
   return enabled ? "on" : "off";
 }
 
-function parseStoredDebugMode(value: string | null): boolean | undefined {
-  return value === null ? undefined : parseDebugModeSetting(value);
+function parseStoredBooleanMode(value: string | null): boolean | undefined {
+  return value === null ? undefined : parseBooleanModeSetting(value);
 }
 
 export async function getChatReasoningEffort(
@@ -382,20 +393,25 @@ export async function getChatReasoningEffort(
     : setting;
 }
 
+export async function getChatBooleanLlmSetting(
+  database: LlmSettingsDatabase,
+  chatId: number,
+  key: BooleanLlmSettingKey,
+): Promise<boolean> {
+  const stored = await getResolvedChatLlmSetting(database, chatId, "all", key);
+  const setting =
+    stored === undefined ? undefined : parseStoredBooleanMode(stored);
+
+  return setting === undefined
+    ? await getGlobalBooleanLlmSetting(database, key)
+    : setting;
+}
+
 export async function getChatDebugMode(
   database: LlmSettingsDatabase,
   chatId: number,
 ): Promise<boolean> {
-  const stored = await getResolvedChatLlmSetting(
-    database,
-    chatId,
-    "all",
-    "debug",
-  );
-  const setting =
-    stored === undefined ? undefined : parseStoredDebugMode(stored);
-
-  return setting === undefined ? await getGlobalDebugMode(database) : setting;
+  return await getChatBooleanLlmSetting(database, chatId, "debug");
 }
 
 export async function getGlobalReasoningEffort(
@@ -413,14 +429,21 @@ export async function getGlobalReasoningEffort(
   return setting === undefined ? getReasoningEffort() : setting;
 }
 
+export async function getGlobalBooleanLlmSetting(
+  database: LlmSettingsDatabase,
+  key: BooleanLlmSettingKey,
+): Promise<boolean> {
+  const stored = await getDirectGlobalLlmSetting(database, "all", key);
+  const setting =
+    stored === undefined ? undefined : parseStoredBooleanMode(stored);
+
+  return setting ?? false;
+}
+
 export async function getGlobalDebugMode(
   database: LlmSettingsDatabase,
 ): Promise<boolean> {
-  const stored = await getDirectGlobalLlmSetting(database, "all", "debug");
-  const setting =
-    stored === undefined ? undefined : parseStoredDebugMode(stored);
-
-  return setting ?? false;
+  return await getGlobalBooleanLlmSetting(database, "debug");
 }
 
 export async function persistGlobalReasoningEffort(
@@ -437,17 +460,25 @@ export async function persistGlobalReasoningEffort(
   return effort;
 }
 
-export async function persistGlobalDebugMode(
+export async function persistGlobalBooleanLlmSetting(
   database: LlmSettingsDatabase,
+  key: BooleanLlmSettingKey,
   enabled: boolean,
 ): Promise<boolean> {
   await persistGlobalLlmSetting(
     database,
     "all",
-    "debug",
-    formatStoredDebugMode(enabled),
+    key,
+    formatStoredBooleanMode(enabled),
   );
   return enabled;
+}
+
+export async function persistGlobalDebugMode(
+  database: LlmSettingsDatabase,
+  enabled: boolean,
+): Promise<boolean> {
+  return await persistGlobalBooleanLlmSetting(database, "debug", enabled);
 }
 
 export async function persistChatReasoningEffort(
@@ -466,19 +497,28 @@ export async function persistChatReasoningEffort(
   return effort;
 }
 
-export async function persistChatDebugMode(
+export async function persistChatBooleanLlmSetting(
   database: LlmSettingsDatabase,
   chatId: number,
+  key: BooleanLlmSettingKey,
   enabled: boolean,
 ): Promise<boolean> {
   await persistChatLlmSetting(
     database,
     chatId,
     "all",
-    "debug",
-    formatStoredDebugMode(enabled),
+    key,
+    formatStoredBooleanMode(enabled),
   );
   return enabled;
+}
+
+export async function persistChatDebugMode(
+  database: LlmSettingsDatabase,
+  chatId: number,
+  enabled: boolean,
+): Promise<boolean> {
+  return await persistChatBooleanLlmSetting(database, chatId, "debug", enabled);
 }
 
 function loadLlmSetting(key: string, value: string | null) {
