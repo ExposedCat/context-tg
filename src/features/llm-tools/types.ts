@@ -1,6 +1,7 @@
 import type OpenAI from "@openai/openai";
 import type { AgentId } from "../agents/index.ts";
 import type { Database } from "../database.ts";
+import type { LlmInputDump } from "../llm-debug.ts";
 
 export type LlmToolContext = {
   chatId: number;
@@ -43,5 +44,6 @@ export type FunctionToolRunner = (
     database?: Database;
     agentId?: AgentId;
     client?: OpenAI;
+    inputDump?: LlmInputDump;
   },
 ) => FunctionToolResult | string | Promise<FunctionToolResult | string>;

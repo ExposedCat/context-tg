@@ -1,4 +1,5 @@
 import type { Database } from "../database.ts";
+import type { LlmInputDump } from "../llm-debug.ts";
 import type { FunctionToolRunner, LlmToolContext } from "./types.ts";
 import { getJsonError, getString } from "./utils.ts";
 
@@ -42,6 +43,7 @@ export function createRunner(
     context?: LlmToolContext,
     signal?: AbortSignal,
     database?: Database,
+    inputDump?: LlmInputDump,
   ) => ReturnType<FunctionToolRunner>,
 ): FunctionToolRunner {
   return async (args, context, options) => {
@@ -58,6 +60,7 @@ export function createRunner(
       context,
       options?.signal,
       options?.database,
+      options?.inputDump,
     );
   };
 }

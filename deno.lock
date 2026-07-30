@@ -22,6 +22,7 @@
     "jsr:@std/path@^1.1.4": "1.1.4",
     "npm:@biomejs/biome@*": "2.3.8",
     "npm:@biomejs/biome@2.3.8": "2.3.8",
+    "npm:@types/node@*": "24.2.0",
     "npm:debug@^4.4.3": "4.4.3",
     "npm:youtube-dl-exec@*": "3.1.7",
     "npm:youtube-dl-exec@^3.1.7": "3.1.7",
@@ -152,6 +153,12 @@
     },
     "@kikobeats/time-span@1.0.13": {
       "integrity": "sha512-CfBK4/EZ73uN/6b5/wOfvWju1Ev/6H+uXqS2Vqd7/dEQTyOsvv4BdOHDqESp4Efa9YyrPPvN3IHU+C4z9FAo3Q=="
+    },
+    "@types/node@24.2.0": {
+      "integrity": "sha512-3xyG3pMCq3oYCNg7/ZP+E1ooTaGB4cG8JWRsqqOYQdbWNY4zbaV0Ennrd7stjiJEFZCaybcIgpTjJWHRfBSIDw==",
+      "dependencies": [
+        "undici-types"
+      ]
     },
     "binary-version-check@6.1.0": {
       "integrity": "sha512-REKdLKmuViV2WrtWXvNSiPX04KbIjfUV3Cy8batUeOg+FtmowavzJorfFhWq95cVJzINnL/44ixP26TrdJZACA==",
@@ -338,6 +345,9 @@
     },
     "type-fest@4.41.0": {
       "integrity": "sha512-TeTSQ6H5YHvpqVwBRcnLDCBnDOHWYu7IvGbHT6N8AOymcr9PJGjc1GTtiWZTYg0NCgYwvnYWEkVChQAr9bjfwA=="
+    },
+    "undici-types@7.10.0": {
+      "integrity": "sha512-t5Fy/nfn+14LuOc2KNYg75vZqClpAiqscVvMygNnlsHBFpSXdJaYtXMcdNLpl/Qvc3P2cB3s6lOV51nqsFq4ag=="
     },
     "web-worker@1.5.0": {
       "integrity": "sha512-RiMReJrTAiA+mBjGONMnjVDP2u3p9R1vkcGz6gDIrOMT3oGuYwX2WRMYI9ipkphSuE5XKEhydbhNEJh4NY9mlw=="

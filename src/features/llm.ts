@@ -15,6 +15,7 @@ import {
   getLlmChatResponseMessages,
   saveLlmChatResponseMessages,
 } from "./llm-chat-responses.ts";
+import { createLlmInputDumpFetch, type LlmInputDump } from "./llm-debug.ts";
 import {
   getChatReasoningEffort,
   getReasoningEffort,
@@ -114,6 +115,7 @@ export type LlmRequestOptions = {
   agentId?: AgentId;
   onProgress?: (progress: LlmProgress) => void | Promise<void>;
   onWarning?: (details: string) => void | Promise<void>;
+  inputDump?: LlmInputDump;
   signal?: AbortSignal;
 };
 
@@ -288,15 +290,17 @@ async function withMemoMetadata(
     agentId,
     options.context?.userId,
     options.context?.userName,
+    options.inputDump,
   );
 
   return memosSection ? `${instructions}\n\n${memosSection}` : instructions;
 }
 
-function getClient(): OpenAI {
+function getClient(inputDump?: LlmInputDump): OpenAI {
   return new OpenAI({
     apiKey: APP_ENV.LLM_API_KEY,
     baseURL: APP_ENV.LLM_BASE_URL,
+    ...(inputDump ? { fetch: createLlmInputDumpFetch(inputDump) } : {}),
   });
 }
 
@@ -837,6 +841,7 @@ async function runFunctionToolCall(
   database?: Database,
   signal?: AbortSignal,
   agentId: AgentId = normalAgent.id,
+  inputDump?: LlmInputDump,
 ): Promise<FunctionToolCallResult> {
   throwIfAborted(signal);
   const args = parseJsonObject(call.function.arguments);
@@ -857,7 +862,13 @@ async function runFunctionToolCall(
   let result: FunctionToolResult;
   try {
     result = normalizeFunctionToolResult(
-      await runner(args, context, { signal, database, agentId, client }),
+      await runner(args, context, {
+        signal,
+        database,
+        agentId,
+        client,
+        inputDump,
+      }),
     );
     throwIfAborted(signal);
   } catch (error) {
@@ -1316,6 +1327,7 @@ async function resolveFunctionToolCalls(
           options.database,
           options.signal,
           options.agentId ?? normalAgent.id,
+          options.inputDump,
         ),
       ),
     );
@@ -1384,7 +1396,7 @@ async function requestLlmWithInstructions(
   model: AgentModel = normalAgent.MODEL,
 ): Promise<LlmResponse> {
   logDebug("Sending request to LLM", { tools, responseId, model });
-  const client = getClient();
+  const client = getClient(options.inputDump);
   const settings = await resolveRuntimeSettings(model, options);
   const runtimeInstructions = await withMemoMetadata(instructions, options);
   const previousMessages = await loadPreviousChatMessages(
@@ -1468,6 +1480,7 @@ async function runAgent(
   context?: LlmToolContext,
   signal?: AbortSignal,
   database?: Database,
+  inputDump?: LlmInputDump,
 ): Promise<FunctionToolResult> {
   const agent = getCallableAgentById(agentId);
 
@@ -1486,7 +1499,7 @@ async function runAgent(
     ),
     agent.tools,
     undefined,
-    { context, database, signal, agentId: agent.id },
+    { context, database, signal, agentId: agent.id, inputDump },
     agent.buildInstructions(),
     agent.MODEL,
   );

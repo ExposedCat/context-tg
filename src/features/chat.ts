@@ -36,7 +36,9 @@ import {
   requestLlm,
   type ToolName,
 } from "./llm.ts";
-import { getChatDebugMode } from "./llm-models.ts";
+import { createLlmInputDump, type LlmInputDump } from "./llm-debug.ts";
+import { sendLlmInputDump } from "./llm-debug-delivery.ts";
+import { getChatBooleanLlmSetting, getChatDebugMode } from "./llm-models.ts";
 import {
   formatPromptMessageXml,
   formatSystemPromptMessageXml,
@@ -1960,6 +1962,7 @@ async function sendRecoveredErrorResponse(
   agent: AgentDefinition,
   error: unknown,
   signal: AbortSignal,
+  inputDump: LlmInputDump | undefined,
   saveOriginalMessageThread: boolean,
 ): Promise<void> {
   const toolContext = getLlmToolContext(chatId, message);
@@ -1974,6 +1977,7 @@ async function sendRecoveredErrorResponse(
           database: ctx.database,
           context: toolContext,
           agentId: agent.id,
+          inputDump,
           signal,
         },
         agent.buildInstructions(),
@@ -2035,6 +2039,9 @@ async function handleChatRequest(
     options.threadId ??
     message.message_thread_id ??
     message.message_id;
+  const inputDump = createLlmInputDump(
+    await getChatBooleanLlmSetting(ctx.database, chatId, "input_dump"),
+  );
   const textUsage = await consumeUsage(ctx.database, chatId, "text_responses");
 
   if (!textUsage.ok) {
@@ -2110,6 +2117,7 @@ async function handleChatRequest(
             },
             onWarning: (details: string) =>
               sendLlmWarning(ctx, message, details),
+            inputDump,
             signal: taskAbortController.signal,
           };
 
@@ -2324,6 +2332,7 @@ async function handleChatRequest(
           activeAgent,
           error,
           taskAbortController.signal,
+          inputDump,
           !resumable,
         );
         responseSent = true;
@@ -2357,6 +2366,9 @@ async function handleChatRequest(
       } catch (error) {
         logError("Failed to finish task:", { error });
       }
+    }
+    if (inputDump) {
+      await sendLlmInputDump(ctx, chatId, message.message_id, inputDump);
     }
   }
 }
@@ -2482,6 +2494,9 @@ async function handleGuestChatRequest(
   }
 
   const chatId = ctx.chat.id;
+  const inputDump = createLlmInputDump(
+    await getChatBooleanLlmSetting(ctx.database, chatId, "input_dump"),
+  );
   const textUsage = await consumeUsage(ctx.database, chatId, "text_responses");
 
   if (!textUsage.ok) {
@@ -2536,6 +2551,7 @@ async function handleGuestChatRequest(
         database: ctx.database,
         context: toolContext,
         agentId: guestAgent.id,
+        inputDump,
       },
       guestAgent.buildInstructions(),
       guestAgent.MODEL,
@@ -2570,6 +2586,10 @@ async function handleGuestChatRequest(
       message,
       formatGuestModelFailureResponse(error),
     );
+  } finally {
+    if (inputDump) {
+      await sendLlmInputDump(ctx, chatId, message.message_id, inputDump);
+    }
   }
 }
 

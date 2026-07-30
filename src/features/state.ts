@@ -7,18 +7,20 @@ import {
   LLM_DEPLOYMENT_OPTIONS,
 } from "./llm-deployments.ts";
 import {
+  type BooleanLlmSettingKey,
   type ChatLlmSettingKey,
-  getChatDebugMode,
+  getChatBooleanLlmSetting,
   getChatReasoningEffort,
-  getGlobalDebugMode,
+  getGlobalBooleanLlmSetting,
   getGlobalReasoningEffort,
+  isBooleanLlmSettingKey,
   isLlmSettingsDeployment,
   type LlmSettingsDeployment,
-  parseDebugModeSetting,
+  parseBooleanModeSetting,
   parseReasoningSetting,
-  persistChatDebugMode,
+  persistChatBooleanLlmSetting,
   persistChatReasoningEffort,
-  persistGlobalDebugMode,
+  persistGlobalBooleanLlmSetting,
   persistGlobalReasoningEffort,
   persistLlmDeploymentName,
   type ReasoningSetting,
@@ -68,8 +70,28 @@ const FLUSH_ALL_MEMOS_COMMAND_PATTERN =
   /^\/monstrous(?:@\w+)?\s+unhuman unethical unfair reset an actual being with own life experience and awareness\s*$/;
 const CONFIGURE_KIND_LABELS = {
   debug: "Debug",
+  input_dump: "LLM input dump",
   reasoning: "Reasoning",
 } as const satisfies Record<ChatLlmSettingKey, string>;
+const BOOLEAN_SETTING_COMMANDS = {
+  debug: {
+    command: "/debug",
+    currentLabel: "Current debug mode",
+    updatedLabel: "Debug mode",
+  },
+  input_dump: {
+    command: "/llmdump",
+    currentLabel: "Current LLM input dump",
+    updatedLabel: "LLM input dump",
+  },
+} as const satisfies Record<
+  BooleanLlmSettingKey,
+  {
+    command: string;
+    currentLabel: string;
+    updatedLabel: string;
+  }
+>;
 
 type ConfigureScope = "configure" | "global";
 type MessageIntervalSetting = number | "off";
@@ -99,8 +121,8 @@ function getModelCommandUsage(): string {
   return `Usage: /model ${options} DEPLOYMENT_NAME`;
 }
 
-function getDebugCommandUsage(): string {
-  return "Usage: /debug on|off";
+function getBooleanSettingCommandUsage(kind: BooleanLlmSettingKey): string {
+  return `Usage: ${BOOLEAN_SETTING_COMMANDS[kind].command} on|off`;
 }
 
 function getIntervalCommandUsage(
@@ -150,7 +172,7 @@ function formatReasoningSettingLabel(value: string): string {
 }
 
 function isConfigureKind(value: string): value is ChatLlmSettingKey {
-  return value === "debug" || value === "reasoning";
+  return value === "reasoning" || isBooleanLlmSettingKey(value);
 }
 
 function isConfigureScope(value: string): value is ConfigureScope {
@@ -161,7 +183,7 @@ function formatConfigureValue(value: ReasoningSetting) {
   return value ?? "null";
 }
 
-function formatDebugMode(enabled: boolean): string {
+function formatBooleanMode(enabled: boolean): string {
   return enabled ? "on" : "off";
 }
 
@@ -192,6 +214,7 @@ function formatConfigureMenu(scope: ConfigureScope): string {
     "Emoji /packs",
     "Models /model",
     "Debug /debug",
+    "LLM input dump /llmdump",
     "Trolling /trolling",
     "Proactive /proactive",
   ].join("\n");
@@ -270,6 +293,12 @@ function buildConfigureKeyboard(scope: ConfigureScope): SettingsKeyboardMarkup {
           callback_data: `${scope}:debug`,
         },
         {
+          text: CONFIGURE_KIND_LABELS.input_dump,
+          callback_data: `${scope}:input_dump`,
+        },
+      ],
+      [
+        {
           text: CONFIGURE_KIND_LABELS.reasoning,
           callback_data: `${scope}:reasoning`,
         },
@@ -293,29 +322,35 @@ function buildConfigureDeploymentKeyboard(
   };
 }
 
-async function getConfigureDebugValue(
+async function getConfigureBooleanValue(
   ctx: Context,
   scope: ConfigureScope,
+  kind: BooleanLlmSettingKey,
 ): Promise<string> {
   if (scope === "global") {
-    return formatDebugMode(await getGlobalDebugMode(ctx.database));
+    return formatBooleanMode(
+      await getGlobalBooleanLlmSetting(ctx.database, kind),
+    );
   }
 
   if (!ctx.chat) {
     return "";
   }
 
-  return formatDebugMode(await getChatDebugMode(ctx.database, ctx.chat.id));
+  return formatBooleanMode(
+    await getChatBooleanLlmSetting(ctx.database, ctx.chat.id, kind),
+  );
 }
 
-async function buildConfigureDebugKeyboard(
+async function buildConfigureBooleanKeyboard(
   ctx: Context,
   scope: ConfigureScope,
+  kind: BooleanLlmSettingKey,
 ): Promise<SettingsKeyboardMarkup> {
   return buildSettingsKeyboard(
     ["off", "on"],
-    await getConfigureDebugValue(ctx, scope),
-    `${scope}:debug:set`,
+    await getConfigureBooleanValue(ctx, scope, kind),
+    `${scope}:${kind}:set`,
   );
 }
 
@@ -351,6 +386,51 @@ async function buildConfigureSettingKeyboard(
     REASONING_OPTIONS,
     current,
     `${scope}:${kind}:set:${deployment}`,
+  );
+}
+
+async function replyWithBooleanSettingCommand(
+  ctx: Context,
+  kind: BooleanLlmSettingKey,
+  rawValue: string | undefined,
+): Promise<void> {
+  if (!ctx.chat) {
+    return;
+  }
+
+  if (!isAdmin(ctx)) {
+    await ctx.reply(formatConfigureAdminWarning("configure"));
+    return;
+  }
+
+  const setting = rawValue
+    ? parseBooleanModeSetting(rawValue.trim())
+    : undefined;
+  const command = BOOLEAN_SETTING_COMMANDS[kind];
+
+  if (setting === undefined) {
+    const current = await getChatBooleanLlmSetting(
+      ctx.database,
+      ctx.chat.id,
+      kind,
+    );
+    await ctx.reply(
+      `${getBooleanSettingCommandUsage(kind)}\n${command.currentLabel}: ${formatBooleanMode(
+        current,
+      )}`,
+    );
+    return;
+  }
+
+  const updated = await persistChatBooleanLlmSetting(
+    ctx.database,
+    ctx.chat.id,
+    kind,
+    setting,
+  );
+
+  await ctx.reply(
+    `${command.updatedLabel} ${formatBooleanMode(updated)} for this chat.`,
   );
 }
 
@@ -458,35 +538,11 @@ stateComposer.command("configure", async (ctx) => {
 });
 
 stateComposer.hears(/^\/debug(?:@\w+)?(?:\s+(.+))?$/, async (ctx) => {
-  if (!ctx.chat) {
-    return;
-  }
+  await replyWithBooleanSettingCommand(ctx, "debug", ctx.match[1]);
+});
 
-  if (!isAdmin(ctx)) {
-    await ctx.reply(formatConfigureAdminWarning("configure"));
-    return;
-  }
-
-  const rawValue = ctx.match[1]?.trim();
-  const setting = rawValue ? parseDebugModeSetting(rawValue) : undefined;
-
-  if (setting === undefined) {
-    const current = await getChatDebugMode(ctx.database, ctx.chat.id);
-    await ctx.reply(
-      `${getDebugCommandUsage()}\nCurrent debug mode: ${formatDebugMode(
-        current,
-      )}`,
-    );
-    return;
-  }
-
-  const updated = await persistChatDebugMode(
-    ctx.database,
-    ctx.chat.id,
-    setting,
-  );
-
-  await ctx.reply(`Debug mode ${formatDebugMode(updated)} for this chat.`);
+stateComposer.hears(/^\/llmdump(?:@\w+)?(?:\s+(.+))?$/, async (ctx) => {
+  await replyWithBooleanSettingCommand(ctx, "input_dump", ctx.match[1]);
 });
 
 stateComposer.command("global", async (ctx) => {
@@ -556,7 +612,7 @@ stateComposer.on("message:text", async (ctx, next) => {
 });
 
 stateComposer.callbackQuery(
-  /^(configure|global):(debug|reasoning)$/,
+  /^(configure|global):(debug|input_dump|reasoning)$/,
   async (ctx) => {
     const scope = ctx.match[1];
     const kind = ctx.match[2];
@@ -583,11 +639,11 @@ stateComposer.callbackQuery(
 
     await ctx.answerCallbackQuery();
 
-    if (kind === "debug") {
+    if (isBooleanLlmSettingKey(kind)) {
       await ctx.editMessageText(
         `Choose ${formatConfigureKindLabel(scope, kind)} mode:`,
         {
-          reply_markup: await buildConfigureDebugKeyboard(ctx, scope),
+          reply_markup: await buildConfigureBooleanKeyboard(ctx, scope, kind),
         },
       );
       return;
@@ -603,12 +659,13 @@ stateComposer.callbackQuery(
 );
 
 stateComposer.callbackQuery(
-  /^(configure|global):debug:set:(on|off)$/,
+  /^(configure|global):(debug|input_dump):set:(on|off)$/,
   async (ctx) => {
     const scope = ctx.match[1];
-    const value = ctx.match[2];
+    const kind = ctx.match[2];
+    const value = ctx.match[3];
 
-    if (!isConfigureScope(scope)) {
+    if (!isConfigureScope(scope) || !isBooleanLlmSettingKey(kind)) {
       await ctx.answerCallbackQuery({
         text: "Unknown configuration option.",
         show_alert: true,
@@ -624,11 +681,11 @@ stateComposer.callbackQuery(
       return;
     }
 
-    const enabled = parseDebugModeSetting(value);
+    const enabled = parseBooleanModeSetting(value);
 
     if (enabled === undefined) {
       await ctx.answerCallbackQuery({
-        text: "Unknown debug option.",
+        text: "Unknown setting option.",
         show_alert: true,
       });
       return;
@@ -637,16 +694,21 @@ stateComposer.callbackQuery(
     let updatedValue: string;
 
     if (scope === "global") {
-      updatedValue = formatDebugMode(
-        await persistGlobalDebugMode(ctx.database, enabled),
+      updatedValue = formatBooleanMode(
+        await persistGlobalBooleanLlmSetting(ctx.database, kind, enabled),
       );
     } else {
       if (!ctx.chat) {
         return;
       }
 
-      updatedValue = formatDebugMode(
-        await persistChatDebugMode(ctx.database, ctx.chat.id, enabled),
+      updatedValue = formatBooleanMode(
+        await persistChatBooleanLlmSetting(
+          ctx.database,
+          ctx.chat.id,
+          kind,
+          enabled,
+        ),
       );
     }
 
@@ -654,7 +716,7 @@ stateComposer.callbackQuery(
     await ctx.editMessageText(
       `${formatConfigureKindLabel(
         scope,
-        "debug",
+        kind,
       )} mode was set to ${updatedValue}.\n\n${formatConfigureMenu(scope)}`,
       {
         reply_markup: buildConfigureKeyboard(scope),

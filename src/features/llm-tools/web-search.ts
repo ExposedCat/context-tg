@@ -22,7 +22,8 @@ export const toolDefinition = {
     properties: {
       query: {
         type: "string",
-        description: "The web search query. Prefer searching in English. Don't combine multiple queries in one, do separate search if needed.",
+        description:
+          "The web search query. Prefer searching in English. Don't combine multiple queries in one, do separate search if needed.",
       },
     },
     required: ["query"],
