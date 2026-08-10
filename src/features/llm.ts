@@ -11,8 +11,8 @@ import {
 import type { Database } from "./database.ts";
 import { APP_ENV } from "./env.ts";
 import {
-  getLlmChatResponseMessages,
-  saveLlmChatResponseMessages,
+  getLlmResponseInputItems,
+  saveLlmResponseInputItems,
 } from "./llm-chat-responses.ts";
 import {
   getChatReasoningEffort,
@@ -138,8 +138,8 @@ export type LlmDebugToolCall = {
 };
 
 export type LlmDebugUsage = {
-  prompt_tokens?: number;
-  completion_tokens?: number;
+  input_tokens?: number;
+  output_tokens?: number;
   total_tokens?: number;
   cached_tokens?: number;
   reasoning_tokens?: number;
@@ -152,7 +152,8 @@ export type LlmDebugModelResponse = {
   response_model?: string;
   reasoning_effort: ReasoningSetting;
   reasoning_sent: boolean;
-  finish_reason?: string | null;
+  status?: OpenAI.Responses.ResponseStatus;
+  incomplete_reason?: string;
   usage?: LlmDebugUsage;
 };
 
@@ -181,36 +182,18 @@ export type LlmResponse = {
 type FunctionToolDefinition =
   (typeof TOOL_DEFINITIONS)[keyof typeof TOOL_DEFINITIONS];
 
-type ChatCompletionAssistantMessageParam =
-  OpenAI.Chat.ChatCompletionAssistantMessageParam;
-type ChatCompletionContentPartImage =
-  OpenAI.Chat.ChatCompletionContentPartImage;
-type ChatCompletionMessageParam = OpenAI.Chat.ChatCompletionMessageParam;
-type ChatCompletionMessageToolCall = OpenAI.Chat.ChatCompletionMessageToolCall;
-type ChatCompletionTool = OpenAI.Chat.ChatCompletionTool;
-type ChatCompletionToolMessageParam =
-  OpenAI.Chat.ChatCompletionToolMessageParam;
-type ChatUrlCitationAnnotation = {
-  url_citation: {
-    start_index: number;
-    end_index: number;
-    url: string;
-  };
+type ApiResponse = OpenAI.Responses.Response;
+type FunctionTool = OpenAI.Responses.FunctionTool;
+type ResponseInputImage = OpenAI.Responses.ResponseInputImage;
+type ResponseInputItem = OpenAI.Responses.ResponseInputItem;
+type FunctionToolCall = OpenAI.Responses.ResponseFunctionToolCall & {
+  name: FunctionToolName;
 };
-
-type ApiResponse = OpenAI.Chat.ChatCompletion;
-
-type FunctionToolCall = ChatCompletionMessageToolCall & {
-  type: "function";
-  function: {
-    name: FunctionToolName;
-    arguments: string;
-  };
-};
-
-type FunctionCallOutput = ChatCompletionToolMessageParam;
-
-type LlmApiInput = ChatCompletionMessageParam[];
+type FunctionCallOutput = Extract<
+  ResponseInputItem,
+  { type: "function_call_output" }
+>;
+type LlmApiInput = OpenAI.Responses.ResponseInput;
 
 type FunctionToolCallResult = {
   toolOutput: FunctionCallOutput;
@@ -232,13 +215,13 @@ const DUPLICATE_STICKER_RESPONSE = JSON.stringify({
 });
 const RETRIABLE_EMPTY_RESPONSE_DETAILS = new Set([
   "empty response",
-  "missing choice",
+  "missing output",
 ]);
 const MARKDOWN_TOOL_OUTPUTS = new Set<string>(["read_web_page"]);
 
 type LlmRequestState = {
   lastResponseId?: string;
-  messages: ChatCompletionMessageParam[];
+  inputItems: ResponseInputItem[];
   receivedResponse: boolean;
   sentImmediateContentFilterWarning: boolean;
   hasStickerSlot: boolean;
@@ -316,27 +299,25 @@ async function resolveRuntimeSettings(
   };
 }
 
-function getToolDefinitions(tools: ToolName[]): ChatCompletionTool[] {
-  const definitions: ChatCompletionTool[] = [];
+function getToolDefinitions(tools: ToolName[]): FunctionTool[] {
+  const definitions: FunctionTool[] = [];
 
   for (const tool of tools) {
-    definitions.push(createChatFunctionToolDefinition(TOOL_DEFINITIONS[tool]));
+    definitions.push(createFunctionToolDefinition(TOOL_DEFINITIONS[tool]));
   }
 
   return definitions;
 }
 
-function createChatFunctionToolDefinition(
+function createFunctionToolDefinition(
   definition: FunctionToolDefinition,
-): ChatCompletionTool {
+): FunctionTool {
   return {
     type: "function",
-    function: {
-      name: definition.name,
-      description: definition.description,
-      parameters: definition.parameters,
-      strict: definition.strict,
-    },
+    name: definition.name,
+    description: definition.description,
+    parameters: definition.parameters,
+    strict: definition.strict,
   };
 }
 
@@ -345,47 +326,56 @@ function isFunctionToolName(tool: string): tool is FunctionToolName {
 }
 
 function isFunctionToolCall(
-  call: ChatCompletionMessageToolCall,
+  call: OpenAI.Responses.ResponseFunctionToolCall,
 ): call is FunctionToolCall {
   return (
-    call.type === "function" &&
-    typeof call.id === "string" &&
-    typeof call.function.name === "string" &&
-    isFunctionToolName(call.function.name) &&
-    typeof call.function.arguments === "string"
+    call.type === "function_call" &&
+    typeof call.call_id === "string" &&
+    typeof call.name === "string" &&
+    isFunctionToolName(call.name) &&
+    typeof call.arguments === "string"
   );
 }
 
-function getResponseChoice(response: ApiResponse) {
-  return response.choices[0];
-}
-
-function getResponseMessage(response: ApiResponse) {
-  return getResponseChoice(response)?.message;
-}
-
 function getResponseText(response: ApiResponse): string | undefined {
-  const content = getResponseMessage(response)?.content;
-  return typeof content === "string" && content ? content : undefined;
+  return response.output_text || undefined;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function getToolCallName(call: ChatCompletionMessageToolCall): string {
-  return call.type === "function" ? call.function.name : call.custom.name;
-}
-
 function getCitations(response: ApiResponse): LlmCitation[] {
-  return (
-    (getResponseMessage(response)?.annotations ??
-      []) as ChatUrlCitationAnnotation[]
-  ).map((annotation) => ({
-    start_index: annotation.url_citation.start_index,
-    end_index: annotation.url_citation.end_index,
-    link: annotation.url_citation.url,
-  }));
+  const citations: LlmCitation[] = [];
+  let textOffset = 0;
+
+  for (const item of response.output) {
+    if (item.type !== "message") {
+      continue;
+    }
+
+    for (const content of item.content) {
+      if (content.type !== "output_text") {
+        continue;
+      }
+
+      for (const annotation of content.annotations) {
+        if (annotation.type !== "url_citation") {
+          continue;
+        }
+
+        citations.push({
+          start_index: textOffset + annotation.start_index,
+          end_index: textOffset + annotation.end_index,
+          link: annotation.url,
+        });
+      }
+
+      textOffset += content.text.length;
+    }
+  }
+
+  return citations;
 }
 
 function getWebSearchSourceLinks(response: ApiResponse): string[] {
@@ -400,7 +390,7 @@ function getCalledTools(response: ApiResponse): ToolName[] {
   }
 
   for (const call of getFunctionToolCalls(response)) {
-    calledTools.add(call.function.name);
+    calledTools.add(call.name);
   }
 
   return [...calledTools];
@@ -409,9 +399,9 @@ function getCalledTools(response: ApiResponse): ToolName[] {
 function getUnsupportedToolCallNames(response: ApiResponse): string[] {
   const names: string[] = [];
 
-  for (const call of getResponseMessage(response)?.tool_calls ?? []) {
-    if (!isFunctionToolCall(call)) {
-      names.push(getToolCallName(call));
+  for (const item of response.output) {
+    if (item.type === "function_call" && !isFunctionToolName(item.name)) {
+      names.push(item.name);
     }
   }
 
@@ -439,21 +429,30 @@ function formatInputTextContent(content: string, fallback = ""): string {
 
 function createInputMessage(
   request: LlmRequestMessageInput,
-): ChatCompletionMessageParam {
+): ResponseInputItem {
   if (typeof request === "string") {
-    return { role: "user", content: formatInputTextContent(request) };
+    return {
+      type: "message",
+      role: "user",
+      content: formatInputTextContent(request),
+    };
   }
 
   const images = request.images ?? [];
   if (images.length === 0) {
-    return { role: "user", content: formatInputTextContent(request.text) };
+    return {
+      type: "message",
+      role: "user",
+      content: formatInputTextContent(request.text),
+    };
   }
 
   return {
+    type: "message",
     role: "user",
     content: [
       {
-        type: "text",
+        type: "input_text",
         text: formatInputTextContent(
           request.text,
           "Please respond to the attached image.",
@@ -469,29 +468,29 @@ function createInputMessages(request: LlmRequestInput): LlmApiInput {
 }
 
 function normalizeUserMessageForRequest(
-  message: ChatCompletionMessageParam,
-): ChatCompletionMessageParam {
-  if (message.role !== "user") {
-    return message;
+  item: ResponseInputItem,
+): ResponseInputItem {
+  if (item.type !== "message" || item.role !== "user") {
+    return item;
   }
 
-  const content = message.content;
+  const content = item.content;
 
   if (typeof content === "string") {
     return {
-      ...message,
+      ...item,
       content: formatInputTextContent(content),
     };
   }
 
   if (!Array.isArray(content)) {
-    return message;
+    return item;
   }
 
   return {
-    ...message,
+    ...item,
     content: content.map((part) =>
-      part.type === "text"
+      part.type === "input_text"
         ? { ...part, text: formatInputTextContent(part.text) }
         : part,
     ),
@@ -499,20 +498,19 @@ function normalizeUserMessageForRequest(
 }
 
 function getFunctionToolCalls(response: ApiResponse): FunctionToolCall[] {
-  return (getResponseMessage(response)?.tool_calls ?? []).filter(
-    isFunctionToolCall,
-  );
+  return response.output
+    .filter(
+      (item): item is OpenAI.Responses.ResponseFunctionToolCall =>
+        item.type === "function_call",
+    )
+    .filter(isFunctionToolCall);
 }
 
-function createImageContentPart(
-  image: LlmImageInput,
-): ChatCompletionContentPartImage {
+function createImageContentPart(image: LlmImageInput): ResponseInputImage {
   return {
-    type: "image_url",
-    image_url: {
-      url: image.image_url,
-      detail: image.detail === "original" ? "high" : (image.detail ?? "auto"),
-    },
+    type: "input_image",
+    image_url: image.image_url,
+    detail: image.detail ?? "auto",
   };
 }
 
@@ -531,8 +529,8 @@ function parseJsonObject(data: string): Record<string, unknown> | null {
 
 function createDebugToolCall(call: FunctionToolCall): LlmDebugToolCall {
   return {
-    name: call.function.name,
-    input: parseJsonObject(call.function.arguments) ?? call.function.arguments,
+    name: call.name,
+    input: parseJsonObject(call.arguments) ?? call.arguments,
   };
 }
 
@@ -541,24 +539,28 @@ function getNumberValue(value: unknown): number | undefined {
 }
 
 function getResponseUsage(response: ApiResponse): LlmDebugUsage | undefined {
-  const usage = (response as unknown as { usage?: unknown }).usage;
+  const usage = response.usage;
 
   if (!isRecord(usage)) {
     return undefined;
   }
 
-  const promptDetails = isRecord(usage.prompt_tokens_details)
-    ? usage.prompt_tokens_details
+  const inputDetails: Record<string, unknown> = isRecord(
+    usage.input_tokens_details,
+  )
+    ? usage.input_tokens_details
     : {};
-  const completionDetails = isRecord(usage.completion_tokens_details)
-    ? usage.completion_tokens_details
+  const outputDetails: Record<string, unknown> = isRecord(
+    usage.output_tokens_details,
+  )
+    ? usage.output_tokens_details
     : {};
   const debugUsage: LlmDebugUsage = {
-    prompt_tokens: getNumberValue(usage.prompt_tokens),
-    completion_tokens: getNumberValue(usage.completion_tokens),
+    input_tokens: getNumberValue(usage.input_tokens),
+    output_tokens: getNumberValue(usage.output_tokens),
     total_tokens: getNumberValue(usage.total_tokens),
-    cached_tokens: getNumberValue(promptDetails.cached_tokens),
-    reasoning_tokens: getNumberValue(completionDetails.reasoning_tokens),
+    cached_tokens: getNumberValue(inputDetails.cached_tokens),
+    reasoning_tokens: getNumberValue(outputDetails.reasoning_tokens),
   };
 
   return Object.values(debugUsage).some((value) => value !== undefined)
@@ -578,7 +580,8 @@ function createDebugModelResponse(
     response_model: response.model || undefined,
     reasoning_effort: settings.reasoning,
     reasoning_sent: model.withReasoning && settings.reasoning !== null,
-    finish_reason: getResponseChoice(response)?.finish_reason,
+    status: response.status,
+    incomplete_reason: response.incomplete_details?.reason,
     usage: getResponseUsage(response),
   };
 }
@@ -599,19 +602,17 @@ function recordResponseDebug(
 
 function formatToolCallLog(call: FunctionToolCall): Record<string, unknown> {
   return {
-    callId: call.id,
-    name: call.function.name,
-    arguments:
-      parseJsonObject(call.function.arguments) ?? call.function.arguments,
+    callId: call.call_id,
+    name: call.name,
+    arguments: parseJsonObject(call.arguments) ?? call.arguments,
   };
 }
 
 function formatResponseSummary(response: ApiResponse): Record<string, unknown> {
-  const choice = getResponseChoice(response);
-
   return {
     id: response.id,
-    finishReason: choice?.finish_reason,
+    status: response.status,
+    incompleteReason: response.incomplete_details?.reason,
     outputTextLength: getResponseText(response)?.length ?? 0,
     functionCalls: getFunctionToolCalls(response).map(formatToolCallLog),
     tools: getCalledTools(response),
@@ -644,6 +645,7 @@ function isRateLimitError(error: unknown): boolean {
   const apiError = getErrorObject(errorObject?.error);
   const values = [
     error instanceof Error ? error.message : undefined,
+    error instanceof LlmRequestError ? error.details : undefined,
     errorObject?.code,
     errorObject?.type,
     apiError?.code,
@@ -707,17 +709,31 @@ function isContentFilterError(error: unknown): boolean {
 }
 
 function getResponseError(response: ApiResponse): LlmRequestError | undefined {
-  const choice = getResponseChoice(response);
-
-  if (!choice) {
-    return new LlmRequestError("LLM response was empty", "missing choice");
-  }
-
-  if (choice.finish_reason === "content_filter") {
+  if (response.incomplete_details?.reason === "content_filter") {
     return new LlmRequestError(
       "LLM response was blocked by content filtering",
       "content_filter",
       "content_filter",
+    );
+  }
+
+  if (response.error) {
+    return new LlmRequestError(
+      "LLM response failed",
+      `${response.error.code}: ${response.error.message}`,
+      isContentFilterError(response.error) ? "content_filter" : "error",
+    );
+  }
+
+  if (
+    response.status === "failed" ||
+    response.status === "cancelled" ||
+    response.status === "queued" ||
+    response.status === "in_progress"
+  ) {
+    return new LlmRequestError(
+      "LLM response did not complete",
+      `response status: ${response.status}`,
     );
   }
 
@@ -734,7 +750,10 @@ function getResponseError(response: ApiResponse): LlmRequestError | undefined {
     !getResponseText(response) &&
     getFunctionToolCalls(response).length === 0
   ) {
-    return new LlmRequestError("LLM response was empty", "empty response");
+    return new LlmRequestError(
+      "LLM response was empty",
+      response.output.length === 0 ? "missing output" : "empty response",
+    );
   }
 
   return undefined;
@@ -752,15 +771,15 @@ function createToolOutput(
   output: string,
 ): FunctionCallOutput {
   logDebug("Tool call response", {
-    callId: call.id,
-    name: call.function.name,
+    callId: call.call_id,
+    name: call.name,
     output,
   });
 
   return {
-    role: "tool",
-    tool_call_id: call.id,
-    content: formatToolResponseContent(call.function.name, output),
+    type: "function_call_output",
+    call_id: call.call_id,
+    output: formatToolResponseContent(call.name, output),
   };
 }
 
@@ -827,10 +846,10 @@ async function runFunctionToolCall(
   agentId: AgentId = normalAgent.id,
 ): Promise<FunctionToolCallResult> {
   throwIfAborted(signal);
-  const args = parseJsonObject(call.function.arguments);
+  const args = parseJsonObject(call.arguments);
   logDebug("Running tool call", formatToolCallLog(call));
-  const runner = FUNCTION_TOOL_RUNNERS[call.function.name];
-  const reservedStickerSlot = call.function.name === "send_sticker";
+  const runner = FUNCTION_TOOL_RUNNERS[call.name];
+  const reservedStickerSlot = call.name === "send_sticker";
 
   if (reservedStickerSlot) {
     if (state.hasStickerSlot) {
@@ -851,7 +870,7 @@ async function runFunctionToolCall(
   } catch (error) {
     throwIfAborted(signal);
     const details = getErrorDetail(error);
-    const message = `Tool ${call.function.name} failed: ${details}`;
+    const message = `Tool ${call.name} failed: ${details}`;
     state.errors.push(message);
     if (reservedStickerSlot) {
       state.hasStickerSlot = state.stickers.length > 0;
@@ -866,7 +885,7 @@ async function runFunctionToolCall(
         call,
         JSON.stringify({
           error: "Tool call failed",
-          tool: call.function.name,
+          tool: call.name,
           details,
         }),
       ),
@@ -900,29 +919,26 @@ async function runFunctionToolCall(
   };
 }
 
-const chatResponseMessageCache = new Map<
-  string,
-  ChatCompletionMessageParam[]
->();
+const responseInputCache = new Map<string, ResponseInputItem[]>();
 
-function cloneChatMessages(
-  messages: ChatCompletionMessageParam[],
-): ChatCompletionMessageParam[] {
-  return JSON.parse(JSON.stringify(messages)) as ChatCompletionMessageParam[];
+function cloneResponseInputItems(
+  inputItems: ResponseInputItem[],
+): ResponseInputItem[] {
+  return JSON.parse(JSON.stringify(inputItems)) as ResponseInputItem[];
 }
 
 function getLocalResponseId(response: ApiResponse): string {
-  return response.id || `chatcmpl-local-${crypto.randomUUID()}`;
+  return response.id || `resp-local-${crypto.randomUUID()}`;
 }
 
 function createInterruptedToolOutput(
   toolCallId: string,
   toolName = "unknown",
-): ChatCompletionToolMessageParam {
+): FunctionCallOutput {
   return {
-    role: "tool",
-    tool_call_id: toolCallId,
-    content: formatToolResponseContent(
+    type: "function_call_output",
+    call_id: toolCallId,
+    output: formatToolResponseContent(
       toolName,
       JSON.stringify({
         error: "Tool execution interrupted",
@@ -933,14 +949,12 @@ function createInterruptedToolOutput(
   };
 }
 
-function createSkippedToolOutput(
-  call: FunctionToolCall,
-): ChatCompletionToolMessageParam {
+function createSkippedToolOutput(call: FunctionToolCall): FunctionCallOutput {
   return {
-    role: "tool",
-    tool_call_id: call.id,
-    content: formatToolResponseContent(
-      call.function.name,
+    type: "function_call_output",
+    call_id: call.call_id,
+    output: formatToolResponseContent(
+      call.name,
       JSON.stringify({
         error: "Tool execution skipped",
         details:
@@ -951,112 +965,106 @@ function createSkippedToolOutput(
 }
 
 function closePendingToolCalls(
-  messages: ChatCompletionMessageParam[],
-): ChatCompletionMessageParam[] {
+  inputItems: ResponseInputItem[],
+): ResponseInputItem[] {
   const pendingToolCalls = new Map<string, string>();
 
-  for (const message of messages) {
-    if (message.role === "assistant") {
-      for (const call of message.tool_calls ?? []) {
-        pendingToolCalls.set(call.id, getToolCallName(call));
-      }
+  for (const item of inputItems) {
+    if (item.type === "function_call") {
+      pendingToolCalls.set(item.call_id, item.name);
       continue;
     }
 
-    if (message.role === "tool") {
-      pendingToolCalls.delete(message.tool_call_id);
+    if (item.type === "function_call_output") {
+      pendingToolCalls.delete(item.call_id);
     }
   }
 
   if (pendingToolCalls.size === 0) {
-    return messages;
+    return inputItems;
   }
 
   return [
-    ...messages,
+    ...inputItems,
     ...[...pendingToolCalls].map(([toolCallId, toolName]) =>
       createInterruptedToolOutput(toolCallId, toolName),
     ),
   ];
 }
 
-async function loadPreviousChatMessages(
+async function loadPreviousResponseInput(
   responseId: string | undefined,
   options: LlmRequestOptions,
-): Promise<ChatCompletionMessageParam[]> {
+): Promise<ResponseInputItem[]> {
   if (!responseId) {
     return [];
   }
 
-  const cachedMessages = chatResponseMessageCache.get(responseId);
-  if (cachedMessages) {
-    return closePendingToolCalls(cloneChatMessages(cachedMessages));
+  const cachedInput = responseInputCache.get(responseId);
+  if (cachedInput) {
+    return closePendingToolCalls(cloneResponseInputItems(cachedInput));
   }
 
   if (!options.database) {
-    logDebug("No database available for chat response history", { responseId });
+    logDebug("No database available for response history", { responseId });
     return [];
   }
 
-  const messages = await getLlmChatResponseMessages(
+  const inputItems = await getLlmResponseInputItems(
     options.database,
     responseId,
   );
 
-  if (!messages) {
-    logDebug("No persisted chat response history found", { responseId });
+  if (!inputItems) {
+    logDebug("No persisted response history found", { responseId });
     return [];
   }
 
-  chatResponseMessageCache.set(responseId, cloneChatMessages(messages));
-  return closePendingToolCalls(messages);
+  responseInputCache.set(responseId, cloneResponseInputItems(inputItems));
+  return closePendingToolCalls(inputItems);
 }
 
-async function saveChatResponseMessages(
+async function saveResponseInput(
   responseId: string,
   previousResponseId: string | undefined,
-  messages: ChatCompletionMessageParam[],
+  inputItems: ResponseInputItem[],
   options: LlmRequestOptions,
 ): Promise<void> {
-  const savedMessages = cloneChatMessages(messages);
-  chatResponseMessageCache.set(responseId, savedMessages);
+  const savedInput = cloneResponseInputItems(inputItems);
+  responseInputCache.set(responseId, savedInput);
 
   if (!options.database) {
     return;
   }
 
   try {
-    await saveLlmChatResponseMessages(options.database, {
+    await saveLlmResponseInputItems(options.database, {
       responseId,
       previousResponseId,
-      messages: savedMessages,
+      inputItems: savedInput,
     });
   } catch (error) {
-    logError("Failed to save chat response history", { responseId, error });
+    logError("Failed to save response history", { responseId, error });
   }
 }
 
-function createAssistantHistoryMessage(
-  response: ApiResponse,
-): ChatCompletionAssistantMessageParam {
-  const message = getResponseMessage(response);
-  const historyMessage: ChatCompletionAssistantMessageParam = {
-    role: "assistant",
-    content: message?.content ?? null,
-  };
+function getReplayableOutputItems(response: ApiResponse): ResponseInputItem[] {
+  const inputItems: ResponseInputItem[] = [];
 
-  if (message?.tool_calls?.length) {
-    historyMessage.tool_calls = message.tool_calls;
+  for (const item of response.output) {
+    if (
+      item.type === "message" ||
+      item.type === "reasoning" ||
+      item.type === "function_call"
+    ) {
+      inputItems.push(item);
+    }
   }
 
-  if (message?.refusal) {
-    historyMessage.refusal = message.refusal;
-  }
-
-  return historyMessage;
+  return inputItems;
 }
 
-async function recordChatResponse(
+async function recordResponse(
   response: ApiResponse,
   input: LlmApiInput,
   state: LlmRequestState,
@@ -1064,20 +1072,15 @@ async function recordChatResponse(
   options: LlmRequestOptions,
 ): Promise<string> {
   const responseId = getLocalResponseId(response);
-  const messages = [
-    ...state.messages,
+  const inputItems = [
+    ...state.inputItems,
     ...input,
-    createAssistantHistoryMessage(response),
+    ...getReplayableOutputItems(response),
   ];
 
-  state.messages = messages;
+  state.inputItems = inputItems;
   state.lastResponseId = responseId;
-  await saveChatResponseMessages(
-    responseId,
-    previousResponseId,
-    messages,
-    options,
-  );
+  await saveResponseInput(responseId, previousResponseId, inputItems, options);
 
   return responseId;
 }
@@ -1118,7 +1121,7 @@ async function createLlmResponse(
   client: OpenAI,
   input: LlmApiInput,
   tools: ToolName[],
-  messages: ChatCompletionMessageParam[],
+  previousInput: ResponseInputItem[],
   model: AgentModel = normalAgent.MODEL,
   instructions = getSystemInstructions(),
   settings: LlmRuntimeSettings = {
@@ -1129,22 +1132,23 @@ async function createLlmResponse(
   throwIfAborted(signal);
   const toolDefinitions = getToolDefinitions(tools);
 
-  return await client.chat.completions.create(
+  return await client.responses.create(
     {
       model: getConfiguredDeploymentName(model),
-      messages: [
-        {
-          role: "system",
-          content: instructions,
-        },
-        ...messages.map(normalizeUserMessageForRequest),
+      instructions,
+      input: [
+        ...previousInput.map(normalizeUserMessageForRequest),
         ...input.map(normalizeUserMessageForRequest),
       ],
       // temperature: APP_ENV.LLM_TEMPERATURE,
       tools: toolDefinitions.length > 0 ? toolDefinitions : undefined,
       tool_choice: toolDefinitions.length > 0 ? "auto" : undefined,
+      store: false,
+      ...(model.withReasoning
+        ? { include: ["reasoning.encrypted_content"] as const }
+        : {}),
       ...(model.withReasoning && settings.reasoning !== null
-        ? { reasoning_effort: settings.reasoning }
+        ? { reasoning: { effort: settings.reasoning } }
         : {}),
     },
     { signal },
@@ -1178,7 +1182,7 @@ async function createLlmResponseWithRetries(
         client,
         input,
         tools,
-        state.messages,
+        state.inputItems,
         model,
         instructions,
         settings,
@@ -1192,7 +1196,7 @@ async function createLlmResponseWithRetries(
 
       recordResponseDebug(response, state, model, settings);
       state.receivedResponse = true;
-      currentResponseId = await recordChatResponse(
+      currentResponseId = await recordResponse(
         response,
         input,
         state,
@@ -1369,13 +1373,13 @@ async function requestLlmWithInstructions(
   const client = getClient();
   const settings = await resolveRuntimeSettings(model, options);
   const runtimeInstructions = await withMemoMetadata(instructions, options);
-  const previousMessages = await loadPreviousChatMessages(
+  const previousInput = await loadPreviousResponseInput(
     responseId ?? undefined,
     options,
   );
   const state: LlmRequestState = {
     lastResponseId: responseId ?? undefined,
-    messages: previousMessages,
+    inputItems: previousInput,
     receivedResponse: false,
     sentImmediateContentFilterWarning: false,
     hasStickerSlot: false,

@@ -1290,11 +1290,11 @@ function formatDebugUsage(debug: LlmDebugInfo["responses"][number]): string[] {
 
   const lines: string[] = [];
 
-  if (usage.prompt_tokens !== undefined) {
-    lines.push(`prompt_tokens: ${usage.prompt_tokens}`);
+  if (usage.input_tokens !== undefined) {
+    lines.push(`input_tokens: ${usage.input_tokens}`);
   }
-  if (usage.completion_tokens !== undefined) {
-    lines.push(`completion_tokens: ${usage.completion_tokens}`);
+  if (usage.output_tokens !== undefined) {
+    lines.push(`output_tokens: ${usage.output_tokens}`);
   }
   if (usage.reasoning_tokens !== undefined) {
     lines.push(`reasoning_tokens: ${usage.reasoning_tokens}`);
@@ -1330,8 +1330,12 @@ function formatDebugModelResponse(
     `reasoning_sent: ${formatDebugBoolean(response.reasoning_sent)}`,
   );
 
-  if (response.finish_reason) {
-    lines.push(`finish_reason: ${response.finish_reason}`);
+  if (response.status) {
+    lines.push(`status: ${response.status}`);
+  }
+
+  if (response.incomplete_reason) {
+    lines.push(`incomplete_reason: ${response.incomplete_reason}`);
   }
 
   lines.push(...formatDebugUsage(response));
