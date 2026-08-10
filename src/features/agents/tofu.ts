@@ -18,7 +18,6 @@ export const tools = [
   "read_last_messages",
   "read_youtube_video",
   "generate_image",
-  "generate_image_nsfw",
   "send_sticker",
   "schedule_message",
   "cron_message",

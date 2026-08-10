@@ -36,13 +36,6 @@ export const toolDefinition = {
   strict: true,
 } as const;
 
-export const nsfwToolDefinition = {
-  ...toolDefinition,
-  name: "generate_image_nsfw",
-  description:
-    "Generate one image from a text prompt with the alternate NSFW image model. Never use proactively. Use this only when the user explicitly asks for the alternate NSFW model. This uses less strict safety filters, but still requires careful prompting around filters. After using it, respond with a short caption or note that the image is attached.",
-} as const;
-
 function getImageGenerationUrl(): string {
   if (!APP_ENV.LLM_IMAGE_BASE_URL) {
     throw new Error("LLM_IMAGE_BASE_URL is not set.");
@@ -68,7 +61,7 @@ export function isConfigured(): boolean {
   );
 }
 
-export function isNsfwConfigured(): boolean {
+export function isAlternateConfigured(): boolean {
   return Boolean(
     APP_ENV.AZURE_ALT_IMAGE_BASE_URL &&
       APP_ENV.AZURE_ALT_IMAGE_KEY &&
@@ -76,7 +69,7 @@ export function isNsfwConfigured(): boolean {
   );
 }
 
-function getConfiguredNsfwDeploymentName(): string {
+function getConfiguredAlternateDeploymentName(): string {
   const deploymentName = LLM_DEPLOYMENTS.image.deploymentName;
 
   if (deploymentName) {
@@ -149,7 +142,7 @@ async function createImage(prompt: string, signal?: AbortSignal) {
   };
 }
 
-async function createNsfwImage(prompt: string, signal?: AbortSignal) {
+async function createAlternateImage(prompt: string, signal?: AbortSignal) {
   const response = await fetch(getAzureAltImageGenerationUrl(), {
     method: "POST",
     headers: {
@@ -158,7 +151,7 @@ async function createNsfwImage(prompt: string, signal?: AbortSignal) {
       Accept: "application/json",
     },
     body: JSON.stringify({
-      model: getConfiguredNsfwDeploymentName(),
+      model: getConfiguredAlternateDeploymentName(),
       prompt,
       width: 1024,
       height: 1024,
@@ -213,12 +206,50 @@ export const execute: FunctionToolRunner = async (args, _context, options) => {
     return getJsonError("Missing image prompt.");
   }
 
-  if (!isConfigured()) {
-    return getJsonError("Image generation is not configured.");
+  let defaultError: unknown;
+
+  try {
+    if (!isConfigured()) {
+      throw new Error("Default image generation is not configured.");
+    }
+
+    const image = await createImage(prompt, options?.signal);
+    return getImageToolResult(image);
+  } catch (error) {
+    if (options?.signal?.aborted) {
+      throw error;
+    }
+    defaultError = error;
   }
 
-  const image = await createImage(prompt, options?.signal);
+  try {
+    if (!isAlternateConfigured()) {
+      throw new Error("Alternate image generation is not configured.");
+    }
 
+    const image = await createAlternateImage(prompt, options?.signal);
+    return getImageToolResult(image);
+  } catch (alternateError) {
+    if (options?.signal?.aborted) {
+      throw alternateError;
+    }
+
+    throw new Error(
+      [
+        `Default image model failed: ${getErrorMessage(defaultError)}`,
+        `Alternate image model failed: ${getErrorMessage(alternateError)}`,
+      ].join("\n"),
+    );
+  }
+};
+
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function getImageToolResult(
+  image: Awaited<ReturnType<typeof createImage>>,
+): ReturnType<FunctionToolRunner> {
   return {
     output: JSON.stringify({
       generated_image: {
@@ -230,34 +261,4 @@ export const execute: FunctionToolRunner = async (args, _context, options) => {
     }),
     image,
   };
-};
-
-export const executeNsfw: FunctionToolRunner = async (
-  args,
-  _context,
-  options,
-) => {
-  const prompt = getString(args?.prompt);
-
-  if (!prompt) {
-    return getJsonError("Missing image prompt.");
-  }
-
-  if (!isNsfwConfigured()) {
-    return getJsonError("Image generation is not configured.");
-  }
-
-  const image = await createNsfwImage(prompt, options?.signal);
-
-  return {
-    output: JSON.stringify({
-      generated_image: {
-        attached: true,
-        prompt: image.prompt,
-        revised_prompt: image.revisedPrompt,
-        url: image.url,
-      },
-    }),
-    image,
-  };
-};
+}

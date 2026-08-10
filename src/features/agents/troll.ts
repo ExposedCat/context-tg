@@ -21,7 +21,6 @@ export const tools = [
   "search_chat",
   "read_last_messages",
   "generate_image",
-  "generate_image_nsfw",
   "send_sticker",
   "remember",
   "forget",
