@@ -69,11 +69,7 @@ const MEMO_AGENT_LABELS = {
   normal: "Laylo",
   tofu: "Tofu Laylo",
   guest: "Guest Laylo",
-  trader: "Trader Laylo",
-  researcher: "Researcher Laylo",
-  politician: "Politician Laylo",
   troll: "Troll Laylo",
-  ultimate: "Ultimate Laylo",
 } as const satisfies Record<AgentId, string>;
 
 export async function migrateMemos(database: Database): Promise<void> {

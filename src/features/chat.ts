@@ -1921,8 +1921,6 @@ async function saveRecoveredResponseThread(
     return;
   }
 
-  const responseAgent = getAgentById(llmResponse.handoff_agent_id) ?? agent;
-
   try {
     if (saveOriginalMessageThread) {
       await saveThread(ctx.database, {
@@ -1930,7 +1928,7 @@ async function saveRecoveredResponseThread(
         message_id: message.message_id,
         thread_id: threadId,
         response_id: llmResponse.response_id,
-        agent_id: responseAgent.id,
+        agent_id: agent.id,
       });
     }
 
@@ -1940,7 +1938,7 @@ async function saveRecoveredResponseThread(
         message_id: sentMessage.message_id,
         thread_id: threadId,
         response_id: llmResponse.response_id,
-        agent_id: responseAgent.id,
+        agent_id: agent.id,
       });
     }
   } catch (error) {
@@ -2241,14 +2239,12 @@ async function handleChatRequest(
       return;
     }
 
-    const responseAgent = getAgentById(llmResponse.handoff_agent_id) ?? agent;
-
     await saveThread(ctx.database, {
       chat_id: chatId,
       message_id: message.message_id,
       thread_id: threadId,
       response_id: llmResponse.response_id,
-      agent_id: responseAgent.id,
+      agent_id: agent.id,
     });
 
     for (const sentMessage of sentMessages) {
@@ -2257,7 +2253,7 @@ async function handleChatRequest(
         message_id: sentMessage.message_id,
         thread_id: threadId,
         response_id: llmResponse.response_id,
-        agent_id: responseAgent.id,
+        agent_id: agent.id,
       });
     }
   } catch (error) {
@@ -2433,16 +2429,13 @@ async function saveGuestChatResponseThread(
     return;
   }
 
-  const responseAgent =
-    getAgentById(llmResponse.handoff_agent_id) ?? guestAgent;
-
   try {
     await saveThread(ctx.database, {
       chat_id: chatId,
       message_id: message.message_id,
       thread_id: threadId,
       response_id: llmResponse.response_id,
-      agent_id: responseAgent.id,
+      agent_id: guestAgent.id,
     });
 
     for (const sentMessage of delivery.sentMessages) {
@@ -2451,7 +2444,7 @@ async function saveGuestChatResponseThread(
         message_id: sentMessage.message_id,
         thread_id: threadId,
         response_id: llmResponse.response_id,
-        agent_id: responseAgent.id,
+        agent_id: guestAgent.id,
       });
     }
 
@@ -2461,7 +2454,7 @@ async function saveGuestChatResponseThread(
       trigger_message_id: message.message_id,
       thread_id: threadId,
       response_id: llmResponse.response_id,
-      agent_id: responseAgent.id,
+      agent_id: guestAgent.id,
       inline_message_id: delivery.responseReferences[0]?.inline_message_id,
     });
   } catch (error) {

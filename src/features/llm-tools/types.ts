@@ -28,7 +28,6 @@ export type FunctionToolResult = {
   image?: LlmGeneratedImage;
   sticker?: LlmSticker;
   stickers?: LlmSticker[];
-  handoffAgentId?: AgentId;
   report?: {
     documentHtml: string;
     filename: string;

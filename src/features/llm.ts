@@ -6,7 +6,6 @@ import {
   type AgentId,
   type AgentModel,
   getAgentById,
-  getCallableAgentById,
   normalAgent,
 } from "./agents/index.ts";
 import type { Database } from "./database.ts";
@@ -20,11 +19,7 @@ import {
   getReasoningEffort,
   type ReasoningSetting,
 } from "./llm-models.ts";
-import {
-  formatPromptMessageXml,
-  formatSystemPromptMessageXml,
-} from "./llm-prompt.ts";
-import * as agentTool from "./llm-tools/agent.ts";
+import { formatPromptMessageXml } from "./llm-prompt.ts";
 import {
   executeReadLastMessages,
   executeSearchChat,
@@ -70,7 +65,6 @@ export const TOOL_DEFINITIONS = {
   send_sticker: stickerTool.toolDefinition,
   send_report: reportsTool.toolDefinition,
   send_trading_report: reportsTool.tradingToolDefinition,
-  call_agent: agentTool.toolDefinition,
   schedule_message: scheduleTool.scheduleMessageToolDefinition,
   cron_message: scheduleTool.cronMessageToolDefinition,
   remember: memoTool.saveMemoToolDefinition,
@@ -92,7 +86,6 @@ const FUNCTION_TOOL_RUNNERS = {
   send_sticker: stickerTool.execute,
   send_report: reportsTool.execute,
   send_trading_report: reportsTool.executeTrading,
-  call_agent: agentTool.createRunner(runAgent),
   schedule_message: scheduleTool.executeScheduleMessage,
   cron_message: scheduleTool.executeCronMessage,
   remember: memoTool.executeSaveMemo,
@@ -172,7 +165,6 @@ export type LlmDebugInfo = {
 
 export type LlmResponse = {
   response_id?: string;
-  handoff_agent_id?: AgentId;
   response?: string;
   report?: LlmReport;
   images: LlmGeneratedImage[];
@@ -224,7 +216,6 @@ type LlmApiInput = ChatCompletionMessageParam[];
 
 type FunctionToolCallResult = {
   toolOutput: FunctionCallOutput;
-  handoffAgentId?: AgentId;
 };
 
 type LlmRuntimeSettings = {
@@ -250,7 +241,6 @@ const MARKDOWN_TOOL_OUTPUTS = new Set<string>(["read_web_page"]);
 type LlmRequestState = {
   lastResponseId?: string;
   messages: ChatCompletionMessageParam[];
-  handoffAgentId?: AgentId;
   receivedResponse: boolean;
   sentImmediateContentFilterWarning: boolean;
   hasStickerSlot: boolean;
@@ -909,7 +899,6 @@ async function runFunctionToolCall(
 
   return {
     toolOutput: createToolOutput(call, result.output),
-    handoffAgentId: result.handoffAgentId,
   };
 }
 
@@ -1319,11 +1308,6 @@ async function resolveFunctionToolCalls(
         ),
       ),
     );
-    for (const result of toolCallResults) {
-      if (result.handoffAgentId) {
-        state.handoffAgentId = result.handoffAgentId;
-      }
-    }
     await options.onProgress?.({
       toolCallCount,
       responseId: state.lastResponseId,
@@ -1445,7 +1429,6 @@ async function requestLlmWithInstructions(
 
   return {
     response_id: lastResponseId,
-    handoff_agent_id: state.handoffAgentId,
     response: responseText,
     report: state.report,
     images: state.images,
@@ -1460,58 +1443,6 @@ async function requestLlmWithInstructions(
     tool_call_count: toolCallCount,
     debug: state.debug,
   };
-}
-
-async function runAgent(
-  agentId: string,
-  task: string,
-  context?: LlmToolContext,
-  signal?: AbortSignal,
-  database?: Database,
-): Promise<FunctionToolResult> {
-  const agent = getCallableAgentById(agentId);
-
-  if (!agent) {
-    return {
-      output: JSON.stringify({
-        error: "Unknown or unavailable agent.",
-        agent: agentId,
-      }),
-    };
-  }
-
-  const result = await requestLlmWithInstructions(
-    formatSystemPromptMessageXml(
-      `Delegated task from ultimate agent:\n${task}\n\nReturn a concise result for the ultimate agent to synthesize.`,
-    ),
-    agent.tools,
-    undefined,
-    { context, database, signal, agentId: agent.id },
-    agent.buildInstructions(),
-    agent.MODEL,
-  );
-
-  const output = JSON.stringify({
-    agent: agent.id,
-    response: result.response ?? "",
-    report_attached: Boolean(result.report),
-    stickers_attached: result.stickers.length,
-    tools_used: result.tools,
-    tool_call_count: result.tool_call_count,
-    errors: result.errors,
-    web_search: result.web_search.used,
-  });
-
-  if (result.report) {
-    return {
-      output,
-      handoffAgentId: agent.id,
-      report: result.report,
-      stickers: result.stickers,
-    };
-  }
-
-  return { output, handoffAgentId: agent.id, stickers: result.stickers };
 }
 
 export async function requestLlm(

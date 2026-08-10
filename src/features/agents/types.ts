@@ -1,15 +1,7 @@
 import type { ToolName } from "../llm.ts";
 import type { LlmDeployment } from "../llm-deployments.ts";
 
-export type AgentId =
-  | "normal"
-  | "tofu"
-  | "guest"
-  | "trader"
-  | "researcher"
-  | "politician"
-  | "troll"
-  | "ultimate";
+export type AgentId = "normal" | "tofu" | "guest" | "troll";
 export type AgentModel = LlmDeployment;
 
 export type AgentDefinition = {

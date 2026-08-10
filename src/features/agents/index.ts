@@ -1,34 +1,17 @@
 import { guestAgent } from "./guest.ts";
 import { normalAgent } from "./normal.ts";
-import { politicianAgent } from "./politician.ts";
-import { researcherAgent } from "./researcher.ts";
 import { tofuAgent } from "./tofu.ts";
-import { traderAgent } from "./trader.ts";
 import { trollAgent } from "./troll.ts";
 import type { AgentDefinition, AgentId } from "./types.ts";
-import { ultimateAgent } from "./ultimate.ts";
 
 export type { AgentDefinition, AgentId, AgentModel } from "./types.ts";
-export {
-  guestAgent,
-  normalAgent,
-  politicianAgent,
-  researcherAgent,
-  tofuAgent,
-  trollAgent,
-  traderAgent,
-  ultimateAgent,
-};
+export { guestAgent, normalAgent, tofuAgent, trollAgent };
 
 export const AGENTS = [
   normalAgent,
   tofuAgent,
   guestAgent,
-  traderAgent,
-  researcherAgent,
-  politicianAgent,
   trollAgent,
-  ultimateAgent,
 ] satisfies AgentDefinition[];
 
 const AGENT_NAME_BOUNDARY = /(?:$|[\s:,.!?()[\]{}"'`-])/;
@@ -65,14 +48,6 @@ export function getAgentById(
   id: string | null | undefined,
 ): AgentDefinition | undefined {
   return AGENTS.find((agent) => agent.id === id);
-}
-
-export function getCallableAgentById(
-  id: string | null | undefined,
-): AgentDefinition | undefined {
-  const agent = getAgentById(id);
-
-  return agent && agent.id !== "ultimate" ? agent : undefined;
 }
 
 export function resolveMessageAgent(
