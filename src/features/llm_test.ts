@@ -1,4 +1,9 @@
-import { deepStrictEqual, ok, strictEqual } from "node:assert";
+import {
+  rejects as assertRejects,
+  deepStrictEqual,
+  ok,
+  strictEqual,
+} from "node:assert";
 import { parseLlmResponseInputItems } from "./llm-chat-responses.ts";
 
 const TEST_ENV = {
@@ -252,6 +257,74 @@ Deno.test("requestLlm uses Responses items through a function-call round", async
         '<tool_response tool="send_sticker">',
       ),
     );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+Deno.test("requestLlm retries empty responses twice before succeeding", async () => {
+  setLlmDeploymentName("small", "test-model");
+  let requestCount = 0;
+  const originalFetch = globalThis.fetch;
+
+  globalThis.fetch = (async () => {
+    requestCount += 1;
+    const body =
+      requestCount <= 2
+        ? createApiResponse(`resp_empty_${requestCount}`, [])
+        : createApiResponse("resp_final", [
+            {
+              id: "msg_final",
+              type: "message",
+              role: "assistant",
+              status: "completed",
+              content: [
+                { type: "output_text", text: "Recovered.", annotations: [] },
+              ],
+            },
+          ]);
+
+    return new Response(JSON.stringify(body), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  }) as typeof fetch;
+
+  try {
+    const response = await requestLlm("Try again", []);
+
+    strictEqual(requestCount, 3);
+    strictEqual(response.response_id, "resp_final");
+    strictEqual(response.response, "Recovered.");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+Deno.test("requestLlm stops after three empty response attempts", async () => {
+  setLlmDeploymentName("small", "test-model");
+  let requestCount = 0;
+  const originalFetch = globalThis.fetch;
+
+  globalThis.fetch = (async () => {
+    requestCount += 1;
+
+    return new Response(
+      JSON.stringify(createApiResponse(`resp_empty_${requestCount}`, [])),
+      {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      },
+    );
+  }) as typeof fetch;
+
+  try {
+    await assertRejects(
+      () => requestLlm("Keep trying", []),
+      Error,
+      "LLM request failed after retries",
+    );
+    strictEqual(requestCount, 3);
   } finally {
     globalThis.fetch = originalFetch;
   }

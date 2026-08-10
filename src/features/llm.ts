@@ -206,6 +206,7 @@ type LlmRuntimeSettings = {
 const logDebug = createDebug("app:llm:debug");
 const logError = createDebug("app:llm:error");
 const MAX_LLM_RETRIES = 10;
+const MAX_EMPTY_RESPONSE_RETRIES = 2;
 const LLM_RATE_LIMIT_RETRY_DELAY_MS = 3000;
 const LLM_RATE_LIMIT_MAX_RETRIES = 5;
 const MAX_FUNCTION_TOOL_ROUNDS = 4;
@@ -1171,6 +1172,7 @@ async function createLlmResponseWithRetries(
   let lastError: unknown;
   let currentResponseId = responseId;
   let retryAttempts = 0;
+  let emptyResponseRetries = 0;
   let rateLimitRetries = 0;
 
   while (true) {
@@ -1212,13 +1214,18 @@ async function createLlmResponseWithRetries(
       const emptyResponse = isEmptyResponseError(error);
       const retryingRateLimit =
         rateLimited && rateLimitRetries < LLM_RATE_LIMIT_MAX_RETRIES;
+      const retryingEmptyResponse =
+        emptyResponse && emptyResponseRetries < MAX_EMPTY_RESPONSE_RETRIES;
       const retryingModelError =
+        !emptyResponse &&
         retryAttempts < MAX_LLM_RETRIES &&
-        (!immediate || contentFiltered || emptyResponse);
-      const retrying = retryingRateLimit || retryingModelError;
+        (!immediate || contentFiltered);
+      const retrying =
+        retryingRateLimit || retryingEmptyResponse || retryingModelError;
 
       logError("LLM response step failed", {
         retryAttempts,
+        emptyResponseRetries,
         rateLimitRetries,
         immediate,
         retrying,
@@ -1247,6 +1254,15 @@ async function createLlmResponseWithRetries(
           "error",
           state.lastResponseId,
         );
+      }
+
+      if (emptyResponse) {
+        if (emptyResponseRetries >= MAX_EMPTY_RESPONSE_RETRIES) {
+          break;
+        }
+
+        emptyResponseRetries += 1;
+        continue;
       }
 
       if (retryAttempts >= MAX_LLM_RETRIES) {
