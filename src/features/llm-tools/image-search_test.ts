@@ -19,7 +19,9 @@ for (const [name, value] of Object.entries(TEST_ENV)) {
   Deno.env.set(name, value);
 }
 
-const { execute, executeReadImage } = await import("./image-search.ts");
+const { execute, executeReadImage, executeSendImage } = await import(
+  "./image-search.ts"
+);
 
 Deno.test("search_images queries only Google Images JSON and normalizes results", async () => {
   const originalFetch = globalThis.fetch;
@@ -98,6 +100,35 @@ Deno.test("read_image rejects non-HTTP URLs", async () => {
     JSON.stringify({
       error:
         "Cannot read image: url must be a direct HTTP(S) image URL from search_images.",
+    }),
+  );
+});
+
+Deno.test("send_image returns an existing URL as a Telegram image attachment", async () => {
+  const result = await executeSendImage({
+    url: "https://images.example.com/cat.jpg",
+  });
+
+  deepStrictEqual(result, {
+    output: JSON.stringify({
+      sent_image: {
+        attached: true,
+        url: "https://images.example.com/cat.jpg",
+      },
+    }),
+    image: {
+      prompt: "Existing image sent by URL.",
+      url: "https://images.example.com/cat.jpg",
+    },
+  });
+});
+
+Deno.test("send_image rejects non-HTTP URLs", async () => {
+  const result = await executeSendImage({ url: "data:image/png;base64,AA==" });
+  strictEqual(
+    result,
+    JSON.stringify({
+      error: "Cannot send image: url must be a direct HTTP(S) image URL.",
     }),
   );
 });

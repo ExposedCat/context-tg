@@ -22,6 +22,7 @@ export const tools = [
   "get_message_context",
   "read_last_messages",
   "generate_image",
+  "send_image",
   "send_sticker",
   "set_reply_message_id",
 ] satisfies ToolName[];

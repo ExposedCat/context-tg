@@ -377,6 +377,67 @@ Deno.test("read_image returns an image in the function-call output", async () =>
   }
 });
 
+Deno.test("send_image adds an existing URL to the response attachments", async () => {
+  setLlmDeploymentName("small", "test-model");
+  let requestCount = 0;
+  const originalFetch = globalThis.fetch;
+
+  globalThis.fetch = (async () => {
+    requestCount += 1;
+    const body =
+      requestCount === 1
+        ? createApiResponse("resp_send_image", [
+            {
+              id: "fc_send_image",
+              type: "function_call",
+              call_id: "call_send_image",
+              name: "send_image",
+              arguments: '{"url":"https://images.example.com/cat.jpg"}',
+              status: "completed",
+            },
+          ])
+        : createApiResponse("resp_final", [
+            {
+              id: "msg_final",
+              type: "message",
+              role: "assistant",
+              status: "completed",
+              content: [
+                {
+                  type: "output_text",
+                  text: "Image attached.",
+                  annotations: [],
+                },
+              ],
+            },
+          ]);
+
+    return new Response(JSON.stringify(body), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  }) as typeof fetch;
+
+  try {
+    const response = await requestLlm(
+      "Send the image",
+      ["send_image"],
+      undefined,
+      { context: { chatId: 1, messageId: 1 } },
+    );
+
+    strictEqual(response.response, "Image attached.");
+    deepStrictEqual(response.images, [
+      {
+        prompt: "Existing image sent by URL.",
+        url: "https://images.example.com/cat.jpg",
+      },
+    ]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 Deno.test("requestLlm retries empty responses twice before succeeding", async () => {
   setLlmDeploymentName("small", "test-model");
   let requestCount = 0;

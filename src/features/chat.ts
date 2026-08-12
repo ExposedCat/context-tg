@@ -229,6 +229,7 @@ const PROACTIVE_CONTEXT_MESSAGE_COUNT = 10;
 const PROACTIVE_TASK_TEXT = "Proactive response";
 const PROACTIVE_DISABLED_TOOLS = new Set<ToolName>([
   "generate_image",
+  "send_image",
   "send_sticker",
   "schedule_message",
   "cron_message",
@@ -1172,6 +1173,7 @@ const TOOL_USAGE_EMOJIS: Partial<
   read_web_page: { id: "5960551395730919906", fallback: "📝" },
   search_images: { id: "5814690801665446789", fallback: "🖼️" },
   read_image: { id: "5814690801665446789", fallback: "🖼️" },
+  send_image: { id: "5814690801665446789", fallback: "🖼️" },
   search_chat: { id: "5874960879434338403", fallback: "🔎" },
   read_last_messages: { id: "5891169510483823323", fallback: "💬" },
   send_report: { id: "5877597667231534929", fallback: "📄" },
@@ -1593,7 +1595,10 @@ function filterToolsForUsage(
       return false;
     }
 
-    if (tool === "generate_image" && !options.imageUsageRemaining) {
+    if (
+      (tool === "generate_image" || tool === "send_image") &&
+      !options.imageUsageRemaining
+    ) {
       return false;
     }
 

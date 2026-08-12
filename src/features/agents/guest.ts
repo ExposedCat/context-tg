@@ -16,6 +16,7 @@ export const tools = [
   "read_web_page",
   "search_images",
   "read_image",
+  "send_image",
   "read_youtube_video",
 ] satisfies ToolName[];
 

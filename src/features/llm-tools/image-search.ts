@@ -46,6 +46,26 @@ export const readImageToolDefinition = {
   strict: true,
 } as const;
 
+export const sendImageToolDefinition = {
+  type: "function",
+  name: "send_image",
+  description:
+    "Send one existing image to the chat by its direct HTTP(S) URL. Use this when the user asks to see or receive an existing image. For search results, use an image_url from search_images and inspect it with read_image first.",
+  parameters: {
+    type: "object",
+    properties: {
+      url: {
+        type: "string",
+        description:
+          "The direct HTTP(S) URL of the existing image to attach. For image search results, use image_url rather than source_url or thumbnail_url.",
+      },
+    },
+    required: ["url"],
+    additionalProperties: false,
+  },
+  strict: true,
+} as const;
+
 function getSearchApiUrl(): URL {
   return new URL(`${APP_ENV.SEARXNG_URL.replace(/\/+$/, "")}/search`);
 }
@@ -192,5 +212,25 @@ export const executeReadImage: FunctionToolRunner = (args) => {
   return {
     output: JSON.stringify({ image_url: url, loaded: true }),
     inputImages: [{ image_url: url, detail: "auto" }],
+  };
+};
+
+export const executeSendImage: FunctionToolRunner = (args) => {
+  const url = getHttpUrl(args?.url);
+
+  if (!url) {
+    return getJsonError(
+      "Cannot send image: url must be a direct HTTP(S) image URL.",
+    );
+  }
+
+  return {
+    output: JSON.stringify({
+      sent_image: { attached: true, url },
+    }),
+    image: {
+      prompt: "Existing image sent by URL.",
+      url,
+    },
   };
 };

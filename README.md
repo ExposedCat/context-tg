@@ -31,4 +31,5 @@ host loopback on port 8080 for local development; it is not publicly exposed.
 
 `search_images` returns direct `image_url` values and source metadata. The agent
 then calls `read_image` with one of those URLs to provide the selected image to
-the vision model.
+the vision model. When the image should be delivered to the chat, `send_image`
+attaches that existing URL through the same response path as `generate_image`.
