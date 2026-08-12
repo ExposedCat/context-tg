@@ -232,6 +232,8 @@ const PROACTIVE_DISABLED_TOOLS = new Set<ToolName>([
   "send_sticker",
   "schedule_message",
   "cron_message",
+  "get_scheduled_messages",
+  "cancel_scheduled_message",
   "remember",
   "forget",
 ]);
@@ -1602,11 +1604,27 @@ function isAbortError(error: unknown): boolean {
   );
 }
 
+function getReplyDeliveryOptions(
+  message: TextMessage,
+  replyMessageId: number | null | undefined,
+): {
+  message_thread_id?: number;
+  reply_parameters?: { message_id: number };
+} {
+  const targetMessageId =
+    replyMessageId === undefined ? message.message_id : replyMessageId;
+
+  return targetMessageId === null
+    ? { message_thread_id: message.message_thread_id }
+    : { reply_parameters: { message_id: targetMessageId } };
+}
+
 async function sendReportResponse(
   ctx: Context,
   message: TextMessage,
   report: LlmReport,
   formattedResponse: ReturnType<typeof formatLlmResponse>,
+  replyMessageId?: number | null,
 ): Promise<Array<{ message_id: number }>> {
   const filename = normalizeHtmlFilename(report.filename);
   const tmpPath = await Deno.makeTempFile({
@@ -1620,11 +1638,7 @@ async function sendReportResponse(
 
     const sentDocument = await ctx.replyWithDocument(
       new InputFile(tmpPath, filename),
-      {
-        reply_parameters: {
-          message_id: message.message_id,
-        },
-      },
+      getReplyDeliveryOptions(message, replyMessageId),
     );
     sentMessages.push(sentDocument);
   } finally {
@@ -1638,6 +1652,7 @@ async function sendReportResponse(
       ctx,
       message,
       formattedResponse.richMarkdown || "Report attached.",
+      replyMessageId,
     )),
   );
 
@@ -1648,6 +1663,7 @@ async function sendGeneratedImagePhotos(
   ctx: Context,
   message: TextMessage,
   images: LlmGeneratedImage[],
+  replyMessageId?: number | null,
 ): Promise<Array<{ message_id: number }>> {
   const sentMessages = [];
 
@@ -1655,11 +1671,10 @@ async function sendGeneratedImagePhotos(
     const { input, cleanup } = await createGeneratedImageInputFile(image);
 
     try {
-      const sentPhoto = await ctx.replyWithPhoto(input, {
-        reply_parameters: {
-          message_id: message.message_id,
-        },
-      });
+      const sentPhoto = await ctx.replyWithPhoto(
+        input,
+        getReplyDeliveryOptions(message, replyMessageId),
+      );
       sentMessages.push(sentPhoto);
     } finally {
       await cleanup();
@@ -1673,6 +1688,7 @@ async function sendStickerMessages(
   ctx: Context,
   message: TextMessage,
   stickers: LlmSticker[],
+  replyMessageId?: number | null,
 ): Promise<{
   sentMessages: Array<{ message_id: number }>;
   unsentStickers: LlmSticker[];
@@ -1693,11 +1709,10 @@ async function sendStickerMessages(
         continue;
       }
 
-      const sentSticker = await ctx.replyWithSticker(sticker.fileId, {
-        reply_parameters: {
-          message_id: message.message_id,
-        },
-      });
+      const sentSticker = await ctx.replyWithSticker(
+        sticker.fileId,
+        getReplyDeliveryOptions(message, replyMessageId),
+      );
       sentMessages.push(sentSticker);
     } catch (error) {
       unsentStickers.push(requestedSticker);
@@ -1715,6 +1730,7 @@ async function sendRichMarkdownResponse(
   ctx: Context,
   message: TextMessage,
   richMarkdown: string,
+  replyMessageId?: number | null,
 ): Promise<SentRichMarkdownMessage[]> {
   if (!ctx.chat) {
     return [];
@@ -1732,9 +1748,7 @@ async function sendRichMarkdownResponse(
         markdown: chunk,
       },
       {
-        reply_parameters: {
-          message_id: message.message_id,
-        },
+        ...getReplyDeliveryOptions(message, replyMessageId),
       },
     );
 
@@ -2177,12 +2191,18 @@ async function handleChatRequest(
     }
 
     const sentMessages = [
-      ...(await sendGeneratedImagePhotos(ctx, message, llmResponse.images)),
+      ...(await sendGeneratedImagePhotos(
+        ctx,
+        message,
+        llmResponse.images,
+        llmResponse.replyMessageId,
+      )),
     ];
     const stickerMessages = await sendStickerMessages(
       ctx,
       message,
       llmResponse.stickers,
+      llmResponse.replyMessageId,
     );
     sentMessages.push(...stickerMessages.sentMessages);
 
@@ -2201,6 +2221,7 @@ async function handleChatRequest(
           message,
           llmResponse.report,
           formattedResponse,
+          llmResponse.replyMessageId,
         )),
       );
     } else if (llmResponse.images.length > 0) {
@@ -2209,6 +2230,7 @@ async function handleChatRequest(
           ctx,
           message,
           formattedResponse.richMarkdown || "Image attached.",
+          llmResponse.replyMessageId,
         )),
       );
     } else if (
@@ -2220,6 +2242,7 @@ async function handleChatRequest(
           ctx,
           message,
           formattedResponse.richMarkdown,
+          llmResponse.replyMessageId,
         )),
       );
     } else if (missingStickerFallback) {
@@ -2228,6 +2251,7 @@ async function handleChatRequest(
           ctx,
           message,
           missingStickerFallback,
+          llmResponse.replyMessageId,
         )),
       );
     }

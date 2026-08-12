@@ -32,6 +32,7 @@ import * as gdeltTool from "./llm-tools/gdelt.ts";
 import * as imageTool from "./llm-tools/image.ts";
 import * as marketTool from "./llm-tools/market.ts";
 import * as memoTool from "./llm-tools/memos.ts";
+import * as replyTool from "./llm-tools/reply.ts";
 import type { LlmReport } from "./llm-tools/reports.ts";
 import * as reportsTool from "./llm-tools/reports.ts";
 import * as scheduleTool from "./llm-tools/schedule.ts";
@@ -65,10 +66,13 @@ export const TOOL_DEFINITIONS = {
   read_youtube_video: youtubeTool.toolDefinition,
   generate_image: imageTool.toolDefinition,
   send_sticker: stickerTool.toolDefinition,
+  set_reply_message_id: replyTool.toolDefinition,
   send_report: reportsTool.toolDefinition,
   send_trading_report: reportsTool.tradingToolDefinition,
   schedule_message: scheduleTool.scheduleMessageToolDefinition,
   cron_message: scheduleTool.cronMessageToolDefinition,
+  get_scheduled_messages: scheduleTool.getScheduledMessagesToolDefinition,
+  cancel_scheduled_message: scheduleTool.cancelScheduledMessageToolDefinition,
   remember: memoTool.saveMemoToolDefinition,
   forget: memoTool.forgetMemoToolDefinition,
 } as const;
@@ -86,10 +90,13 @@ const FUNCTION_TOOL_RUNNERS = {
   read_youtube_video: youtubeTool.execute,
   generate_image: imageTool.execute,
   send_sticker: stickerTool.execute,
+  set_reply_message_id: replyTool.execute,
   send_report: reportsTool.execute,
   send_trading_report: reportsTool.executeTrading,
   schedule_message: scheduleTool.executeScheduleMessage,
   cron_message: scheduleTool.executeCronMessage,
+  get_scheduled_messages: scheduleTool.executeGetScheduledMessages,
+  cancel_scheduled_message: scheduleTool.executeCancelScheduledMessage,
   remember: memoTool.executeSaveMemo,
   forget: memoTool.executeForgetMemo,
 } satisfies Record<string, FunctionToolRunner>;
@@ -169,6 +176,7 @@ export type LlmDebugInfo = {
 export type LlmResponse = {
   response_id?: string;
   response?: string;
+  replyMessageId?: number | null;
   report?: LlmReport;
   images: LlmGeneratedImage[];
   stickers: LlmSticker[];
@@ -226,6 +234,7 @@ const MARKDOWN_TOOL_OUTPUTS = new Set<string>(["read_web_page"]);
 
 type LlmRequestState = {
   lastResponseId?: string;
+  replyMessageId?: number | null;
   inputItems: ResponseInputItem[];
   receivedResponse: boolean;
   sentImmediateContentFilterWarning: boolean;
@@ -905,6 +914,10 @@ async function runFunctionToolCall(
     state.report = result.report;
   }
 
+  if ("replyMessageId" in result) {
+    state.replyMessageId = result.replyMessageId;
+  }
+
   if (result.image) {
     state.images.push(result.image);
   }
@@ -1456,6 +1469,7 @@ async function requestLlmWithInstructions(
   return {
     response_id: lastResponseId,
     response: responseText,
+    replyMessageId: state.replyMessageId,
     report: state.report,
     images: state.images,
     stickers: state.stickers,

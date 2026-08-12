@@ -1,9 +1,13 @@
+import type { Database } from "../database.ts";
 import {
   type CronIntervalUnit,
+  cancelCronMessageByNumber,
+  cancelScheduledMessageByNumber,
   createCronMessage,
   createScheduledMessage,
   formatCronInterval,
   formatScheduledAt,
+  getScheduleList,
   ScheduleValidationError,
 } from "../schedules.ts";
 import type { FunctionToolRunner } from "./types.ts";
@@ -103,6 +107,41 @@ export const cronMessageToolDefinition = {
   strict: false,
 } as const;
 
+export const getScheduledMessagesToolDefinition = {
+  type: "function",
+  name: "get_scheduled_messages",
+  description:
+    "Get the current chat's one-time and repeating scheduled messages. Returns the same schedule shown by /schedule, including the cancellation id for each message.",
+  parameters: {
+    type: "object",
+    properties: {},
+    required: [],
+    additionalProperties: false,
+  },
+  strict: true,
+} as const;
+
+export const cancelScheduledMessageToolDefinition = {
+  type: "function",
+  name: "cancel_scheduled_message",
+  description:
+    "Cancel a one-time or repeating scheduled message in the current chat, then return the updated schedule. Use the id shown after /cancel_ by get_scheduled_messages, for example s1 or c1.",
+  parameters: {
+    type: "object",
+    properties: {
+      id: {
+        type: "string",
+        description:
+          "The cancellation id shown after /cancel_, for example s1 for a one-time message or c1 for a repeating message.",
+        pattern: "^[sc][1-9][0-9]*$",
+      },
+    },
+    required: ["id"],
+    additionalProperties: false,
+  },
+  strict: true,
+} as const;
+
 function getCronInterval(
   args: Record<string, unknown> | null,
 ): { intervalUnit: CronIntervalUnit; intervalValue: number } | string {
@@ -168,6 +207,115 @@ function formatScheduleError(error: unknown, action: string): string {
 function getShortElaboration(args: Record<string, unknown> | null): string {
   return getString(args?.short_elaboration ?? args?.["short elaboration"]);
 }
+
+type ScheduleCancellationId = {
+  kind: "cron" | "scheduled";
+  number: number;
+};
+
+function parseScheduleCancellationId(
+  value: unknown,
+): ScheduleCancellationId | undefined {
+  const match = getString(value).match(/^([sc])([1-9]\d*)$/);
+  if (!match) {
+    return undefined;
+  }
+
+  const number = Number(match[2]);
+  if (!Number.isSafeInteger(number)) {
+    return undefined;
+  }
+
+  return {
+    kind: match[1] === "s" ? "scheduled" : "cron",
+    number,
+  };
+}
+
+async function getPlainSchedule(
+  database: Database,
+  chatId: number,
+): Promise<string> {
+  return await getScheduleList(database, chatId, false);
+}
+
+export const executeGetScheduledMessages: FunctionToolRunner = async (
+  _args,
+  context,
+  options,
+) => {
+  const missingContext = getMissingContextResponse(
+    "get scheduled messages",
+    context,
+  );
+  if (missingContext || !context) {
+    return missingContext ?? "";
+  }
+
+  const missingDatabase = getMissingDatabaseResponse(
+    "get scheduled messages",
+    options?.database,
+  );
+  if (missingDatabase || !options?.database) {
+    return missingDatabase ?? "";
+  }
+
+  return await getPlainSchedule(options.database, context.chatId);
+};
+
+export const executeCancelScheduledMessage: FunctionToolRunner = async (
+  args,
+  context,
+  options,
+) => {
+  const missingContext = getMissingContextResponse(
+    "cancel scheduled message",
+    context,
+  );
+  if (missingContext || !context) {
+    return missingContext ?? "";
+  }
+
+  const missingDatabase = getMissingDatabaseResponse(
+    "cancel scheduled message",
+    options?.database,
+  );
+  if (missingDatabase || !options?.database) {
+    return missingDatabase ?? "";
+  }
+
+  const cancellationId = parseScheduleCancellationId(args?.id);
+  if (!cancellationId) {
+    return getJsonError(
+      "Cannot cancel scheduled message: id must look like s1 or c1.",
+    );
+  }
+
+  const result =
+    cancellationId.kind === "scheduled"
+      ? await cancelScheduledMessageByNumber(
+          options.database,
+          context.chatId,
+          cancellationId.number,
+        )
+      : await cancelCronMessageByNumber(
+          options.database,
+          context.chatId,
+          cancellationId.number,
+        );
+
+  if (result !== "canceled") {
+    const label =
+      cancellationId.kind === "scheduled"
+        ? "Scheduled message"
+        : "Repeating message";
+    const reason = result === "not_active" ? "is not active" : "was not found";
+
+    return getJsonError(`Cannot cancel scheduled message: ${label} ${reason}.`);
+  }
+
+  return await getPlainSchedule(options.database, context.chatId);
+};
 
 export const executeScheduleMessage: FunctionToolRunner = async (
   args,

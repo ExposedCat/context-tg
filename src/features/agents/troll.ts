@@ -23,6 +23,7 @@ export const tools = [
   "read_last_messages",
   "generate_image",
   "send_sticker",
+  "set_reply_message_id",
 ] satisfies ToolName[];
 
 export function buildInstructions(chatId: number): string {

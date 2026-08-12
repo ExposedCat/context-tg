@@ -1110,29 +1110,34 @@ export function formatScheduleList(
   ].join("\n");
 }
 
+export async function getScheduleList(
+  database: Database,
+  chatId: number,
+  useCustomEmoji = true,
+): Promise<string> {
+  const [scheduledMessages, cronMessages] = await Promise.all([
+    listActiveScheduledMessages(database, chatId),
+    listActiveCronMessages(database, chatId),
+  ]);
+
+  return formatScheduleList(scheduledMessages, cronMessages, useCustomEmoji);
+}
+
 export async function replyWithSchedules(ctx: Context): Promise<void> {
   if (!ctx.chat) {
     return;
   }
 
-  const [scheduledMessages, cronMessages] = await Promise.all([
-    listActiveScheduledMessages(ctx.database, ctx.chat.id),
-    listActiveCronMessages(ctx.database, ctx.chat.id),
-  ]);
-
   try {
-    await ctx.reply(formatScheduleList(scheduledMessages, cronMessages), {
+    await ctx.reply(await getScheduleList(ctx.database, ctx.chat.id), {
       ...linkPreviewOptions,
       parse_mode: "HTML",
     });
   } catch {
-    await ctx.reply(
-      formatScheduleList(scheduledMessages, cronMessages, false),
-      {
-        ...linkPreviewOptions,
-        parse_mode: "HTML",
-      },
-    );
+    await ctx.reply(await getScheduleList(ctx.database, ctx.chat.id, false), {
+      ...linkPreviewOptions,
+      parse_mode: "HTML",
+    });
   }
 }
 

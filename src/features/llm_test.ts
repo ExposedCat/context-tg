@@ -161,6 +161,14 @@ Deno.test("requestLlm uses Responses items through a function-call round", async
               arguments: '{"emoji":"👍"}',
               status: "completed",
             },
+            {
+              id: "fc_reply",
+              type: "function_call",
+              call_id: "call_reply",
+              name: "set_reply_message_id",
+              arguments: '{"message_id":42}',
+              status: "completed",
+            },
           ])
         : createApiResponse("resp_final", [
             {
@@ -191,14 +199,15 @@ Deno.test("requestLlm uses Responses items through a function-call round", async
           },
         ],
       },
-      ["send_sticker"],
+      ["send_sticker", "set_reply_message_id"],
       undefined,
       { context: { chatId: 1, messageId: 1 } },
     );
 
     strictEqual(response.response_id, "resp_final");
     strictEqual(response.response, "Done.");
-    strictEqual(response.tool_call_count, 1);
+    strictEqual(response.tool_call_count, 2);
+    strictEqual(response.replyMessageId, 42);
     deepStrictEqual(response.stickers, [{ emoji: "👍" }]);
     strictEqual(response.debug.responses[0].usage?.input_tokens, 10);
     strictEqual(response.debug.responses[0].usage?.output_tokens, 5);
@@ -229,6 +238,26 @@ Deno.test("requestLlm uses Responses items through a function-call round", async
         },
         strict: true,
       },
+      {
+        type: "function",
+        name: "set_reply_message_id",
+        description:
+          "Set the Telegram message that the final response replies to. This is optional: by default the response replies to the latest user message. Call this only before the final response when you need to change its reply target. Pass null to explicitly send without replying to any message.",
+        parameters: {
+          type: "object",
+          properties: {
+            message_id: {
+              type: ["integer", "null"],
+              description:
+                "The Telegram message id to reply to, or null to send without replying.",
+              minimum: 1,
+            },
+          },
+          required: ["message_id"],
+          additionalProperties: false,
+        },
+        strict: true,
+      },
     ]);
 
     const firstInput = firstRequest.input as Array<Record<string, unknown>>;
@@ -250,13 +279,20 @@ Deno.test("requestLlm uses Responses items through a function-call round", async
     ]);
 
     const secondInput = requests[1].input as Array<Record<string, unknown>>;
-    strictEqual(secondInput.length, 3);
+    strictEqual(secondInput.length, 5);
     strictEqual(secondInput[1].type, "function_call");
-    strictEqual(secondInput[2].type, "function_call_output");
-    strictEqual(secondInput[2].call_id, "call_tool");
+    strictEqual(secondInput[3].type, "function_call_output");
+    strictEqual(secondInput[3].call_id, "call_tool");
     ok(
-      String(secondInput[2].output).includes(
+      String(secondInput[3].output).includes(
         '<tool_response tool="send_sticker">',
+      ),
+    );
+    strictEqual(secondInput[4].type, "function_call_output");
+    strictEqual(secondInput[4].call_id, "call_reply");
+    ok(
+      String(secondInput[4].output).includes(
+        '<tool_response tool="set_reply_message_id">',
       ),
     );
   } finally {

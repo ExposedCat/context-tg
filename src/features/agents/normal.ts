@@ -20,8 +20,11 @@ export const tools = [
   "read_youtube_video",
   "generate_image",
   "send_sticker",
+  "set_reply_message_id",
   "schedule_message",
   "cron_message",
+  "get_scheduled_messages",
+  "cancel_scheduled_message",
   "remember",
   "forget",
 ] satisfies ToolName[];

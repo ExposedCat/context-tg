@@ -25,6 +25,7 @@ export type LlmSticker = {
 
 export type FunctionToolResult = {
   output: string;
+  replyMessageId?: number | null;
   image?: LlmGeneratedImage;
   sticker?: LlmSticker;
   stickers?: LlmSticker[];
