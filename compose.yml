@@ -32,7 +32,7 @@ services:
     restart: unless-stopped
 
   qdrant:
-    image: qdrant/qdrant:latest
+    image: qdrant/qdrant:v1.18.3
     environment:
       QDRANT__LOG_LEVEL: WARN
     ports:

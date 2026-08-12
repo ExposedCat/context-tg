@@ -8,6 +8,7 @@ import { startsWithCommandPrefix } from "./message-filter.ts";
 type RememberedMessage = {
   message_id: number;
   message_thread_id?: number;
+  is_topic_message?: boolean;
   reply_to_message?: {
     message_id: number;
     message_thread_id?: number;
@@ -78,10 +79,14 @@ export type MessageMetadata = {
   chat_id: number;
   message_id: number;
   thread_id?: number;
+  reply_to_message_id?: number;
 };
+
+export type MessageSearchMatch = "semantic" | "lexical" | "phrase";
 
 export type MessageSearchOptions = {
   queries: string[];
+  exactPhrases?: string[];
   from?: Date;
   to?: Date;
   chatId?: number;
@@ -94,6 +99,7 @@ export type MessageSearchResult = MessageMetadata & {
   id: string | number;
   score: number;
   queries: string[];
+  matched_by: MessageSearchMatch[];
 };
 
 export type QdrantResponse<T> = {
@@ -106,6 +112,12 @@ type QdrantPoint = {
   id: string | number;
   score: number;
   payload?: Partial<MessageMetadata>;
+};
+
+type QdrantScrollPoint = Omit<QdrantPoint, "score">;
+
+type QdrantScrollResult = {
+  points: QdrantScrollPoint[];
 };
 
 type QdrantCollectionInfo = {
@@ -122,6 +134,7 @@ const logDebug = createDebug("app:messages:debug");
 const logError = createDebug("app:messages:error");
 
 const DEFAULT_SEARCH_LIMIT = 20;
+const RRF_RANK_CONSTANT = 60;
 const PHOTO_ATTACHMENT_MARKER = "[photo attachment]";
 const MESSAGE_PAYLOAD_INDEXES = [
   { fieldName: "chat_id", fieldSchema: "integer" },
@@ -129,6 +142,16 @@ const MESSAGE_PAYLOAD_INDEXES = [
   { fieldName: "message_id", fieldSchema: "integer" },
   { fieldName: "sender_id", fieldSchema: "integer" },
   { fieldName: "date_timestamp", fieldSchema: "integer" },
+  {
+    fieldName: "text",
+    fieldSchema: {
+      type: "text",
+      tokenizer: "word",
+      lowercase: true,
+      ascii_folding: true,
+      phrase_matching: true,
+    },
+  },
 ] as const;
 
 let setupPromise: Promise<void> | undefined;
@@ -242,6 +265,12 @@ function getPayloadSchemaType(
   return fieldSchema?.data_type;
 }
 
+function getPayloadIndexType(
+  fieldSchema: (typeof MESSAGE_PAYLOAD_INDEXES)[number]["fieldSchema"],
+): string {
+  return typeof fieldSchema === "string" ? fieldSchema : fieldSchema.type;
+}
+
 export async function ensureMessagePayloadIndexes(): Promise<boolean> {
   if (payloadIndexesPromise) {
     return payloadIndexesPromise;
@@ -258,7 +287,7 @@ export async function ensureMessagePayloadIndexes(): Promise<boolean> {
     for (const { fieldName, fieldSchema } of MESSAGE_PAYLOAD_INDEXES) {
       if (
         getPayloadSchemaType(collectionInfo.payload_schema, fieldName) ===
-        fieldSchema
+        getPayloadIndexType(fieldSchema)
       ) {
         continue;
       }
@@ -342,6 +371,19 @@ function getMessageThreadId(message: RememberedMessage): number | undefined {
   return (
     message.message_thread_id ?? message.reply_to_message?.message_thread_id
   );
+}
+
+function getReplyToMessageId(message: RememberedMessage): number | undefined {
+  const replyMessageId = message.reply_to_message?.message_id;
+
+  if (
+    message.is_topic_message === true &&
+    replyMessageId === message.message_thread_id
+  ) {
+    return undefined;
+  }
+
+  return replyMessageId;
 }
 
 async function getPointId(chatId: number, messageId: number): Promise<string> {
@@ -513,6 +555,7 @@ async function indexMessage(
 
   const date = new Date(message.date * 1000);
   const threadId = getMessageThreadId(message);
+  const replyToMessageId = getReplyToMessageId(message);
   const payload: MessageMetadata = {
     text,
     date: date.toISOString(),
@@ -522,6 +565,9 @@ async function indexMessage(
     chat_id: chatId,
     message_id: message.message_id,
     ...(threadId !== undefined ? { thread_id: threadId } : {}),
+    ...(replyToMessageId !== undefined
+      ? { reply_to_message_id: replyToMessageId }
+      : {}),
   };
 
   await qdrantRequest(getCollectionPath("/points"), {
@@ -550,8 +596,11 @@ async function deleteIndexedMessage(
   });
 }
 
-function getSearchFilter(options: MessageSearchOptions) {
-  const must = [];
+function getSearchFilter(
+  options: MessageSearchOptions,
+  extraMust: Record<string, unknown>[] = [],
+) {
+  const must: Record<string, unknown>[] = [];
 
   if (options.chatId !== undefined) {
     must.push({ key: "chat_id", match: { value: options.chatId } });
@@ -577,6 +626,8 @@ function getSearchFilter(options: MessageSearchOptions) {
     });
   }
 
+  must.push(...extraMust);
+
   return must.length > 0 ? { must } : undefined;
 }
 
@@ -590,60 +641,191 @@ export function isMessageMetadata(
     typeof payload.sender_name === "string" &&
     typeof payload.sender_id === "number" &&
     typeof payload.chat_id === "number" &&
-    typeof payload.message_id === "number"
+    typeof payload.message_id === "number" &&
+    (payload.reply_to_message_id === undefined ||
+      typeof payload.reply_to_message_id === "number")
+  );
+}
+
+type RankedMessageList = {
+  query: string;
+  matchType: MessageSearchMatch;
+  points: Array<QdrantPoint | QdrantScrollPoint>;
+  weight?: number;
+};
+
+type AccumulatedSearchResult = {
+  result: MessageSearchResult;
+  queries: Set<string>;
+  matchTypes: Set<MessageSearchMatch>;
+};
+
+export function fuseRankedMessageLists(
+  lists: readonly RankedMessageList[],
+  limit: number,
+): MessageSearchResult[] {
+  const results = new Map<string, AccumulatedSearchResult>();
+
+  for (const { query, matchType, points, weight = 1 } of lists) {
+    points.forEach((point, rank) => {
+      const payload = point.payload ?? {};
+      if (!isMessageMetadata(payload)) {
+        return;
+      }
+
+      const id = String(point.id);
+      const fusedScore = weight / (RRF_RANK_CONSTANT + rank + 1);
+      const existing = results.get(id);
+
+      if (existing) {
+        existing.result.score += fusedScore;
+        existing.queries.add(query);
+        existing.matchTypes.add(matchType);
+        return;
+      }
+
+      const queries = new Set([query]);
+      const matchTypes = new Set([matchType]);
+      const result: MessageSearchResult = {
+        ...payload,
+        id: point.id,
+        score: fusedScore,
+        queries: [],
+        matched_by: [],
+      };
+      results.set(id, { result, queries, matchTypes });
+    });
+  }
+
+  return [...results.values()]
+    .map(({ result, queries, matchTypes }) => ({
+      ...result,
+      queries: [...queries],
+      matched_by: [...matchTypes],
+    }))
+    .sort(
+      (left, right) =>
+        right.score - left.score || right.date_timestamp - left.date_timestamp,
+    )
+    .slice(0, limit);
+}
+
+async function searchSemanticList(
+  vector: number[],
+  options: MessageSearchOptions,
+  limit: number,
+): Promise<QdrantPoint[]> {
+  const response = await qdrantRequest<QdrantPoint[]>(
+    getCollectionPath("/points/search"),
+    {
+      method: "POST",
+      body: JSON.stringify({
+        vector,
+        limit,
+        with_payload: true,
+        filter: getSearchFilter(options),
+      }),
+    },
+  );
+
+  return response.result;
+}
+
+export function containsExactPhrase(text: string, query: string): boolean {
+  return text
+    .normalize("NFKC")
+    .toLocaleLowerCase()
+    .includes(query.normalize("NFKC").toLocaleLowerCase());
+}
+
+async function searchLexicalList(
+  query: string,
+  matchType: "lexical" | "phrase",
+  options: MessageSearchOptions,
+  limit: number,
+): Promise<QdrantScrollPoint[]> {
+  const response = await qdrantRequest<QdrantScrollResult>(
+    getCollectionPath("/points/scroll"),
+    {
+      method: "POST",
+      body: JSON.stringify({
+        limit,
+        with_payload: true,
+        with_vector: false,
+        filter: getSearchFilter(options, [
+          {
+            key: "text",
+            match: {
+              [matchType === "phrase" ? "phrase" : "text"]: query,
+            },
+          },
+        ]),
+        order_by: {
+          key: "date_timestamp",
+          direction: "desc",
+        },
+      }),
+    },
+  );
+
+  if (matchType !== "phrase") {
+    return response.result.points;
+  }
+
+  return response.result.points.filter((point) =>
+    point.payload?.text === undefined
+      ? false
+      : containsExactPhrase(point.payload.text, query),
   );
 }
 
 export async function search(
   options: MessageSearchOptions,
 ): Promise<MessageSearchResult[]> {
-  const queries = options.queries.map((query) => query.trim()).filter(Boolean);
+  const queries = [
+    ...new Set(options.queries.map((query) => query.trim()).filter(Boolean)),
+  ];
+  const exactPhrases = [
+    ...new Set(
+      (options.exactPhrases ?? []).map((query) => query.trim()).filter(Boolean),
+    ),
+  ];
   const vectors = await embed(queries);
+  if (
+    vectors.length === 0 &&
+    (queries.length > 0 || exactPhrases.length > 0) &&
+    !(await ensureMessagePayloadIndexes())
+  ) {
+    return [];
+  }
   const limit = options.limit ?? DEFAULT_SEARCH_LIMIT;
-  const results = new Map<string, MessageSearchResult>();
+  const branchLimit = Math.max(DEFAULT_SEARCH_LIMIT, limit);
+  const lists = await Promise.all([
+    ...vectors.map(
+      async (vector, index): Promise<RankedMessageList> => ({
+        query: queries[index],
+        matchType: "semantic",
+        points: await searchSemanticList(vector, options, branchLimit),
+      }),
+    ),
+    ...queries.map(
+      async (query): Promise<RankedMessageList> => ({
+        query,
+        matchType: "lexical",
+        points: await searchLexicalList(query, "lexical", options, branchLimit),
+      }),
+    ),
+    ...exactPhrases.map(
+      async (query): Promise<RankedMessageList> => ({
+        query,
+        matchType: "phrase",
+        weight: 2,
+        points: await searchLexicalList(query, "phrase", options, branchLimit),
+      }),
+    ),
+  ]);
 
-  await Promise.all(
-    vectors.map(async (vector, index) => {
-      const response = await qdrantRequest<QdrantPoint[]>(
-        getCollectionPath("/points/search"),
-        {
-          method: "POST",
-          body: JSON.stringify({
-            vector,
-            limit,
-            with_payload: true,
-            filter: getSearchFilter(options),
-          }),
-        },
-      );
-
-      for (const point of response.result) {
-        const payload = point.payload ?? {};
-        if (!isMessageMetadata(payload)) {
-          continue;
-        }
-
-        const id = String(point.id);
-        const existing = results.get(id);
-
-        if (existing) {
-          existing.score = Math.max(existing.score, point.score);
-          existing.queries.push(queries[index]);
-        } else {
-          results.set(id, {
-            ...payload,
-            id: point.id,
-            score: point.score,
-            queries: [queries[index]],
-          });
-        }
-      }
-    }),
-  );
-
-  return [...results.values()]
-    .sort((left, right) => right.score - left.score)
-    .slice(0, limit);
+  return fuseRankedMessageLists(lists, limit);
 }
 
 async function handleIndexMessage(

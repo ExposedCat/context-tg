@@ -19,6 +19,7 @@ export const name = [
 export const MODEL = LLM_DEPLOYMENTS.openMinded;
 export const tools = [
   "search_chat",
+  "get_message_context",
   "read_last_messages",
   "generate_image",
   "send_sticker",

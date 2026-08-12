@@ -21,8 +21,10 @@ import {
 } from "./llm-models.ts";
 import { formatPromptMessageXml } from "./llm-prompt.ts";
 import {
+  executeGetMessageContext,
   executeReadLastMessages,
   executeSearchChat,
+  getMessageContextToolDefinition,
   readLastMessagesToolDefinition,
   searchChatToolDefinition,
 } from "./llm-tools/chat.ts";
@@ -57,6 +59,7 @@ export const TOOL_DEFINITIONS = {
   read_web_page: webSearchTool.readPageToolDefinition,
   get_markets_state: marketTool.toolDefinition,
   search_chat: searchChatToolDefinition,
+  get_message_context: getMessageContextToolDefinition,
   read_last_messages: readLastMessagesToolDefinition,
   get_recent_news: gdeltTool.toolDefinition,
   read_youtube_video: youtubeTool.toolDefinition,
@@ -77,6 +80,7 @@ const FUNCTION_TOOL_RUNNERS = {
   read_web_page: webSearchTool.executeReadPage,
   get_markets_state: marketTool.execute,
   search_chat: executeSearchChat,
+  get_message_context: executeGetMessageContext,
   read_last_messages: executeReadLastMessages,
   get_recent_news: gdeltTool.execute,
   read_youtube_video: youtubeTool.execute,
