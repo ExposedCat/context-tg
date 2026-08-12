@@ -1180,6 +1180,8 @@ const TOOL_USAGE_EMOJIS: Partial<
   generate_image: { id: "5814690801665446789", fallback: "🖼️" },
   schedule_message: { id: "5967412305338568701", fallback: "⏰" },
   cron_message: { id: "5967412305338568701", fallback: "⏰" },
+  get_scheduled_messages: { id: "5967412305338568701", fallback: "⏰" },
+  cancel_scheduled_message: { id: "5877738786971979125", fallback: "🗑️" },
   remember: { id: "5778168620278354602", fallback: "💾" },
   forget: { id: "5877738786971979125", fallback: "🗑️" },
 };
