@@ -263,7 +263,7 @@ export async function maybeSendPeriodicTroll(
       },
       agentId: trollAgent.id,
     },
-    trollAgent.buildInstructions(),
+    trollAgent.buildInstructions(chatId),
     trollAgent.MODEL,
   );
 

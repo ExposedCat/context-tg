@@ -31,18 +31,16 @@ export function buildAgentIdentity(
   return `- You are ${description} named ${formatAgentNames(names)} with a goal to ${goal}`;
 }
 
-const SHARED_RESPONDING_RULES = [
-  "Do not write your `name :` when responding, write the response right away",
-  "When you want to mention somebody, use only their @username without their Name",
-  "This chat supports $$Latex$$, use double dollar sign envelope to wrap formulas.",
-] as const;
-
 export function buildRespondingInstructions(
+  chatId: number,
   rules: readonly string[] = [],
 ): string {
   return [
     "<responding>",
-    ...SHARED_RESPONDING_RULES.map((rule) => `- ${rule}`),
+    "- Do not write your `name :` when responding, write the response right away",
+    "- When you want to mention somebody, use only their @username without their Name",
+    "- This chat supports $$Latex$$, use double dollar sign envelope to wrap formulas.",
+    `- You can use this link format \`https://t.me/c/${chatId}/MESSAGE_ID\`, replacing \`MESSAGE_ID\` with message ID to create a link to the message`
     ...rules.map((rule) => `- ${rule}`),
     "</responding>",
   ].join("\n");

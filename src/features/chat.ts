@@ -1973,7 +1973,7 @@ async function sendRecoveredErrorResponse(
           agentId: agent.id,
           signal,
         },
-        agent.buildInstructions(),
+        agent.buildInstructions(chatId),
         agent.MODEL,
       ),
   );
@@ -2123,7 +2123,7 @@ async function handleChatRequest(
               agentTools,
               responseId,
               requestOptions,
-              agent.buildInstructions(),
+              agent.buildInstructions(chatId),
               agent.MODEL,
             );
           }
@@ -2140,7 +2140,7 @@ async function handleChatRequest(
             agentTools,
             undefined,
             requestOptions,
-            agent.buildInstructions(),
+            agent.buildInstructions(chatId),
             agent.MODEL,
           );
         });
@@ -2529,7 +2529,7 @@ async function handleGuestChatRequest(
         context: toolContext,
         agentId: guestAgent.id,
       },
-      guestAgent.buildInstructions(),
+      guestAgent.buildInstructions(chatId),
       guestAgent.MODEL,
     );
 

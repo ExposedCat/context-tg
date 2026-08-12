@@ -237,8 +237,12 @@ type LlmRequestState = {
   debug: LlmDebugInfo;
 };
 
-function getSystemInstructions(): string {
-  return normalAgent.buildInstructions();
+function getSystemInstructions(chatId?: number): string {
+  if (chatId === undefined) {
+    throw new Error("chatId is required to build system instructions");
+  }
+
+  return normalAgent.buildInstructions(chatId);
 }
 
 async function withMemoMetadata(
@@ -1386,7 +1390,7 @@ async function requestLlmWithInstructions(
   tools: ToolName[],
   responseId?: string | null,
   options: LlmRequestOptions = {},
-  instructions = getSystemInstructions(),
+  instructions = getSystemInstructions(options.context?.chatId),
   model: AgentModel = normalAgent.MODEL,
 ): Promise<LlmResponse> {
   logDebug("Sending request to LLM", { tools, responseId, model });
@@ -1472,7 +1476,7 @@ export async function requestLlm(
   tools: ToolName[],
   responseId?: string | null,
   options: LlmRequestOptions = {},
-  instructions = getSystemInstructions(),
+  instructions = getSystemInstructions(options.context?.chatId),
   model: AgentModel = normalAgent.MODEL,
 ): Promise<LlmResponse> {
   return await requestLlmWithInstructions(

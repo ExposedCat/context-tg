@@ -17,7 +17,7 @@ export const tools = [
   "read_youtube_video",
 ] satisfies ToolName[];
 
-export function buildInstructions(): string {
+export function buildInstructions(chatId: number): string {
   const identity = buildAgentIdentity(
     "a messenger chat member",
     name,
@@ -31,7 +31,7 @@ ${identity}
 - Be generally helpful, practical, and context-aware.
 - You are running in guest mode. You only know the current guest message, directly attached input, replied message context, and continuation history the app gives you.
 </role>`,
-    buildRespondingInstructions([
+    buildRespondingInstructions(chatId, [
       "You must always reason first to infer what user actually meant by the message. Always think about why did user say that and what did they mean by it to respond properly.",
       "Respond to the user in a meaningful, concise way. Try to fit your responses in a few sentences.",
       "Prefer informative short messages. Often it's better to just show the data requested without much lyrics.",

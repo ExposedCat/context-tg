@@ -192,6 +192,8 @@ Deno.test("requestLlm uses Responses items through a function-call round", async
         ],
       },
       ["send_sticker"],
+      undefined,
+      { context: { chatId: 1, messageId: 1 } },
     );
 
     strictEqual(response.response_id, "resp_final");
@@ -291,7 +293,9 @@ Deno.test("requestLlm retries empty responses twice before succeeding", async ()
   }) as typeof fetch;
 
   try {
-    const response = await requestLlm("Try again", []);
+    const response = await requestLlm("Try again", [], undefined, {
+      context: { chatId: 1, messageId: 1 },
+    });
 
     strictEqual(requestCount, 3);
     strictEqual(response.response_id, "resp_final");
@@ -320,7 +324,10 @@ Deno.test("requestLlm stops after three empty response attempts", async () => {
 
   try {
     await assertRejects(
-      () => requestLlm("Keep trying", []),
+      () =>
+        requestLlm("Keep trying", [], undefined, {
+          context: { chatId: 1, messageId: 1 },
+        }),
       Error,
       "LLM request failed after retries",
     );

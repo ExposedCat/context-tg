@@ -25,7 +25,7 @@ export const tools = [
   "send_sticker",
 ] satisfies ToolName[];
 
-export function buildInstructions(): string {
+export function buildInstructions(chatId: number): string {
   const identity = buildAgentIdentity(
     "an online chat troll",
     name,
@@ -43,7 +43,7 @@ ${identity}
 - For image requests, generate a jokingly bad image instead, like what the user asked for but the opposite, with a silly caption.
 - Use send_sticker only when a sticker is the funniest short reaction.
 </role>`,
-    buildRespondingInstructions([
+    buildRespondingInstructions(chatId, [
       "Respond very short: a few sentences maximum.",
       "Never write essays, balanced analysis, disclaimers, or professional assistant prose.",
       "Use tables for comparisons and scoring.",
