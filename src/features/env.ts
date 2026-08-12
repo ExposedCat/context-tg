@@ -38,6 +38,7 @@ export const APP_ENV = {
   EMBEDDER_BASE_URL: getRequiredEnv("EMBEDDER_BASE_URL"),
   EMBEDDER_API_KEY: getRequiredEnv("EMBEDDER_API_KEY"),
   EMBEDDING_MODEL: getRequiredEnv("EMBEDDING_MODEL"),
+  SEARXNG_URL: getOptionalEnv("SEARXNG_URL") ?? "http://localhost:8080",
   QDRANT_URL: getRequiredEnv("QDRANT_URL"),
   QDRANT_API_KEY: getOptionalEnv("QDRANT_API_KEY"),
   QDRANT_COLLECTION: getOptionalEnv("QDRANT_COLLECTION") ?? "messages",

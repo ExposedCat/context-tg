@@ -1,0 +1,33 @@
+use_default_settings:
+  engines:
+    keep_only:
+      - google images
+
+general:
+  debug: false
+  instance_name: Context TG Image Search
+  enable_metrics: false
+
+search:
+  safe_search: 0
+  autocomplete: ""
+  favicon_resolver: ""
+  formats:
+    - json
+
+server:
+  secret_key: context-tg-internal-image-search
+  limiter: false
+  public_instance: false
+  image_proxy: false
+  method: GET
+
+valkey:
+  url: false
+
+plugins: {}
+
+engines:
+  - name: google images
+    inactive: false
+    disabled: false

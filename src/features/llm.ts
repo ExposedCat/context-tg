@@ -30,6 +30,7 @@ import {
 } from "./llm-tools/chat.ts";
 import * as gdeltTool from "./llm-tools/gdelt.ts";
 import * as imageTool from "./llm-tools/image.ts";
+import * as imageSearchTool from "./llm-tools/image-search.ts";
 import * as marketTool from "./llm-tools/market.ts";
 import * as memoTool from "./llm-tools/memos.ts";
 import * as replyTool from "./llm-tools/reply.ts";
@@ -41,6 +42,7 @@ import type {
   FunctionToolResult,
   FunctionToolRunner,
   LlmGeneratedImage,
+  LlmImageInput,
   LlmSticker,
   LlmToolContext,
 } from "./llm-tools/types.ts";
@@ -51,6 +53,7 @@ import { buildMemosMetadataSection } from "./memos.ts";
 export type { LlmReport } from "./llm-tools/reports.ts";
 export type {
   LlmGeneratedImage,
+  LlmImageInput,
   LlmSticker,
   LlmToolContext,
 } from "./llm-tools/types.ts";
@@ -58,6 +61,8 @@ export type {
 export const TOOL_DEFINITIONS = {
   web_search: webSearchTool.toolDefinition,
   read_web_page: webSearchTool.readPageToolDefinition,
+  search_images: imageSearchTool.toolDefinition,
+  read_image: imageSearchTool.readImageToolDefinition,
   get_markets_state: marketTool.toolDefinition,
   search_chat: searchChatToolDefinition,
   get_message_context: getMessageContextToolDefinition,
@@ -82,6 +87,8 @@ export type ToolName = keyof typeof TOOL_DEFINITIONS;
 const FUNCTION_TOOL_RUNNERS = {
   web_search: webSearchTool.execute,
   read_web_page: webSearchTool.executeReadPage,
+  search_images: imageSearchTool.execute,
+  read_image: imageSearchTool.executeReadImage,
   get_markets_state: marketTool.execute,
   search_chat: executeSearchChat,
   get_message_context: executeGetMessageContext,
@@ -117,11 +124,6 @@ export type LlmRequestOptions = {
   onProgress?: (progress: LlmProgress) => void | Promise<void>;
   onWarning?: (details: string) => void | Promise<void>;
   signal?: AbortSignal;
-};
-
-export type LlmImageInput = {
-  image_url: string;
-  detail?: "low" | "high" | "auto" | "original";
 };
 
 export type LlmRequestMessageInput =
@@ -787,6 +789,7 @@ function isEmptyResponseError(error: unknown): boolean {
 function createToolOutput(
   call: FunctionToolCall,
   output: string,
+  inputImages: LlmImageInput[] = [],
 ): FunctionCallOutput {
   logDebug("Tool call response", {
     callId: call.call_id,
@@ -794,10 +797,18 @@ function createToolOutput(
     output,
   });
 
+  const formattedOutput = formatToolResponseContent(call.name, output);
+
   return {
     type: "function_call_output",
     call_id: call.call_id,
-    output: formatToolResponseContent(call.name, output),
+    output:
+      inputImages.length > 0
+        ? [
+            { type: "input_text", text: formattedOutput },
+            ...inputImages.map(createImageContentPart),
+          ]
+        : formattedOutput,
   };
 }
 
@@ -822,6 +833,7 @@ function formatToolResponseContent(tool: string, output: string): string {
   const attributes = [
     `tool="${escapeXmlAttribute(tool)}"`,
     ...(tool === "web_search" ? ['required_next_tool="read_web_page"'] : []),
+    ...(tool === "search_images" ? ['required_next_tool="read_image"'] : []),
   ].join(" ");
   const body = MARKDOWN_TOOL_OUTPUTS.has(tool)
     ? output
@@ -937,7 +949,7 @@ async function runFunctionToolCall(
   }
 
   return {
-    toolOutput: createToolOutput(call, result.output),
+    toolOutput: createToolOutput(call, result.output, result.inputImages),
   };
 }
 

@@ -23,12 +23,14 @@ services:
       DENO_DIR: /deno-dir
       DEBUG: app:*:warn,app:*:error
       QDRANT_URL: http://qdrant:6333
+      SEARXNG_URL: http://searxng:8080
       TZ: Europe/Prague
     volumes:
       - .:/app:Z
       - deno_cache:/deno-dir
     depends_on:
       - qdrant
+      - searxng
     restart: unless-stopped
 
   qdrant:
@@ -40,6 +42,20 @@ services:
       - "6334:6334"
     volumes:
       - qdrant_data:/qdrant/storage
+
+  searxng:
+    image: docker.io/searxng/searxng:2026.7.28-c01178d03
+    environment:
+      SEARXNG_BIND_ADDRESS: 0.0.0.0
+      SEARXNG_IMAGE_PROXY: "false"
+      SEARXNG_LIMITER: "false"
+      SEARXNG_PORT: 8080
+      SEARXNG_PUBLIC_INSTANCE: "false"
+    ports:
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - ./searxng/settings.yml:/etc/searxng/settings.yml:ro,Z
+    restart: unless-stopped
 
 volumes:
   deno_cache:

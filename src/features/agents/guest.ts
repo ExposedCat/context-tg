@@ -14,6 +14,8 @@ export const MODEL = LLM_DEPLOYMENTS.small;
 export const tools = [
   "web_search",
   "read_web_page",
+  "search_images",
+  "read_image",
   "read_youtube_video",
 ] satisfies ToolName[];
 

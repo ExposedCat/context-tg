@@ -300,6 +300,83 @@ Deno.test("requestLlm uses Responses items through a function-call round", async
   }
 });
 
+Deno.test("read_image returns an image in the function-call output", async () => {
+  setLlmDeploymentName("small", "test-model");
+  const requests: Array<Record<string, unknown>> = [];
+  const originalFetch = globalThis.fetch;
+
+  globalThis.fetch = (async (input, init) => {
+    const request = new Request(input, init);
+    requests.push((await request.json()) as Record<string, unknown>);
+
+    const body =
+      requests.length === 1
+        ? createApiResponse("resp_read_image", [
+            {
+              id: "fc_read_image",
+              type: "function_call",
+              call_id: "call_read_image",
+              name: "read_image",
+              arguments: '{"url":"https://images.example.com/cat.jpg"}',
+              status: "completed",
+            },
+          ])
+        : createApiResponse("resp_final", [
+            {
+              id: "msg_final",
+              type: "message",
+              role: "assistant",
+              status: "completed",
+              content: [
+                {
+                  type: "output_text",
+                  text: "It is an orange cat.",
+                  annotations: [],
+                },
+              ],
+            },
+          ]);
+
+    return new Response(JSON.stringify(body), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  }) as typeof fetch;
+
+  try {
+    const response = await requestLlm(
+      "Inspect the image",
+      ["read_image"],
+      undefined,
+      { context: { chatId: 1, messageId: 1 } },
+    );
+
+    strictEqual(response.response, "It is an orange cat.");
+    strictEqual(requests.length, 2);
+
+    const secondInput = requests[1].input as Array<Record<string, unknown>>;
+    const functionOutput = secondInput[2];
+    strictEqual(functionOutput.type, "function_call_output");
+    deepStrictEqual(functionOutput.output, [
+      {
+        type: "input_text",
+        text: [
+          '<tool_response tool="read_image">',
+          '{"image_url":"https://images.example.com/cat.jpg","loaded":true}',
+          "</tool_response>",
+        ].join("\n"),
+      },
+      {
+        type: "input_image",
+        image_url: "https://images.example.com/cat.jpg",
+        detail: "auto",
+      },
+    ]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 Deno.test("requestLlm retries empty responses twice before succeeding", async () => {
   setLlmDeploymentName("small", "test-model");
   let requestCount = 0;

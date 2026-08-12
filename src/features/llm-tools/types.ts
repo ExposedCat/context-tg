@@ -19,12 +19,18 @@ export type LlmGeneratedImage = {
   mimeType?: string;
 };
 
+export type LlmImageInput = {
+  image_url: string;
+  detail?: "low" | "high" | "auto" | "original";
+};
+
 export type LlmSticker = {
   emoji: string;
 };
 
 export type FunctionToolResult = {
   output: string;
+  inputImages?: LlmImageInput[];
   replyMessageId?: number | null;
   image?: LlmGeneratedImage;
   sticker?: LlmSticker;

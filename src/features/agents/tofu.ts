@@ -14,6 +14,8 @@ export const MODEL = LLM_DEPLOYMENTS.small;
 export const tools = [
   "web_search",
   "read_web_page",
+  "search_images",
+  "read_image",
   "search_chat",
   "get_message_context",
   "read_last_messages",
