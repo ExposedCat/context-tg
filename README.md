@@ -24,10 +24,12 @@ before and after the target and marks whether the target itself was found.
 ## Image search
 
 Compose runs an internal SearXNG service for `search_images`. It exposes only
-JSON search responses, loads only the Google Images engine, and has no limiter,
-Valkey, plugins, metrics, autocomplete, favicon lookup, or image proxy. The
-service is reachable by the bot over the Compose network and is bound only to
-host loopback on port 8080 for local development; it is not publicly exposed.
+JSON search responses and loads only the Google, Brave, Bing, and DuckDuckGo
+image engines. Failed engines are ignored while results from successful engines
+are returned. The service has no limiter, engine suspension, Valkey, plugins,
+metrics, autocomplete, favicon lookup, or image proxy. It is reachable by the
+bot over the Compose network and bound only to host loopback on port 8080 for
+local development; it is not publicly exposed.
 Its configuration is baked into the local image so SELinux labels on the bot's
 repository bind mount cannot make the settings unreadable to SearXNG.
 

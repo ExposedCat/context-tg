@@ -23,7 +23,7 @@ const { execute, executeReadImage, executeSendImage } = await import(
   "./image-search.ts"
 );
 
-Deno.test("search_images queries only Google Images JSON and normalizes results", async () => {
+Deno.test("search_images queries all image engines and ignores failed engines", async () => {
   const originalFetch = globalThis.fetch;
 
   globalThis.fetch = (async (input, init) => {
@@ -33,12 +33,19 @@ Deno.test("search_images queries only Google Images JSON and normalizes results"
     strictEqual(url.searchParams.get("q"), "orange cat");
     strictEqual(url.searchParams.get("format"), "json");
     strictEqual(url.searchParams.get("categories"), "images");
-    strictEqual(url.searchParams.get("engines"), "google images");
+    strictEqual(
+      url.searchParams.get("engines"),
+      "google images,brave.images,bing images,duckduckgo images",
+    );
     strictEqual(request.headers.get("accept"), "application/json");
     strictEqual(request.headers.get("x-real-ip"), "127.0.0.1");
 
     return new Response(
       JSON.stringify({
+        unresponsive_engines: [
+          ["google images", "HTTP error 403"],
+          ["duckduckgo images", "CAPTCHA"],
+        ],
         results: [
           {
             title: "Orange cat",
@@ -48,7 +55,7 @@ Deno.test("search_images queries only Google Images JSON and normalizes results"
             img_src: "https://images.example.com/cat.jpg",
             thumbnail_src: "https://images.example.com/cat-thumb.jpg",
             resolution: "1200 x 800",
-            engine: "google images",
+            engine: "bing images",
             score: 1,
           },
           { title: "Missing image URL" },

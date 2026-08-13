@@ -5,20 +5,26 @@ import { asRecord, getJsonError, getString } from "./utils.ts";
 
 const SEARCH_REQUEST_TIMEOUT_MS = 20_000;
 const MAX_IMAGE_SEARCH_RESULTS = 10;
+const IMAGE_SEARCH_ENGINES = [
+  "google images",
+  "brave.images",
+  "bing images",
+  "duckduckgo images",
+] as const;
 const logError = createDebug("app:llm-tools:image-search:error");
 
 export const toolDefinition = {
   type: "function",
   name: "search_images",
   description:
-    "Search Google Images for relevant images. Returns a JSON array with direct image_url values and their source pages. Always inspect a relevant result with read_image before making claims about what the image contains.",
+    "Search multiple image search providers for relevant images. Returns successful results as a JSON array with direct image_url values and their source pages; failed providers are ignored. Always inspect a relevant result with read_image before making claims about what the image contains.",
   parameters: {
     type: "object",
     properties: {
       query: {
         type: "string",
         description:
-          "The Google Images search query. Prefer a focused query in English.",
+          "The image search query. Prefer a focused query in English.",
       },
     },
     required: ["query"],
@@ -135,7 +141,7 @@ async function searchImages(
   apiUrl.searchParams.set("q", query);
   apiUrl.searchParams.set("format", "json");
   apiUrl.searchParams.set("categories", "images");
-  apiUrl.searchParams.set("engines", "google images");
+  apiUrl.searchParams.set("engines", IMAGE_SEARCH_ENGINES.join(","));
 
   const controller = new AbortController();
   const abort = () => controller.abort();
