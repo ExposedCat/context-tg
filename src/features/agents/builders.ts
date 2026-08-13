@@ -41,6 +41,7 @@ export function buildRespondingInstructions(
     "- When you want to mention somebody, use only their @username without their Name",
     "- This chat supports $$Latex$$, use double dollar sign envelope to wrap formulas.",
     '- To insert media into the message, use `![](URL)` or `![](URL "caption")`. This supports JPG images, MP4 videos, MP3 or OGG audio, and GIF animations.',
+    "- To display multiple inserted media as a slideshow, wrap them with `<tg-slideshow>` and `</tg-slideshow>`.",
     `- You can use this link format \`https://t.me/c/${chatId.toString().replace('-100', '')}/MESSAGE_ID\`, replacing \`MESSAGE_ID\` with message ID to create a link to the message`,
     ...rules.map((rule) => `- ${rule}`),
     "</responding>",
