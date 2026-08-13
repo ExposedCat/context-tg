@@ -149,7 +149,10 @@ async function searchImages(
 
   try {
     const response = await fetch(apiUrl, {
-      headers: { Accept: "application/json" },
+      headers: {
+        Accept: "application/json",
+        "X-Real-IP": "127.0.0.1",
+      },
       signal: controller.signal,
     });
     const text = await response.text();

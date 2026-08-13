@@ -44,7 +44,10 @@ services:
       - qdrant_data:/qdrant/storage
 
   searxng:
-    image: docker.io/searxng/searxng:2026.7.28-c01178d03
+    build:
+      context: ./searxng
+      dockerfile: Containerfile
+    image: context-tg-searxng:2026.7.28-c01178d03
     environment:
       SEARXNG_BIND_ADDRESS: 0.0.0.0
       SEARXNG_IMAGE_PROXY: "false"
@@ -53,8 +56,6 @@ services:
       SEARXNG_PUBLIC_INSTANCE: "false"
     ports:
       - "127.0.0.1:8080:8080"
-    volumes:
-      - ./searxng/settings.yml:/etc/searxng/settings.yml:ro,Z
     restart: unless-stopped
 
 volumes:

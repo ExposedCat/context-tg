@@ -28,6 +28,8 @@ JSON search responses, loads only the Google Images engine, and has no limiter,
 Valkey, plugins, metrics, autocomplete, favicon lookup, or image proxy. The
 service is reachable by the bot over the Compose network and is bound only to
 host loopback on port 8080 for local development; it is not publicly exposed.
+Its configuration is baked into the local image so SELinux labels on the bot's
+repository bind mount cannot make the settings unreadable to SearXNG.
 
 `search_images` returns direct `image_url` values and source metadata. The agent
 then calls `read_image` with one of those URLs to provide the selected image to

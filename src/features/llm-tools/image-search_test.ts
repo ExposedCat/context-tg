@@ -26,13 +26,16 @@ const { execute, executeReadImage, executeSendImage } = await import(
 Deno.test("search_images queries only Google Images JSON and normalizes results", async () => {
   const originalFetch = globalThis.fetch;
 
-  globalThis.fetch = (async (input) => {
-    const url = new URL(String(input));
+  globalThis.fetch = (async (input, init) => {
+    const request = new Request(input, init);
+    const url = new URL(request.url);
     strictEqual(url.href.startsWith("http://searxng.test:8080/search?"), true);
     strictEqual(url.searchParams.get("q"), "orange cat");
     strictEqual(url.searchParams.get("format"), "json");
     strictEqual(url.searchParams.get("categories"), "images");
     strictEqual(url.searchParams.get("engines"), "google images");
+    strictEqual(request.headers.get("accept"), "application/json");
+    strictEqual(request.headers.get("x-real-ip"), "127.0.0.1");
 
     return new Response(
       JSON.stringify({

@@ -1,0 +1,4 @@
+FROM docker.io/searxng/searxng:2026.7.28-c01178d03
+
+COPY --chown=searxng:searxng --chmod=0444 settings.yml /etc/searxng/settings.yml
+COPY --chown=searxng:searxng --chmod=0444 limiter.toml /etc/searxng/limiter.toml
