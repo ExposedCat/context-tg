@@ -377,6 +377,102 @@ Deno.test("read_image returns an image in the function-call output", async () =>
   }
 });
 
+Deno.test("read_image download failure is reported to the agent as unavailable", async () => {
+  setLlmDeploymentName("small", "test-model");
+  const requests: Array<Record<string, unknown>> = [];
+  const originalFetch = globalThis.fetch;
+
+  globalThis.fetch = (async (input, init) => {
+    const request = new Request(input, init);
+    requests.push((await request.json()) as Record<string, unknown>);
+
+    if (requests.length === 1) {
+      return new Response(
+        JSON.stringify(
+          createApiResponse("resp_read_image", [
+            {
+              id: "fc_read_image",
+              type: "function_call",
+              call_id: "call_read_image",
+              name: "read_image",
+              arguments: '{"url":"https://images.example.com/blocked.jpg"}',
+              status: "completed",
+            },
+          ]),
+        ),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }
+
+    if (requests.length === 2) {
+      return new Response(
+        JSON.stringify({
+          error: {
+            code: "invalid_value",
+            type: "invalid_request_error",
+            message: "Error while downloading file. Upstream status code: 403.",
+          },
+        }),
+        { status: 400, headers: { "content-type": "application/json" } },
+      );
+    }
+
+    return new Response(
+      JSON.stringify(
+        createApiResponse("resp_final", [
+          {
+            id: "msg_final",
+            type: "message",
+            role: "assistant",
+            status: "completed",
+            content: [
+              {
+                type: "output_text",
+                text: "That image is unavailable, so I could not inspect it.",
+                annotations: [],
+              },
+            ],
+          },
+        ]),
+      ),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
+  }) as typeof fetch;
+
+  try {
+    const response = await requestLlm(
+      "Inspect the image",
+      ["read_image"],
+      undefined,
+      { context: { chatId: 1, messageId: 1 } },
+    );
+
+    strictEqual(
+      response.response,
+      "That image is unavailable, so I could not inspect it.",
+    );
+    strictEqual(requests.length, 3);
+
+    const failedInput = requests[1].input as Array<Record<string, unknown>>;
+    const failedOutput = failedInput[2];
+    strictEqual(Array.isArray(failedOutput.output), true);
+
+    const recoveredInput = requests[2].input as Array<Record<string, unknown>>;
+    const recoveredOutput = recoveredInput[2];
+    strictEqual(recoveredOutput.type, "function_call_output");
+    strictEqual(
+      recoveredOutput.output,
+      [
+        '<tool_response tool="read_image">',
+        '{"error":"Image unavailable","details":"The vision service could not download this image. Try another image result or tell the user it is unavailable."}',
+        "</tool_response>",
+      ].join("\n"),
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 Deno.test("requestLlm retries empty responses twice before succeeding", async () => {
   setLlmDeploymentName("small", "test-model");
   let requestCount = 0;

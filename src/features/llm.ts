@@ -232,6 +232,8 @@ const RETRIABLE_EMPTY_RESPONSE_DETAILS = new Set([
   "empty response",
   "missing output",
 ]);
+const IMAGE_DOWNLOAD_ERROR_PATTERN =
+  /error while downloading (?:file|image)|upstream status code:\s*(?:401|403|404|410)/i;
 const MARKDOWN_TOOL_OUTPUTS = new Set<string>(["read_web_page"]);
 
 type LlmRequestState = {
@@ -812,6 +814,58 @@ function createToolOutput(
   };
 }
 
+function recoverUnavailableReadImageInput(
+  input: LlmApiInput,
+  state: LlmRequestState,
+  error: unknown,
+): LlmApiInput | undefined {
+  if (!IMAGE_DOWNLOAD_ERROR_PATTERN.test(getErrorDetail(error))) {
+    return undefined;
+  }
+
+  const readImageCallIds = new Set(
+    state.inputItems.flatMap((item) =>
+      item.type === "function_call" && item.name === "read_image"
+        ? [item.call_id]
+        : [],
+    ),
+  );
+  const recoveredCallIds: string[] = [];
+  const recoveredInput = input.map((item) => {
+    if (
+      item.type !== "function_call_output" ||
+      !readImageCallIds.has(item.call_id) ||
+      !Array.isArray(item.output) ||
+      !item.output.some((part) => part.type === "input_image")
+    ) {
+      return item;
+    }
+
+    recoveredCallIds.push(item.call_id);
+    return {
+      ...item,
+      output: formatToolResponseContent(
+        "read_image",
+        JSON.stringify({
+          error: "Image unavailable",
+          details:
+            "The vision service could not download this image. Try another image result or tell the user it is unavailable.",
+        }),
+      ),
+    };
+  });
+
+  if (recoveredCallIds.length === 0) {
+    return undefined;
+  }
+
+  logError("Vision service could not download read_image input", {
+    callIds: recoveredCallIds,
+    error,
+  });
+  return recoveredInput;
+}
+
 function isJsonContent(content: string): boolean {
   try {
     JSON.parse(content);
@@ -1203,6 +1257,7 @@ async function createLlmResponseWithRetries(
   },
 ): Promise<ApiResponse> {
   let lastError: unknown;
+  let currentInput = input;
   let currentResponseId = responseId;
   let retryAttempts = 0;
   let emptyResponseRetries = 0;
@@ -1215,7 +1270,7 @@ async function createLlmResponseWithRetries(
     try {
       const response = await createLlmResponse(
         client,
-        input,
+        currentInput,
         tools,
         state.inputItems,
         model,
@@ -1233,7 +1288,7 @@ async function createLlmResponseWithRetries(
       state.receivedResponse = true;
       currentResponseId = await recordResponse(
         response,
-        input,
+        currentInput,
         state,
         currentResponseId,
         options,
@@ -1242,6 +1297,17 @@ async function createLlmResponseWithRetries(
       return response;
     } catch (error) {
       lastError = error;
+      const recoveredInput = recoverUnavailableReadImageInput(
+        currentInput,
+        state,
+        error,
+      );
+
+      if (recoveredInput) {
+        currentInput = recoveredInput;
+        continue;
+      }
+
       const rateLimited = isRateLimitError(error);
       const contentFiltered = isContentFilterError(error);
       const emptyResponse = isEmptyResponseError(error);
