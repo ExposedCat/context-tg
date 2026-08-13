@@ -1613,14 +1613,22 @@ function getReplyDeliveryOptions(
   replyMessageId: number | null | undefined,
 ): {
   message_thread_id?: number;
-  reply_parameters?: { message_id: number };
+  reply_parameters?: {
+    message_id: number;
+    allow_sending_without_reply: true;
+  };
 } {
   const targetMessageId =
     replyMessageId === undefined ? message.message_id : replyMessageId;
 
   return targetMessageId === null
     ? { message_thread_id: message.message_thread_id }
-    : { reply_parameters: { message_id: targetMessageId } };
+    : {
+        reply_parameters: {
+          message_id: targetMessageId,
+          allow_sending_without_reply: true,
+        },
+      };
 }
 
 async function sendReportResponse(

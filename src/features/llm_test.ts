@@ -242,14 +242,14 @@ Deno.test("requestLlm uses Responses items through a function-call round", async
         type: "function",
         name: "set_reply_message_id",
         description:
-          "Set the Telegram message that the final response replies to. This is optional: by default the response replies to the latest user message. Call this only before the final response when you need to change its reply target. Pass null to explicitly send without replying to any message.",
+          "Set the Telegram message that the final response replies to. This is optional: by default the response replies to the latest user message. Call this only before the final response when you need to change its reply target. Only use a message ID explicitly provided in the conversation context or a tool result; never guess or invent one. Pass null to explicitly send without replying to any message.",
         parameters: {
           type: "object",
           properties: {
             message_id: {
               type: ["integer", "null"],
               description:
-                "The Telegram message id to reply to, or null to send without replying.",
+          "The explicitly known Telegram message id to reply to, or null to send without replying. Never guess or invent an id. Default: last user message.",
               minimum: 1,
             },
           },
