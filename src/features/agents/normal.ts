@@ -16,7 +16,6 @@ export const tools = [
   "read_web_page",
   "search_images",
   "read_image",
-  "send_image",
   "search_chat",
   "get_message_context",
   "read_last_messages",

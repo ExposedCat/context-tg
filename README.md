@@ -35,5 +35,5 @@ repository bind mount cannot make the settings unreadable to SearXNG.
 
 `search_images` returns direct `image_url` values and source metadata. The agent
 then calls `read_image` with one of those URLs to provide the selected image to
-the vision model. When the image should be delivered to the chat, `send_image`
-attaches that existing URL through the same response path as `generate_image`.
+the vision model. Existing JPG, MP4, MP3, OGG, and GIF URLs can be inserted into
+a response with `![](URL)` or `![](URL "caption")`.
