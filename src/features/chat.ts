@@ -1171,8 +1171,8 @@ const TOOL_USAGE_EMOJIS: Partial<
 > = {
   web_search: { id: "5879585266426973039", fallback: "🌐" },
   read_web_page: { id: "5960551395730919906", fallback: "📝" },
-  search_images: { id: "5814690801665446789", fallback: "🖼️" },
-  read_image: { id: "5814690801665446789", fallback: "🖼️" },
+  search_images: { id: "5776134897429122849", fallback: "🌐" },
+  read_image: { id: "5775949822993371030", fallback: "🖼" },
   send_image: { id: "5814690801665446789", fallback: "🖼️" },
   search_chat: { id: "5874960879434338403", fallback: "🔎" },
   read_last_messages: { id: "5891169510483823323", fallback: "💬" },
@@ -1184,8 +1184,8 @@ const TOOL_USAGE_EMOJIS: Partial<
   generate_image: { id: "5814690801665446789", fallback: "🖼️" },
   schedule_message: { id: "5967412305338568701", fallback: "⏰" },
   cron_message: { id: "5967412305338568701", fallback: "⏰" },
-  get_scheduled_messages: { id: "5967412305338568701", fallback: "⏰" },
-  cancel_scheduled_message: { id: "5877738786971979125", fallback: "🗑️" },
+  get_scheduled_messages: { id: "5967782394080530708", fallback: "📅" },
+  cancel_scheduled_message: { id: "5967382867632722656", fallback: "📅" },
   remember: { id: "5778168620278354602", fallback: "💾" },
   forget: { id: "5877738786971979125", fallback: "🗑️" },
 };
