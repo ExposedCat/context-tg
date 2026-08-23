@@ -1019,6 +1019,25 @@ function getLocalResponseId(response: ApiResponse): string {
   return response.id || `resp-local-${crypto.randomUUID()}`;
 }
 
+async function saveFailedResponseInputCheckpoint(
+  input: LlmApiInput,
+  previousResponseId: string | undefined,
+  state: LlmRequestState,
+  options: LlmRequestOptions,
+): Promise<string> {
+  const responseId = `resp-local-${crypto.randomUUID()}`;
+  const inputItems = closePendingToolCalls([
+    ...state.inputItems,
+    ...cloneResponseInputItems(input),
+  ]);
+
+  state.inputItems = inputItems;
+  state.lastResponseId = responseId;
+  await saveResponseInput(responseId, previousResponseId, inputItems, options);
+
+  return responseId;
+}
+
 function createInterruptedToolOutput(
   toolCallId: string,
   toolName = "unknown",
@@ -1347,11 +1366,17 @@ async function createLlmResponseWithRetries(
       }
 
       if (immediate && !contentFiltered && !emptyResponse) {
+        const checkpointResponseId = await saveFailedResponseInputCheckpoint(
+          currentInput,
+          currentResponseId,
+          state,
+          options,
+        );
         throw new LlmRequestError(
           "LLM request failed immediately",
           getErrorDetail(error),
           "error",
-          state.lastResponseId,
+          checkpointResponseId,
         );
       }
 
@@ -1372,11 +1397,18 @@ async function createLlmResponseWithRetries(
     }
   }
 
+  const checkpointResponseId = await saveFailedResponseInputCheckpoint(
+    currentInput,
+    currentResponseId,
+    state,
+    options,
+  );
+
   throw new LlmRequestError(
     "LLM request failed after retries",
     getErrorDetail(lastError),
     "error",
-    state.lastResponseId,
+    checkpointResponseId,
   );
 }
 

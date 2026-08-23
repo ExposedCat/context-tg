@@ -1932,6 +1932,35 @@ async function saveResumableTaskThread(
   }
 }
 
+async function saveContinuationMessageThread(
+  ctx: Context,
+  chatId: number,
+  messageId: number,
+  threadId: number,
+  agent: AgentDefinition,
+  responseId: string | undefined,
+): Promise<void> {
+  if (!responseId) {
+    return;
+  }
+
+  try {
+    await saveThread(ctx.database, {
+      chat_id: chatId,
+      message_id: messageId,
+      thread_id: threadId,
+      response_id: responseId,
+      agent_id: agent.id,
+    });
+  } catch (error) {
+    logError("Failed to link continuation message to thread:", {
+      messageId,
+      responseId,
+      error,
+    });
+  }
+}
+
 async function saveRecoveredResponseThread(
   ctx: Context,
   chatId: number,
@@ -1982,6 +2011,7 @@ async function sendRecoveredErrorResponse(
   threadId: number,
   agent: AgentDefinition,
   error: unknown,
+  responseId: string | undefined,
   signal: AbortSignal,
   saveOriginalMessageThread: boolean,
 ): Promise<void> {
@@ -1992,7 +2022,7 @@ async function sendRecoveredErrorResponse(
       await requestLlm(
         formatSystemPromptMessageXml(getErrorRecoveryPrompt(taskText, error)),
         [],
-        undefined,
+        responseId,
         {
           database: ctx.database,
           context: toolContext,
@@ -2099,6 +2129,12 @@ async function handleChatRequest(
     const agent: AgentDefinition = explicitAgent ?? threadAgent;
     activeAgent = agent;
     const requestedTools = options.tools ?? agent.tools;
+    const responseId =
+      thread?.response_id &&
+      (!explicitAgent || explicitAgent.id === threadAgent.id)
+        ? thread.response_id
+        : undefined;
+    progressResponseId = responseId;
     const toolUsage = await getUsageStatus(ctx.database, chatId, "tool_usages");
 
     if (requestedTools.length > 0 && toolUsage.used >= toolUsage.quota) {
@@ -2114,11 +2150,6 @@ async function handleChatRequest(
       toolUsageRemaining: toolUsage.used < toolUsage.quota,
       imageUsageRemaining,
     });
-    const responseId =
-      thread?.response_id &&
-      (!explicitAgent || explicitAgent.id === threadAgent.id)
-        ? thread.response_id
-        : undefined;
     const toolContext = getLlmToolContext(chatId, message);
     const slowResponseReaction = createSlowResponseReactionTracker(ctx);
     const llmResponse = await (async () => {
@@ -2333,12 +2364,20 @@ async function handleChatRequest(
         ? `Canceled. Resume: ${getResumeCommand(message.message_id)}`
         : "Canceled.";
 
-      await ctx.reply(canceledResponse, {
+      const sentMessage = await ctx.reply(canceledResponse, {
         ...linkPreviewOptions,
         reply_parameters: {
           message_id: message.message_id,
         },
       });
+      await saveContinuationMessageThread(
+        ctx,
+        chatId,
+        sentMessage.message_id,
+        threadId,
+        activeAgent,
+        resumableResponseId,
+      );
       return;
     }
 
@@ -2354,6 +2393,7 @@ async function handleChatRequest(
           threadId,
           activeAgent,
           error,
+          resumableResponseId,
           taskAbortController.signal,
           !resumable,
         );
@@ -2375,10 +2415,18 @@ async function handleChatRequest(
       resumable ? getResumeCommand(message.message_id) : undefined,
     );
 
-    await ctx.reply(errorResponse, {
+    const sentMessage = await ctx.reply(errorResponse, {
       ...linkPreviewOptions,
       parse_mode: "HTML",
     });
+    await saveContinuationMessageThread(
+      ctx,
+      chatId,
+      sentMessage.message_id,
+      threadId,
+      activeAgent,
+      resumableResponseId,
+    );
     await options.onUnhandledError?.();
   } finally {
     deleteTaskAbortController(taskKey);

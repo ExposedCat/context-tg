@@ -24,10 +24,8 @@ for (const [name, value] of Object.entries(TEST_ENV)) {
   Deno.env.set(name, value);
 }
 
-const [{ requestLlm }, { setLlmDeploymentName }] = await Promise.all([
-  import("./llm.ts"),
-  import("./llm-deployments.ts"),
-]);
+const [{ LlmRequestError, requestLlm }, { setLlmDeploymentName }] =
+  await Promise.all([import("./llm.ts"), import("./llm-deployments.ts")]);
 
 type ResponseOutput =
   | {
@@ -249,7 +247,7 @@ Deno.test("requestLlm uses Responses items through a function-call round", async
             message_id: {
               type: ["integer", "null"],
               description:
-          "The explicitly known Telegram message id to reply to, or null to send without replying. Never guess or invent an id. Default: last user message.",
+                "The explicitly known Telegram message id to reply to, or null to send without replying. Never guess or invent an id. Default: last user message.",
               minimum: 1,
             },
           },
@@ -541,6 +539,130 @@ Deno.test("requestLlm stops after three empty response attempts", async () => {
       "LLM request failed after retries",
     );
     strictEqual(requestCount, 3);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+Deno.test("failed tool follow-up preserves the complete context for the next turn", async () => {
+  setLlmDeploymentName("small", "test-model");
+  const requests: Array<Record<string, unknown>> = [];
+  const originalFetch = globalThis.fetch;
+  let resumeFromCheckpoint = false;
+
+  globalThis.fetch = (async (input, init) => {
+    const request = new Request(input, init);
+    requests.push((await request.json()) as Record<string, unknown>);
+
+    let body: Record<string, unknown>;
+
+    if (requests.length === 1) {
+      body = createApiResponse("resp_context_before_error", [
+        {
+          id: "msg_context_before_error",
+          type: "message",
+          role: "assistant",
+          status: "completed",
+          content: [
+            {
+              type: "output_text",
+              text: "I will remember the pineapple.",
+              annotations: [],
+            },
+          ],
+        },
+      ]);
+    } else if (requests.length === 2) {
+      body = createApiResponse("resp_tool_before_error", [
+        {
+          id: "fc_before_error",
+          type: "function_call",
+          call_id: "call_before_error",
+          name: "send_sticker",
+          arguments: '{"emoji":"👍"}',
+          status: "completed",
+        },
+      ]);
+    } else if (!resumeFromCheckpoint) {
+      body = {
+        ...createApiResponse("resp_failed_tool_follow_up", []),
+        status: "failed",
+        error: {
+          code: "server_error",
+          message: "Tool follow-up failed",
+        },
+      };
+    } else {
+      body = createApiResponse("resp_after_error", [
+        {
+          id: "msg_after_error",
+          type: "message",
+          role: "assistant",
+          status: "completed",
+          content: [
+            {
+              type: "output_text",
+              text: "The earlier context is still available.",
+              annotations: [],
+            },
+          ],
+        },
+      ]);
+    }
+
+    return new Response(JSON.stringify(body), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  }) as typeof fetch;
+
+  try {
+    const firstResponse = await requestLlm(
+      "Remember that the keyword is pineapple",
+      [],
+      undefined,
+      { context: { chatId: 1, messageId: 1 } },
+    );
+    let failure: unknown;
+
+    try {
+      await requestLlm(
+        "Acknowledge it with a sticker",
+        ["send_sticker"],
+        firstResponse.response_id,
+        { context: { chatId: 1, messageId: 2 } },
+      );
+    } catch (error) {
+      failure = error;
+    }
+
+    ok(failure instanceof LlmRequestError);
+    ok(failure.lastResponseId?.startsWith("resp-local-"));
+
+    resumeFromCheckpoint = true;
+    const resumedResponse = await requestLlm(
+      "What was the keyword?",
+      [],
+      failure.lastResponseId,
+      { context: { chatId: 1, messageId: 3 } },
+    );
+
+    strictEqual(
+      resumedResponse.response,
+      "The earlier context is still available.",
+    );
+
+    const resumedInput = requests.at(-1)?.input as Array<
+      Record<string, unknown>
+    >;
+    strictEqual(resumedInput.length, 6);
+    ok(JSON.stringify(resumedInput).includes("pineapple"));
+    ok(JSON.stringify(resumedInput).includes("Acknowledge it with a sticker"));
+    const toolOutput = resumedInput.find(
+      (item) => item.type === "function_call_output",
+    );
+    strictEqual(toolOutput?.call_id, "call_before_error");
+    ok(String(toolOutput?.output).includes('tool="send_sticker"'));
   } finally {
     globalThis.fetch = originalFetch;
   }
