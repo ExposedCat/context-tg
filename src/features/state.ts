@@ -1,7 +1,7 @@
 import { Composer } from "grammy";
 import type { Context } from "../bot.ts";
+import { canConfigureChat, isBotAdmin } from "./authorization.ts";
 import { replyWithResumeTask } from "./chat.ts";
-import { APP_ENV } from "./env.ts";
 import {
   isLlmDeploymentId,
   LLM_DEPLOYMENT_OPTIONS,
@@ -141,10 +141,6 @@ function formatMessageIntervalStatus(status: MessageIntervalStatus): string {
     : `off (saved interval: ${status.intervalMessageCount})`;
 }
 
-function isAdmin(ctx: Context): boolean {
-  return ctx.from?.id === APP_ENV.ADMIN_ID;
-}
-
 function formatReasoningSettingLabel(value: string): string {
   return value === "null" ? "null" : value;
 }
@@ -182,23 +178,32 @@ function formatConfigureTitle(scope: ConfigureScope): string {
   return `Configure ${formatConfigureScopeTarget(scope)}:`;
 }
 
-function formatConfigureMenu(scope: ConfigureScope): string {
+export function formatConfigureMenu(
+  scope: ConfigureScope,
+  includeBotAdminCommands: boolean,
+): string {
   if (scope === "global") {
     return formatConfigureTitle(scope);
   }
 
-  return [
+  const rows = [
     "Stickers /stickers",
     "Emoji /packs",
-    "Models /model",
-    "Debug /debug",
     "Trolling /trolling",
     "Proactive /proactive",
-  ].join("\n");
+  ];
+
+  if (includeBotAdminCommands) {
+    rows.splice(2, 0, "Models /model", "Debug /debug");
+  }
+
+  return rows.join("\n");
 }
 
 function formatConfigureAdminWarning(scope: ConfigureScope): string {
-  return `Only the admin can configure ${formatConfigureScopeTarget(scope)}.`;
+  return scope === "global"
+    ? "Only the bot admin can configure all chats."
+    : "Only the bot admin or a group admin can configure this chat.";
 }
 
 function formatDeploymentLabel(deployment: LlmSettingsDeployment): string {
@@ -389,7 +394,7 @@ stateComposer.command("usage", async (ctx) => {
     return;
   }
 
-  if (ctx.from?.id !== APP_ENV.ADMIN_ID) {
+  if (!isBotAdmin(ctx)) {
     await ctx.reply("Only the admin can set usage quotas.");
     return;
   }
@@ -409,7 +414,7 @@ stateComposer.command("usage", async (ctx) => {
 });
 
 stateComposer.command("model", async (ctx) => {
-  if (!isAdmin(ctx)) {
+  if (!isBotAdmin(ctx)) {
     await ctx.reply("Only the admin can change models.");
     return;
   }
@@ -447,14 +452,19 @@ stateComposer.command("configure", async (ctx) => {
     return;
   }
 
-  if (!isAdmin(ctx)) {
+  if (!(await canConfigureChat(ctx))) {
     await ctx.reply(formatConfigureAdminWarning("configure"));
     return;
   }
 
-  await ctx.reply(formatConfigureMenu("configure"), {
-    reply_markup: buildConfigureKeyboard("configure"),
-  });
+  const botAdmin = isBotAdmin(ctx);
+
+  await ctx.reply(
+    formatConfigureMenu("configure", botAdmin),
+    botAdmin
+      ? { reply_markup: buildConfigureKeyboard("configure") }
+      : undefined,
+  );
 });
 
 stateComposer.hears(/^\/debug(?:@\w+)?(?:\s+(.+))?$/, async (ctx) => {
@@ -462,8 +472,8 @@ stateComposer.hears(/^\/debug(?:@\w+)?(?:\s+(.+))?$/, async (ctx) => {
     return;
   }
 
-  if (!isAdmin(ctx)) {
-    await ctx.reply(formatConfigureAdminWarning("configure"));
+  if (!isBotAdmin(ctx)) {
+    await ctx.reply("Only the bot admin can configure debug mode.");
     return;
   }
 
@@ -490,12 +500,12 @@ stateComposer.hears(/^\/debug(?:@\w+)?(?:\s+(.+))?$/, async (ctx) => {
 });
 
 stateComposer.command("global", async (ctx) => {
-  if (!isAdmin(ctx)) {
+  if (!isBotAdmin(ctx)) {
     await ctx.reply(formatConfigureAdminWarning("global"));
     return;
   }
 
-  await ctx.reply(formatConfigureMenu("global"), {
+  await ctx.reply(formatConfigureMenu("global", true), {
     reply_markup: buildConfigureKeyboard("global"),
   });
 });
@@ -569,9 +579,9 @@ stateComposer.callbackQuery(
       return;
     }
 
-    if (!isAdmin(ctx)) {
+    if (!isBotAdmin(ctx)) {
       await ctx.answerCallbackQuery({
-        text: formatConfigureAdminWarning(scope),
+        text: "Only the bot admin can configure debug and reasoning.",
         show_alert: true,
       });
       return;
@@ -616,9 +626,9 @@ stateComposer.callbackQuery(
       return;
     }
 
-    if (!isAdmin(ctx)) {
+    if (!isBotAdmin(ctx)) {
       await ctx.answerCallbackQuery({
-        text: formatConfigureAdminWarning(scope),
+        text: "Only the bot admin can configure debug and reasoning.",
         show_alert: true,
       });
       return;
@@ -655,7 +665,10 @@ stateComposer.callbackQuery(
       `${formatConfigureKindLabel(
         scope,
         "debug",
-      )} mode was set to ${updatedValue}.\n\n${formatConfigureMenu(scope)}`,
+      )} mode was set to ${updatedValue}.\n\n${formatConfigureMenu(
+        scope,
+        isBotAdmin(ctx),
+      )}`,
       {
         reply_markup: buildConfigureKeyboard(scope),
       },
@@ -682,9 +695,9 @@ stateComposer.callbackQuery(
       return;
     }
 
-    if (!isAdmin(ctx)) {
+    if (!isBotAdmin(ctx)) {
       await ctx.answerCallbackQuery({
-        text: formatConfigureAdminWarning(scope),
+        text: "Only the bot admin can configure debug and reasoning.",
         show_alert: true,
       });
       return;
@@ -731,9 +744,9 @@ stateComposer.callbackQuery(
       return;
     }
 
-    if (!isAdmin(ctx)) {
+    if (!isBotAdmin(ctx)) {
       await ctx.answerCallbackQuery({
-        text: formatConfigureAdminWarning(scope),
+        text: "Only the bot admin can configure debug and reasoning.",
         show_alert: true,
       });
       return;
@@ -774,7 +787,10 @@ stateComposer.callbackQuery(
     await ctx.editMessageText(
       `${formatConfigureKindLabel(scope, kind)} for ${formatDeploymentLabel(
         deployment,
-      )} was set to ${updatedValue}.\n\n${formatConfigureMenu(scope)}`,
+      )} was set to ${updatedValue}.\n\n${formatConfigureMenu(
+        scope,
+        isBotAdmin(ctx),
+      )}`,
       {
         reply_markup: buildConfigureKeyboard(scope),
       },
@@ -787,7 +803,7 @@ async function replyWithTrollingIntervalCommand(
   command: "/trolleach" | "/trolling",
   value: string | undefined,
 ) {
-  if (!isAdmin(ctx) || !ctx.chat) {
+  if (!ctx.chat || !(await canConfigureChat(ctx))) {
     return;
   }
 
@@ -824,7 +840,7 @@ stateComposer.hears(/^\/trolleach(?:@\w+)?(?:\s+(.+))?$/, async (ctx) => {
 });
 
 stateComposer.hears(/^\/proactive(?:@\w+)?(?:\s+(.+))?$/, async (ctx) => {
-  if (!isAdmin(ctx) || !ctx.chat) {
+  if (!ctx.chat || !(await canConfigureChat(ctx))) {
     return;
   }
 

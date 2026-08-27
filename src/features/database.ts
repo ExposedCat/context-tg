@@ -1,7 +1,11 @@
 import { Database as SqliteDatabase } from "@db/sqlite";
 import { Kysely } from "@kysely/kysely";
 import { DenoSqlite3Dialect } from "@marshift/kysely-deno-sqlite3";
-import { type EmojiPacksTable, migrateEmojiPacks } from "./emoji-packs.ts";
+import {
+  type EmojiPacksTable,
+  type GlobalEmojiPacksTable,
+  migrateEmojiPacks,
+} from "./emoji-packs.ts";
 import { APP_ENV } from "./env.ts";
 import {
   type LlmResponseHistoryTable,
@@ -50,6 +54,7 @@ export type DatabaseSchema = {
   chat_proactive_responses: ChatProactiveResponsesTable;
   chat_trolling: ChatTrollingTable;
   emoji_packs: EmojiPacksTable;
+  global_emoji_packs: GlobalEmojiPacksTable;
   memos: MemosTable;
 };
 

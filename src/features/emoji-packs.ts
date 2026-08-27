@@ -3,14 +3,16 @@ import { type Insertable, type Selectable, sql } from "@kysely/kysely";
 import { Composer, type Transformer } from "grammy";
 import type { Context } from "../bot.ts";
 import { escapeHtml, escapeHtmlAttribute } from "../utils/text.ts";
+import { canConfigureChat, isBotAdmin } from "./authorization.ts";
 import type { Database } from "./database.ts";
-import { APP_ENV } from "./env.ts";
 
 export type EmojiPacksTable = {
   name: string;
   position: number;
   created_at: string;
 };
+
+export type GlobalEmojiPacksTable = EmojiPacksTable;
 
 type EmojiPack = Selectable<EmojiPacksTable>;
 type CreateEmojiPack = Insertable<EmojiPacksTable>;
@@ -23,6 +25,8 @@ type EmojiPacksDatabase = Pick<
   | "transaction"
   | "updateTable"
 >;
+
+type EmojiPacksTableName = "emoji_packs" | "global_emoji_packs";
 
 type PackKind = "emoji" | "sticker";
 
@@ -92,7 +96,14 @@ const PACK_NAME_PATTERN = /^[a-zA-Z0-9_]{1,128}$/;
 const HTML_CUSTOM_EMOJI_OPEN_PATTERN = /^<tg-emoji(?:\s|>)/i;
 const VARIATION_SELECTOR_16 = "\uFE0F";
 
-let registryPromise: Promise<EmojiRegistry> | undefined;
+type EmojiRegistryPromises = Partial<
+  Record<EmojiPacksTableName, Promise<EmojiRegistry>>
+>;
+
+const registryPromisesByDatabase = new WeakMap<
+  EmojiPacksDatabase,
+  EmojiRegistryPromises
+>();
 
 export const emojiPacksComposer = new Composer<Context>();
 
@@ -104,10 +115,35 @@ export async function migrateEmojiPacks(database: Database) {
     .addColumn("position", "integer", (column) => column.notNull())
     .addColumn("created_at", "text", (column) => column.notNull())
     .execute();
+
+  await database.schema
+    .createTable("global_emoji_packs")
+    .ifNotExists()
+    .addColumn("name", "text", (column) => column.primaryKey().notNull())
+    .addColumn("position", "integer", (column) => column.notNull())
+    .addColumn("created_at", "text", (column) => column.notNull())
+    .execute();
 }
 
-function invalidateEmojiRegistry() {
-  registryPromise = undefined;
+function getRegistryPromises(
+  database: EmojiPacksDatabase,
+): EmojiRegistryPromises {
+  const existing = registryPromisesByDatabase.get(database);
+
+  if (existing) {
+    return existing;
+  }
+
+  const created: EmojiRegistryPromises = {};
+  registryPromisesByDatabase.set(database, created);
+  return created;
+}
+
+function invalidateEmojiRegistry(
+  database: EmojiPacksDatabase,
+  table: EmojiPacksTableName,
+) {
+  getRegistryPromises(database)[table] = undefined;
 }
 
 function getCodePointLength(text: string, index: number): number {
@@ -154,47 +190,67 @@ function parsePackName(args: string): string | undefined {
   return PACK_NAME_PATTERN.test(name) ? name : undefined;
 }
 
-function getPackCommandUsage(
-  command: "pack_add" | "pack_rm" | "sticker_add" | "sticker_rm",
-): string {
+function getPackCommandUsage(command: string): string {
   return `Usage: /${command} NAME`;
 }
 
-function isAdmin(ctx: Context): boolean {
-  return ctx.from?.id === APP_ENV.ADMIN_ID;
-}
-
-function getPackListFooter(kind: PackKind): string {
-  const addCommand = kind === "emoji" ? "pack_add" : "sticker_add";
-  const removeCommand = kind === "emoji" ? "pack_rm" : "sticker_rm";
+function getPackListFooter(kind: PackKind, global: boolean): string {
+  const addCommand = global
+    ? "global_pack_add"
+    : kind === "emoji"
+      ? "pack_add"
+      : "sticker_add";
+  const removeCommand = global
+    ? "global_pack_remove"
+    : kind === "emoji"
+      ? "pack_rm"
+      : "sticker_rm";
 
   return [`Add /${addCommand} NAME`, `Remove /${removeCommand} NAME`].join(
     "\n",
   );
 }
 
-function formatPacksList(packs: EmojiPack[], kind: PackKind): string {
+function formatPacksList(
+  packs: Array<Pick<EmojiPack, "name">>,
+  kind: PackKind,
+  options: { global?: boolean; includeCommands?: boolean } = {},
+): string {
   const label = kind === "emoji" ? "emoji" : "sticker";
+  const global = options.global ?? false;
+  const includeCommands = options.includeCommands ?? true;
+  const title = global ? `Global ${label} packs:` : `Active ${label} packs:`;
+  const emptyMessage = global
+    ? `No global ${label} packs.`
+    : `No active ${label} packs.`;
+  const rows =
+    packs.length === 0
+      ? [emptyMessage]
+      : [title, ...packs.map((pack) => `- ${pack.name}`)];
 
-  if (packs.length === 0) {
-    return [`No active ${label} packs.`, "", getPackListFooter(kind)].join(
-      "\n",
-    );
+  if (includeCommands) {
+    rows.push("", getPackListFooter(kind, global));
   }
 
-  return [
-    `Active ${label} packs:`,
-    ...packs.map((pack) => `- ${pack.name}`),
-    "",
-    getPackListFooter(kind),
-  ].join("\n");
+  return rows.join("\n");
+}
+
+export function formatGlobalPacksList(
+  packs: Array<{ name: string }>,
+  includeCommands: boolean,
+): string {
+  return formatPacksList(packs, "emoji", {
+    global: true,
+    includeCommands,
+  });
 }
 
 export async function listEmojiPacks(
   database: EmojiPacksDatabase,
+  table: EmojiPacksTableName = "emoji_packs",
 ): Promise<EmojiPack[]> {
   return await database
-    .selectFrom("emoji_packs")
+    .selectFrom(table)
     .selectAll()
     .orderBy("position", "asc")
     .execute();
@@ -220,8 +276,9 @@ async function listPacksByKind(
   database: EmojiPacksDatabase,
   api: StickerSetReader,
   kind: PackKind,
+  table: EmojiPacksTableName = "emoji_packs",
 ): Promise<EmojiPack[]> {
-  const packs = await listEmojiPacks(database);
+  const packs = await listEmojiPacks(database, table);
   const matchingPacks: EmojiPack[] = [];
 
   for (const pack of packs) {
@@ -242,10 +299,11 @@ async function listPacksByKind(
 async function createEmojiPack(
   database: EmojiPacksDatabase,
   name: string,
+  table: EmojiPacksTableName,
 ): Promise<"created" | "exists"> {
   return await database.transaction().execute(async (transaction) => {
     const existing = await transaction
-      .selectFrom("emoji_packs")
+      .selectFrom(table)
       .select("name")
       .where("name", "=", name)
       .executeTakeFirst();
@@ -255,7 +313,7 @@ async function createEmojiPack(
     }
 
     const row = await transaction
-      .selectFrom("emoji_packs")
+      .selectFrom(table)
       .select(sql<number>`coalesce(max(position), -1)`.as("max_position"))
       .executeTakeFirst();
     const pack: CreateEmojiPack = {
@@ -264,7 +322,7 @@ async function createEmojiPack(
       created_at: new Date().toISOString(),
     };
 
-    await transaction.insertInto("emoji_packs").values(pack).execute();
+    await transaction.insertInto(table).values(pack).execute();
 
     return "created";
   });
@@ -273,10 +331,11 @@ async function createEmojiPack(
 async function removeEmojiPack(
   database: EmojiPacksDatabase,
   name: string,
+  table: EmojiPacksTableName,
 ): Promise<boolean> {
   return await database.transaction().execute(async (transaction) => {
     const result = await transaction
-      .deleteFrom("emoji_packs")
+      .deleteFrom(table)
       .where("name", "=", name)
       .executeTakeFirst();
 
@@ -285,14 +344,14 @@ async function removeEmojiPack(
     }
 
     const packs = await transaction
-      .selectFrom("emoji_packs")
+      .selectFrom(table)
       .select("name")
       .orderBy("position", "asc")
       .execute();
 
     for (const [position, pack] of packs.entries()) {
       await transaction
-        .updateTable("emoji_packs")
+        .updateTable(table)
         .set({ position })
         .where("name", "=", pack.name)
         .execute();
@@ -348,7 +407,7 @@ async function validateStickerPack(
 function getPackAdminWarning(kind: PackKind): string {
   const label = kind === "emoji" ? "emoji" : "sticker";
 
-  return `Only the admin can change ${label} packs.`;
+  return `Only the bot admin or a group admin can change ${label} packs.`;
 }
 
 function getPackNotFoundMessage(kind: PackKind, name: string): string {
@@ -375,16 +434,28 @@ function getPackRemoveCommand(kind: PackKind): "pack_rm" | "sticker_rm" {
   return kind === "emoji" ? "pack_rm" : "sticker_rm";
 }
 
-async function replyWithAddPack(ctx: Context, kind: PackKind) {
-  if (!isAdmin(ctx)) {
-    await ctx.reply(getPackAdminWarning(kind));
+async function replyWithAddPack(
+  ctx: Context,
+  kind: PackKind,
+  table: EmojiPacksTableName = "emoji_packs",
+) {
+  const global = table === "global_emoji_packs";
+
+  if (global ? !isBotAdmin(ctx) : !(await canConfigureChat(ctx))) {
+    await ctx.reply(
+      global
+        ? "Only the bot admin can change global emoji packs."
+        : getPackAdminWarning(kind),
+    );
     return;
   }
 
   const name = parsePackName(typeof ctx.match === "string" ? ctx.match : "");
 
   if (!name) {
-    await ctx.reply(getPackCommandUsage(getPackAddCommand(kind)));
+    await ctx.reply(
+      getPackCommandUsage(global ? "global_pack_add" : getPackAddCommand(kind)),
+    );
     return;
   }
 
@@ -397,14 +468,14 @@ async function replyWithAddPack(ctx: Context, kind: PackKind) {
     return;
   }
 
-  const result = await createEmojiPack(ctx.database, name);
+  const result = await createEmojiPack(ctx.database, name, table);
 
   if (result === "exists") {
     await ctx.reply(`${name} is already active.`);
     return;
   }
 
-  invalidateEmojiRegistry();
+  invalidateEmojiRegistry(ctx.database, table);
   await ctx.reply(
     `Added ${name} (${packItemCount} ${
       kind === "emoji" ? "emoji" : "stickers"
@@ -412,35 +483,50 @@ async function replyWithAddPack(ctx: Context, kind: PackKind) {
   );
 }
 
-async function replyWithRemovePack(ctx: Context, kind: PackKind) {
-  if (!isAdmin(ctx)) {
-    await ctx.reply(getPackAdminWarning(kind));
+async function replyWithRemovePack(
+  ctx: Context,
+  kind: PackKind,
+  table: EmojiPacksTableName = "emoji_packs",
+) {
+  const global = table === "global_emoji_packs";
+
+  if (global ? !isBotAdmin(ctx) : !(await canConfigureChat(ctx))) {
+    await ctx.reply(
+      global
+        ? "Only the bot admin can change global emoji packs."
+        : getPackAdminWarning(kind),
+    );
     return;
   }
 
   const name = parsePackName(typeof ctx.match === "string" ? ctx.match : "");
 
   if (!name) {
-    await ctx.reply(getPackCommandUsage(getPackRemoveCommand(kind)));
+    await ctx.reply(
+      getPackCommandUsage(
+        global ? "global_pack_remove" : getPackRemoveCommand(kind),
+      ),
+    );
     return;
   }
 
-  if (!(await removeEmojiPack(ctx.database, name))) {
+  if (!(await removeEmojiPack(ctx.database, name, table))) {
     await ctx.reply(`${name} is not active.`);
     return;
   }
 
-  invalidateEmojiRegistry();
+  invalidateEmojiRegistry(ctx.database, table);
   await ctx.reply(`Removed ${name}.`);
 }
 
 async function loadEmojiRegistry(
   database: EmojiPacksDatabase,
   api: StickerSetReader,
+  table: EmojiPacksTableName,
 ): Promise<EmojiRegistry> {
   const replacementGroups = new Map<string, EmojiReplacementCandidate[]>();
   const stickerGroups = new Map<string, StickerCandidate[]>();
-  const packs = await listEmojiPacks(database);
+  const packs = await listEmojiPacks(database, table);
 
   for (const pack of packs) {
     try {
@@ -512,15 +598,37 @@ async function loadEmojiRegistry(
 async function getEmojiRegistry(
   database: EmojiPacksDatabase,
   api: StickerSetReader,
+  table: EmojiPacksTableName,
 ): Promise<EmojiRegistry> {
-  registryPromise ??= loadEmojiRegistry(database, api);
+  const registryPromises = getRegistryPromises(database);
+  registryPromises[table] ??= loadEmojiRegistry(database, api, table);
 
   try {
-    return await registryPromise;
+    return await registryPromises[table];
   } catch (error) {
-    registryPromise = undefined;
+    registryPromises[table] = undefined;
     throw error;
   }
+}
+
+async function getEffectiveEmojiRegistry(
+  database: EmojiPacksDatabase,
+  api: StickerSetReader,
+): Promise<EmojiRegistry> {
+  const [chatRegistry, globalRegistry] = await Promise.all([
+    getEmojiRegistry(database, api, "emoji_packs"),
+    getEmojiRegistry(database, api, "global_emoji_packs"),
+  ]);
+
+  // Lookup stops at the first matching group, so global candidates never join
+  // a chat pack's random selection and are considered only after no chat match.
+  return {
+    replacements: [
+      ...chatRegistry.replacements,
+      ...globalRegistry.replacements,
+    ],
+    stickers: [...chatRegistry.stickers, ...globalRegistry.stickers],
+  };
 }
 
 function findEmojiReplacementAt(
@@ -552,7 +660,7 @@ export async function findRandomStickerForEmoji(
     return undefined;
   }
 
-  const registry = await getEmojiRegistry(database, api);
+  const registry = await getEffectiveEmojiRegistry(database, api);
 
   for (const alias of getEmojiAliases(trimmedEmoji)) {
     const group = registry.stickers.find((sticker) => sticker.emoji === alias);
@@ -949,7 +1057,7 @@ export function createEmojiPackTransformer(
     }
 
     try {
-      const registry = await getEmojiRegistry(database, api);
+      const registry = await getEffectiveEmojiRegistry(database, api);
 
       if (registry.replacements.length === 0) {
         return await prev(method, payload, signal);
@@ -973,6 +1081,20 @@ emojiPacksComposer.command("packs", async (ctx) => {
   );
 });
 
+emojiPacksComposer.command("global_packs", async (ctx) => {
+  await ctx.reply(
+    formatGlobalPacksList(
+      await listPacksByKind(
+        ctx.database,
+        ctx.api,
+        "emoji",
+        "global_emoji_packs",
+      ),
+      isBotAdmin(ctx),
+    ),
+  );
+});
+
 emojiPacksComposer.command("stickers", async (ctx) => {
   await ctx.reply(
     formatPacksList(
@@ -986,12 +1108,20 @@ emojiPacksComposer.command("pack_add", async (ctx) => {
   await replyWithAddPack(ctx, "emoji");
 });
 
+emojiPacksComposer.command("global_pack_add", async (ctx) => {
+  await replyWithAddPack(ctx, "emoji", "global_emoji_packs");
+});
+
 emojiPacksComposer.command("sticker_add", async (ctx) => {
   await replyWithAddPack(ctx, "sticker");
 });
 
 emojiPacksComposer.command("pack_rm", async (ctx) => {
   await replyWithRemovePack(ctx, "emoji");
+});
+
+emojiPacksComposer.command("global_pack_remove", async (ctx) => {
+  await replyWithRemovePack(ctx, "emoji", "global_emoji_packs");
 });
 
 emojiPacksComposer.command("sticker_rm", async (ctx) => {
