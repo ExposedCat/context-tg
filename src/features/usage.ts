@@ -1,5 +1,4 @@
 import type { Insertable, Selectable } from "@kysely/kysely";
-import type { Context } from "../bot.ts";
 import type { Database } from "./database.ts";
 
 export type UsageKey = "text_responses" | "tool_usages" | "image_responses";
@@ -93,6 +92,28 @@ export function getUsageDate(date = new Date()): string {
 
 export function parseUsageKey(value: string): UsageKey | undefined {
   return USAGE_KEY_ALIASES[value.toLocaleLowerCase()];
+}
+
+export function parseGuestUsageCommand(
+  text: string,
+  botUsername: string,
+): string | undefined {
+  const [mention, command, ...args] = text.trim().split(/\s+/);
+  const normalizedUsername = botUsername.toLocaleLowerCase();
+
+  if (mention?.toLocaleLowerCase() !== `@${normalizedUsername}`) {
+    return undefined;
+  }
+
+  const normalizedCommand = command?.toLocaleLowerCase();
+  if (
+    normalizedCommand !== "/usage" &&
+    normalizedCommand !== `/usage@${normalizedUsername}`
+  ) {
+    return undefined;
+  }
+
+  return args.join(" ");
 }
 
 export async function getUsageSnapshot(
@@ -283,13 +304,40 @@ export function formatUsageSnapshot(
   ].join("\n");
 }
 
-export async function replyWithUsage(ctx: Context): Promise<void> {
-  if (!ctx.chat) {
-    return;
+export function getUsageCommandUsage(): string {
+  return ["Usage: /usage", `Usage: /usage ${USAGE_KEYS.join("|")} QUOTA`].join(
+    "\n",
+  );
+}
+
+export async function handleUsageCommand(
+  database: Database,
+  chatId: number,
+  args: string,
+  canSetQuota: boolean,
+): Promise<string> {
+  const trimmedArgs = args.trim();
+
+  if (!trimmedArgs) {
+    const usageDate = getUsageDate();
+    const snapshot = await getUsageSnapshot(database, chatId, usageDate);
+
+    return formatUsageSnapshot(snapshot, usageDate);
   }
 
-  const usageDate = getUsageDate();
-  const snapshot = await getUsageSnapshot(ctx.database, ctx.chat.id, usageDate);
+  if (!canSetQuota) {
+    return "Only the admin can set usage quotas.";
+  }
 
-  await ctx.reply(formatUsageSnapshot(snapshot, usageDate));
+  const [rawKey, rawQuota, ...extraParts] = trimmedArgs.split(/\s+/);
+  const key = rawKey ? parseUsageKey(rawKey) : undefined;
+  const quota = rawQuota ? Number(rawQuota) : Number.NaN;
+
+  if (!key || extraParts.length > 0 || !Number.isInteger(quota) || quota < 0) {
+    return getUsageCommandUsage();
+  }
+
+  const status = await setUsageQuota(database, chatId, key, quota);
+
+  return `Updated ${status.key} quota to ${status.quota}`;
 }

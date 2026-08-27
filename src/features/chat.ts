@@ -17,6 +17,7 @@ import {
   resolveMessageAgent,
   stripMessageAgentName,
 } from "./agents/index.ts";
+import { isBotAdmin } from "./authorization.ts";
 import { findRandomStickerForEmoji } from "./emoji-packs.ts";
 import { APP_ENV } from "./env.ts";
 import { readLastMessages } from "./last-messages.ts";
@@ -71,7 +72,9 @@ import {
 import {
   consumeUsage,
   getUsageStatus,
+  handleUsageCommand,
   hasUsageRemaining,
+  parseGuestUsageCommand,
   recordUsage,
   refundUsage,
   type UsageConsumeResult,
@@ -2812,6 +2815,22 @@ chatComposer.on("guest_message", async (ctx, next) => {
 
   const message = ctx.guestMessage as TextMessage;
   const text = getMessageText(message);
+  const usageArgs = text
+    ? parseGuestUsageCommand(text, ctx.me.username)
+    : undefined;
+
+  if (usageArgs !== undefined) {
+    const response = await handleUsageCommand(
+      ctx.database,
+      ctx.chat.id,
+      usageArgs,
+      isBotAdmin(ctx),
+    );
+
+    await sendGuestMarkdownResponse(ctx, message, response);
+    return;
+  }
+
   const requestText =
     text ??
     (hasImageAttachments(message)
