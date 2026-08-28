@@ -10,6 +10,7 @@ import { startsWithCommandPrefix } from "./message-filter.ts";
 export type RememberedMessage = {
   message_id: number;
   message_thread_id?: number;
+  media_group_id?: string;
   is_topic_message?: boolean;
   reply_to_message?: {
     message_id: number;
@@ -25,6 +26,11 @@ export type RememberedMessage = {
     width: number;
     height: number;
   }>;
+  document?: {
+    file_id: string;
+    file_name?: string;
+    mime_type?: string;
+  };
   sticker?: {
     emoji?: string;
   };
@@ -84,6 +90,7 @@ export type MessageMetadata = {
   sender_id: number;
   chat_id: number;
   message_id: number;
+  media_group_id?: string;
   thread_id?: number;
   reply_to_message_id?: number;
 };
@@ -145,6 +152,7 @@ const MESSAGE_PAYLOAD_INDEXES = [
   { fieldName: "chat_id", fieldSchema: "integer" },
   { fieldName: "thread_id", fieldSchema: "integer" },
   { fieldName: "message_id", fieldSchema: "integer" },
+  { fieldName: "media_group_id", fieldSchema: "keyword" },
   { fieldName: "sender_id", fieldSchema: "integer" },
   { fieldName: "date_timestamp", fieldSchema: "integer" },
   {
@@ -476,8 +484,27 @@ function getMessageText(message: RememberedMessage): string | undefined {
   return message.text ?? message.caption;
 }
 
-function hasPhotoAttachment(message: RememberedMessage): boolean {
-  return message.photo !== undefined && message.photo.length > 0;
+function isImageDocument(
+  document: RememberedMessage["document"],
+): document is NonNullable<RememberedMessage["document"]> {
+  if (!document) {
+    return false;
+  }
+
+  const extension = document.file_name?.split(".").at(-1)?.toLocaleLowerCase();
+  return (
+    document.mime_type?.startsWith("image/") === true ||
+    ["jpg", "jpeg", "png", "webp", "gif", "heic", "heif"].includes(
+      extension ?? "",
+    )
+  );
+}
+
+function hasImageAttachment(message: RememberedMessage): boolean {
+  return (
+    (message.photo !== undefined && message.photo.length > 0) ||
+    isImageDocument(message.document)
+  );
 }
 
 function getLargestPhoto(message: RememberedMessage) {
@@ -486,25 +513,34 @@ function getLargestPhoto(message: RememberedMessage) {
   )[0];
 }
 
-async function getPhotoMarkdown(
+async function getImageMarkdown(
   database: Database,
   message: RememberedMessage,
 ): Promise<string | undefined> {
   const photo = getLargestPhoto(message);
 
-  if (!photo) {
-    return undefined;
+  if (photo) {
+    const image = await saveImageFileId(database, photo.file_id, "photo");
+    return formatImageMarkdown(image.id, image.media_type);
   }
 
-  const image = await saveImageFileId(database, photo.file_id);
-  return formatImageMarkdown(image.id);
+  if (isImageDocument(message.document)) {
+    const image = await saveImageFileId(
+      database,
+      message.document.file_id,
+      "document",
+    );
+    return formatImageMarkdown(image.id, image.media_type);
+  }
+
+  return undefined;
 }
 
 export async function formatRememberedMessageContent(
   database: Database,
   message: RememberedMessage,
 ): Promise<string | undefined> {
-  return getMessageContent(message, await getPhotoMarkdown(database, message));
+  return getMessageContent(message, await getImageMarkdown(database, message));
 }
 
 function formatStickerMarker(emoji: string | undefined): string {
@@ -569,7 +605,7 @@ function shouldSkipIndexing(message: RememberedMessage): boolean {
   }
 
   return (
-    !hasPhotoAttachment(message) && getIndexableText(message) === undefined
+    !hasImageAttachment(message) && getIndexableText(message) === undefined
   );
 }
 
@@ -582,7 +618,7 @@ async function indexMessage(
   const senderName = getSenderName(sender);
   const text = getIndexableText(
     message,
-    await getPhotoMarkdown(database, message),
+    await getImageMarkdown(database, message),
   );
   if (!text) {
     return;
@@ -606,6 +642,9 @@ async function indexMessage(
     sender_id: sender.id,
     chat_id: chatId,
     message_id: message.message_id,
+    ...(message.media_group_id !== undefined
+      ? { media_group_id: message.media_group_id }
+      : {}),
     ...(threadId !== undefined ? { thread_id: threadId } : {}),
     ...(replyToMessageId !== undefined
       ? { reply_to_message_id: replyToMessageId }
@@ -684,6 +723,8 @@ export function isMessageMetadata(
     typeof payload.sender_id === "number" &&
     typeof payload.chat_id === "number" &&
     typeof payload.message_id === "number" &&
+    (payload.media_group_id === undefined ||
+      typeof payload.media_group_id === "string") &&
     (payload.reply_to_message_id === undefined ||
       typeof payload.reply_to_message_id === "number")
   );

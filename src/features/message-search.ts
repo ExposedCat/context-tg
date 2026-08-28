@@ -39,6 +39,9 @@ function copyMessageMetadata(message: MessageMetadata): MessageMetadata {
     sender_id: message.sender_id,
     chat_id: message.chat_id,
     message_id: message.message_id,
+    ...(message.media_group_id !== undefined
+      ? { media_group_id: message.media_group_id }
+      : {}),
     ...(message.thread_id !== undefined
       ? { thread_id: message.thread_id }
       : {}),

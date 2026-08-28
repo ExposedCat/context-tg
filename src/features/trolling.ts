@@ -91,6 +91,7 @@ function formatContextMessage(message: MessageMetadata): string {
       id: message.message_id,
       sender: message.sender_name,
       sender_id: message.sender_id,
+      media_group_id: message.media_group_id,
       date: dateTime?.date,
       time: dateTime?.time,
     },

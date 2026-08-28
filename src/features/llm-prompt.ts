@@ -5,6 +5,7 @@ export type PromptMessageAttributes = {
   id?: string | number;
   sender?: string;
   sender_id?: string | number;
+  media_group_id?: string;
   date?: string;
   time?: string;
 };

@@ -49,6 +49,30 @@ Deno.test("Telegram photo file ids receive stable saved image ids", async () => 
   }
 });
 
+Deno.test("Telegram image documents retain their rich-message media type", async () => {
+  const database = await initDatabase()();
+
+  try {
+    const image = await saveImageFileId(
+      database,
+      "telegram-image-document",
+      "document",
+    );
+    const markdown = `![](tg://document?id=${image.id})`;
+
+    strictEqual(image.media_type, "document");
+    deepStrictEqual(getRichMessageImageIds(markdown), [image.id]);
+    deepStrictEqual(await resolveRichMessageImageMedia(database, markdown), [
+      {
+        id: image.id,
+        media: { type: "document", media: "telegram-image-document" },
+      },
+    ]);
+  } finally {
+    await database.destroy();
+  }
+});
+
 Deno.test("saved images are cached and resolved for rich Markdown", async () => {
   const database = await initDatabase()();
   const cachedInputs: unknown[] = [];

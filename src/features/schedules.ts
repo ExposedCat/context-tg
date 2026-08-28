@@ -7,8 +7,13 @@ import {
 } from "@kysely/kysely";
 import type { Context } from "../bot.ts";
 import { padDatePart } from "../utils/date.ts";
-import { escapeHtml, normalizeWhitespace } from "../utils/text.ts";
+import {
+  escapeHtml,
+  escapeSingleDollarSigns,
+  normalizeWhitespace,
+} from "../utils/text.ts";
 import type { Database } from "./database.ts";
+import { resolveRichMessageImageMedia } from "./images.ts";
 import { disabledLinkPreviewOptions as linkPreviewOptions } from "./telegram.ts";
 
 export type ScheduledMessageStatus =
@@ -574,17 +579,27 @@ async function getCronMessage(
     .executeTakeFirst();
 }
 
-async function sendTelegramMessage(
+export async function sendScheduledRichMessage(
+  database: Database,
   api: TelegramApi,
   row: Pick<
     ScheduledMessage | CronMessage,
     "chat_id" | "message" | "thread_id"
   >,
 ): Promise<void> {
-  await api.sendMessage(row.chat_id, row.message, {
-    ...linkPreviewOptions,
-    ...(row.thread_id === null ? {} : { message_thread_id: row.thread_id }),
-  });
+  const markdown = escapeSingleDollarSigns(row.message);
+  const media = await resolveRichMessageImageMedia(database, markdown);
+
+  await api.sendRichMessage(
+    row.chat_id,
+    {
+      markdown,
+      ...(media.length > 0 ? { media } : {}),
+    },
+    {
+      ...(row.thread_id === null ? {} : { message_thread_id: row.thread_id }),
+    },
+  );
 }
 
 async function sendScheduledMessage(
@@ -612,7 +627,7 @@ async function sendScheduledMessage(
   }
 
   try {
-    await sendTelegramMessage(api, row);
+    await sendScheduledRichMessage(database, api, row);
     await database
       .updateTable("scheduled_messages")
       .set({ status: "sent", sent_at: nowIso(), last_error: null })
@@ -649,7 +664,7 @@ async function sendCronMessage(
   }
 
   try {
-    await sendTelegramMessage(api, row);
+    await sendScheduledRichMessage(database, api, row);
     await database
       .updateTable("cron_messages")
       .set({ last_sent_at: nowIso(), last_error: null })

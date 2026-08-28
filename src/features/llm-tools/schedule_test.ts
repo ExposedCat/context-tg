@@ -2,11 +2,14 @@ import { deepStrictEqual, strictEqual } from "node:assert";
 import { Database as SqliteDatabase } from "@db/sqlite";
 import { Kysely } from "@kysely/kysely";
 import { DenoSqlite3Dialect } from "@marshift/kysely-deno-sqlite3";
+import type { Api } from "grammy";
 import type { Database, DatabaseSchema } from "../database.ts";
+import { migrateImages, saveImageFileId } from "../images.ts";
 import {
   listActiveCronMessages,
   listActiveScheduledMessages,
   migrateSchedules,
+  sendScheduledRichMessage,
 } from "../schedules.ts";
 import {
   executeCancelScheduledMessage,
@@ -23,8 +26,45 @@ async function createTestDatabase(): Promise<Database> {
   });
 
   await migrateSchedules(database);
+  await migrateImages(database);
   return database;
 }
+
+Deno.test("scheduled messages resolve saved images through rich messages", async () => {
+  const database = await createTestDatabase();
+  const image = await saveImageFileId(database, "scheduled-photo");
+  let request: unknown;
+  const api = {
+    sendRichMessage: (...args: unknown[]) => {
+      request = args;
+      return Promise.resolve({ message_id: 1 });
+    },
+  } as unknown as Api;
+
+  try {
+    await sendScheduledRichMessage(database, api, {
+      chat_id: String(CHAT_ID),
+      thread_id: 7,
+      message: `Reminder\n\n![](tg://photo?id=${image.id})`,
+    });
+
+    deepStrictEqual(request, [
+      String(CHAT_ID),
+      {
+        markdown: `Reminder\n\n![](tg://photo?id=${image.id})`,
+        media: [
+          {
+            id: image.id,
+            media: { type: "photo", media: "scheduled-photo" },
+          },
+        ],
+      },
+      { message_thread_id: 7 },
+    ]);
+  } finally {
+    await database.destroy();
+  }
+});
 
 async function seedSchedules(database: Database): Promise<void> {
   await database

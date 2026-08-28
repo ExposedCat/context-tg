@@ -91,6 +91,7 @@ type LlmContextMessage = {
   message_id?: number;
   date?: number;
   message_thread_id?: number;
+  media_group_id?: string;
   text?: string;
   caption?: string;
   from?: TelegramUser;
@@ -124,6 +125,7 @@ type TextMessage = LlmContextMessage & {
 type ProactiveTriggerMessage = {
   message_id: number;
   message_thread_id?: number;
+  media_group_id?: string;
   is_topic_message?: boolean;
   text?: string;
   caption?: string;
@@ -137,6 +139,7 @@ type ProactiveTriggerMessage = {
   reply_to_message?: {
     message_id: number;
     message_thread_id?: number;
+    media_group_id?: string;
     is_topic_message?: boolean;
     from?: TelegramUser;
     text?: string;
@@ -506,18 +509,27 @@ function getLargestPhoto(
   })[0];
 }
 
-async function getMessagePhotoMarkdown(
+async function getMessageImageMarkdown(
   database: Database,
   message: LlmContextMessage | undefined,
 ): Promise<string | undefined> {
   const photo = getLargestPhoto(message?.photo);
 
-  if (!photo) {
-    return undefined;
+  if (photo) {
+    const image = await saveImageFileId(database, photo.file_id, "photo");
+    return formatImageMarkdown(image.id, image.media_type);
   }
 
-  const image = await saveImageFileId(database, photo.file_id);
-  return formatImageMarkdown(image.id);
+  if (message?.document && isImageDocument(message.document)) {
+    const image = await saveImageFileId(
+      database,
+      message.document.file_id,
+      "document",
+    );
+    return formatImageMarkdown(image.id, image.media_type);
+  }
+
+  return undefined;
 }
 
 function getImageMimeTypeFromFilename(filename: string | undefined) {
@@ -661,6 +673,7 @@ function getMessageXmlAttributes(
     id: message?.message_id,
     sender: getMessageSenderName(message, senderFallback),
     sender_id: getMessageSenderId(message),
+    media_group_id: message?.media_group_id,
     date: dateTime?.date,
     time: dateTime?.time,
   };
@@ -684,7 +697,7 @@ async function formatRegularLlmMessage(
   const content = getLlmMessageContent(
     message,
     text,
-    await getMessagePhotoMarkdown(database, message),
+    await getMessageImageMarkdown(database, message),
   );
 
   if (!content) {
@@ -704,7 +717,7 @@ async function formatCurrentLlmMessage(
     getLlmMessageContent(
       message,
       text,
-      await getMessagePhotoMarkdown(database, message),
+      await getMessageImageMarkdown(database, message),
     ) ?? text;
   const quoteText = getQuoteReplyContextText(message);
   const reply =
@@ -1690,10 +1703,24 @@ function getGuestArticleRichMarkdown(richMarkdown: string): string {
   return splitRichMarkdownMessage(content)[0] ?? content;
 }
 
-function buildGuestArticleResult(
+export async function buildGuestRichMessage(
+  database: Database,
+  richMarkdown: string,
+) {
+  const markdown = getGuestArticleRichMarkdown(richMarkdown);
+  const media = await resolveRichMessageImageMedia(database, markdown);
+
+  return {
+    markdown,
+    ...(media.length > 0 ? { media } : {}),
+  };
+}
+
+async function buildGuestArticleResult(
+  database: Database,
   message: TextMessage,
   richMarkdown: string,
-): Parameters<Context["answerGuestQuery"]>[0] {
+): Promise<Parameters<Context["answerGuestQuery"]>[0]> {
   const content = getGuestArticleRichMarkdown(richMarkdown);
 
   return {
@@ -1702,9 +1729,7 @@ function buildGuestArticleResult(
     title: "Laylo",
     description: formatGuestResultDescription(content),
     input_message_content: {
-      rich_message: {
-        markdown: content,
-      },
+      rich_message: await buildGuestRichMessage(database, content),
     },
   };
 }
@@ -1719,7 +1744,8 @@ async function sendGuestLlmResponse(
   const guestResponseText = getGuestArticleRichMarkdown(
     formattedResponse.richMarkdown,
   );
-  const result = buildGuestArticleResult(
+  const result = await buildGuestArticleResult(
+    ctx.database,
     message,
     formattedResponse.richMarkdown,
   );
@@ -1760,7 +1786,9 @@ async function sendGuestMarkdownResponse(
   richMarkdown: string,
 ): Promise<void> {
   try {
-    await ctx.answerGuestQuery(buildGuestArticleResult(message, richMarkdown));
+    await ctx.answerGuestQuery(
+      await buildGuestArticleResult(ctx.database, message, richMarkdown),
+    );
   } catch (error) {
     logError("Failed to answer guest query:", error);
     await sendRichMarkdownResponse(ctx, message, richMarkdown);
@@ -2562,6 +2590,7 @@ function formatStoredMessageXml(message: MessageMetadata): string {
       id: message.message_id,
       sender: message.sender_name,
       sender_id: message.sender_id,
+      media_group_id: message.media_group_id,
       date: dateTime?.date,
       time: dateTime?.time,
     },

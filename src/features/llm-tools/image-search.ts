@@ -38,7 +38,7 @@ export const readImageToolDefinition = {
   type: "function",
   name: "read_image",
   description:
-    "Load one image into vision so you can inspect its actual visual content. Pass either the direct image_url returned by search_images or the exact saved image ID from a tg://photo Markdown reference. Do not pass source_url or thumbnail_url.",
+    "Load one image into vision so you can inspect its actual visual content. Pass either the direct image_url returned by search_images or the exact saved image ID from a tg://photo or tg://document Markdown reference. Do not pass source_url or thumbnail_url.",
   parameters: {
     type: "object",
     properties: {
@@ -49,7 +49,7 @@ export const readImageToolDefinition = {
       id: {
         type: "string",
         description:
-          "The exact saved image ID from ![](tg://photo?id=IMAGE_ID).",
+          "The exact saved image ID from a tg://photo or tg://document reference.",
       },
     },
     anyOf: [{ required: ["url"] }, { required: ["id"] }],

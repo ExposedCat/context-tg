@@ -21,6 +21,7 @@ export const tools = [
   "search_chat",
   "get_message_context",
   "read_last_messages",
+  "read_image",
   "generate_image",
   "send_sticker",
   "set_reply_message_id",

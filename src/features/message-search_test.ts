@@ -156,6 +156,34 @@ Deno.test("remembered Telegram photos render as reusable Markdown", async () => 
   }
 });
 
+Deno.test("remembered image documents render as reusable document Markdown", async () => {
+  const database = await initDatabase()();
+
+  try {
+    const content = await formatRememberedMessageContent(database, {
+      message_id: 2,
+      media_group_id: "album-42",
+      date: 2,
+      document: {
+        file_id: "image-document",
+        file_name: "diagram.png",
+        mime_type: "image/png",
+      },
+    });
+
+    ok(/^!\[\]\(tg:\/\/document\?id=image_[a-f0-9]{32}\)$/.test(content ?? ""));
+    deepStrictEqual(
+      await database
+        .selectFrom("images")
+        .select(["file_id", "media_type"])
+        .executeTakeFirst(),
+      { file_id: "image-document", media_type: "document" },
+    );
+  } finally {
+    await database.destroy();
+  }
+});
+
 Deno.test("message context output marks the requested target", () => {
   const output = JSON.parse(
     formatMessageContextJson(
@@ -181,6 +209,16 @@ Deno.test("message context output marks the requested target", () => {
       [12, false],
     ],
   );
+});
+
+Deno.test("message context exposes Telegram album ids", () => {
+  const output = JSON.parse(
+    formatMessageContextJson(10, 1, [
+      createMessage(10, { media_group_id: "album-42" }),
+    ]),
+  );
+
+  strictEqual(output.messages[0].media_group_id, "album-42");
 });
 
 Deno.test("overlapping context windows merge and retain a distant reply parent", () => {

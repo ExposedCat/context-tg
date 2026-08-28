@@ -1,4 +1,4 @@
-import type { Insertable, Selectable } from "@kysely/kysely";
+import type { ColumnType, Selectable } from "@kysely/kysely";
 import { type Api, InputFile } from "grammy";
 import type { Database } from "./database.ts";
 import { APP_ENV } from "./env.ts";
@@ -6,9 +6,15 @@ import { APP_ENV } from "./env.ts";
 export type ImagesTable = {
   id: string;
   file_id: string;
+  media_type: ColumnType<
+    SavedImageMediaType,
+    SavedImageMediaType | undefined,
+    SavedImageMediaType
+  >;
   created_at: string;
 };
 
+export type SavedImageMediaType = "photo" | "document";
 export type StoredImage = Selectable<ImagesTable>;
 
 export type ImageSource = {
@@ -17,22 +23,31 @@ export type ImageSource = {
   mimeType?: string;
 };
 
-export type RichMessagePhotoMedia = {
+export type RichMessageImageMedia = {
   id: string;
   media: {
-    type: "photo";
+    type: SavedImageMediaType;
     media: string;
   };
 };
 
-const IMAGE_REFERENCE_PATTERN = /tg:\/\/photo\?id=([A-Za-z0-9_-]{1,64})/g;
+type ImageReference = {
+  id: string;
+  mediaType: SavedImageMediaType;
+};
+
+const IMAGE_REFERENCE_PATTERN =
+  /tg:\/\/(photo|document)\?id=([A-Za-z0-9_-]{1,64})/g;
 const pendingImageRegistrations = new WeakMap<
   Database,
   Map<string, Promise<StoredImage>>
 >();
 
-export function formatImageMarkdown(imageId: string): string {
-  return `![](tg://photo?id=${imageId})`;
+export function formatImageMarkdown(
+  imageId: string,
+  mediaType: SavedImageMediaType = "photo",
+): string {
+  return `![](tg://${mediaType}?id=${imageId})`;
 }
 
 export async function migrateImages(database: Database): Promise<void> {
@@ -41,8 +56,22 @@ export async function migrateImages(database: Database): Promise<void> {
     .ifNotExists()
     .addColumn("id", "text", (column) => column.primaryKey().notNull())
     .addColumn("file_id", "text", (column) => column.notNull())
+    .addColumn("media_type", "text", (column) =>
+      column.notNull().defaultTo("photo"),
+    )
     .addColumn("created_at", "text", (column) => column.notNull())
     .execute();
+
+  try {
+    await database.schema
+      .alterTable("images")
+      .addColumn("media_type", "text", (column) =>
+        column.notNull().defaultTo("photo"),
+      )
+      .execute();
+  } catch {
+    // Column already exists on fresh or previously migrated databases.
+  }
 }
 
 function getHttpUrl(value: string | undefined): string | undefined {
@@ -101,10 +130,14 @@ function createImageId(): string {
   return `image_${crypto.randomUUID().replaceAll("-", "")}`;
 }
 
-function createStoredImage(fileId: string): Insertable<ImagesTable> {
+function createStoredImage(
+  fileId: string,
+  mediaType: SavedImageMediaType,
+): StoredImage {
   return {
     id: createImageId(),
     file_id: fileId,
+    media_type: mediaType,
     created_at: new Date().toISOString(),
   };
 }
@@ -134,7 +167,7 @@ export async function saveImage(
     throw new Error("Telegram media cache response did not contain a photo.");
   }
 
-  return await saveImageFileId(database, photo.file_id);
+  return await saveImageFileId(database, photo.file_id, "photo");
 }
 
 export async function getImageById(
@@ -151,6 +184,7 @@ export async function getImageById(
 export async function saveImageFileId(
   database: Database,
   fileId: string,
+  mediaType: SavedImageMediaType = "photo",
 ): Promise<StoredImage> {
   const normalizedFileId = fileId.trim();
 
@@ -164,7 +198,8 @@ export async function saveImageFileId(
     pendingImageRegistrations.set(database, databaseRegistrations);
   }
 
-  const pending = databaseRegistrations.get(normalizedFileId);
+  const registrationKey = `${mediaType}:${normalizedFileId}`;
+  const pending = databaseRegistrations.get(registrationKey);
   if (pending) {
     return await pending;
   }
@@ -174,23 +209,24 @@ export async function saveImageFileId(
       .selectFrom("images")
       .selectAll()
       .where("file_id", "=", normalizedFileId)
+      .where("media_type", "=", mediaType)
       .executeTakeFirst();
 
     if (existing) {
       return existing;
     }
 
-    const image = createStoredImage(normalizedFileId);
+    const image = createStoredImage(normalizedFileId, mediaType);
     await database.insertInto("images").values(image).execute();
     return image;
   })();
-  databaseRegistrations.set(normalizedFileId, registration);
+  databaseRegistrations.set(registrationKey, registration);
 
   try {
     return await registration;
   } finally {
-    if (databaseRegistrations.get(normalizedFileId) === registration) {
-      databaseRegistrations.delete(normalizedFileId);
+    if (databaseRegistrations.get(registrationKey) === registration) {
+      databaseRegistrations.delete(registrationKey);
     }
   }
 }
@@ -268,19 +304,30 @@ export async function downloadTelegramImageDataUrl(
   return `data:${mimeType};base64,${encodeBase64(bytes)}`;
 }
 
-export function getRichMessageImageIds(markdown: string): string[] {
-  const ids = Array.from(
+function getRichMessageImageReferences(markdown: string): ImageReference[] {
+  const references = Array.from(
     markdown.matchAll(IMAGE_REFERENCE_PATTERN),
-    (match) => match[1],
+    (match): ImageReference => ({
+      mediaType: match[1] as SavedImageMediaType,
+      id: match[2],
+    }),
   );
-  return [...new Set(ids)];
+  const referencesById = new Map(
+    references.map((reference) => [reference.id, reference]),
+  );
+  return [...referencesById.values()];
+}
+
+export function getRichMessageImageIds(markdown: string): string[] {
+  return getRichMessageImageReferences(markdown).map(({ id }) => id);
 }
 
 export async function resolveRichMessageImageMedia(
   database: Database,
   markdown: string,
-): Promise<RichMessagePhotoMedia[]> {
-  const ids = getRichMessageImageIds(markdown);
+): Promise<RichMessageImageMedia[]> {
+  const references = getRichMessageImageReferences(markdown);
+  const ids = references.map(({ id }) => id);
 
   if (ids.length === 0) {
     return [];
@@ -288,7 +335,7 @@ export async function resolveRichMessageImageMedia(
 
   const images = await database
     .selectFrom("images")
-    .select(["id", "file_id"])
+    .select(["id", "file_id", "media_type"])
     .where("id", "in", ids)
     .execute();
   const imagesById = new Map(images.map((image) => [image.id, image]));
@@ -298,17 +345,23 @@ export async function resolveRichMessageImageMedia(
     throw new Error(`Unknown image id(s): ${missingIds.join(", ")}`);
   }
 
-  return ids.map((id) => {
-    const image = imagesById.get(id);
+  return references.map((reference) => {
+    const image = imagesById.get(reference.id);
 
     if (!image) {
-      throw new Error(`Unknown image id: ${id}`);
+      throw new Error(`Unknown image id: ${reference.id}`);
+    }
+
+    if (image.media_type !== reference.mediaType) {
+      throw new Error(
+        `Image id ${reference.id} is stored as ${image.media_type}, not ${reference.mediaType}.`,
+      );
     }
 
     return {
-      id,
+      id: reference.id,
       media: {
-        type: "photo",
+        type: image.media_type,
         media: image.file_id,
       },
     };

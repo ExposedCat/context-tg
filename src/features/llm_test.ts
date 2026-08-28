@@ -788,6 +788,7 @@ Deno.test("generate_image caches media and returns reusable rich Markdown", asyn
     strictEqual(storedImages.length, 1);
     strictEqual(storedImages[0].id, response.generatedImageIds[0]);
     strictEqual(storedImages[0].file_id, "generated-large");
+    strictEqual(storedImages[0].media_type, "photo");
     ok(!Number.isNaN(Date.parse(storedImages[0].created_at)));
   } finally {
     globalThis.fetch = originalFetch;
