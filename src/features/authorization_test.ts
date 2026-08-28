@@ -74,14 +74,25 @@ Deno.test("ordinary members and non-admin private users cannot configure", async
 });
 
 Deno.test("configure menu only shows owner-only commands to the bot admin", () => {
-  strictEqual(formatConfigureMenu("configure", true).includes("/model"), true);
-  strictEqual(formatConfigureMenu("configure", true).includes("/debug"), true);
+  const translate = ((key: string) =>
+    key === "settings-configure-menu-admin"
+      ? "Models /model\nDebug /debug"
+      : "") as Context["t"];
+
   strictEqual(
-    formatConfigureMenu("configure", false).includes("/model"),
+    formatConfigureMenu(translate, "configure", true).includes("/model"),
+    true,
+  );
+  strictEqual(
+    formatConfigureMenu(translate, "configure", true).includes("/debug"),
+    true,
+  );
+  strictEqual(
+    formatConfigureMenu(translate, "configure", false).includes("/model"),
     false,
   );
   strictEqual(
-    formatConfigureMenu("configure", false).includes("/debug"),
+    formatConfigureMenu(translate, "configure", false).includes("/debug"),
     false,
   );
 });

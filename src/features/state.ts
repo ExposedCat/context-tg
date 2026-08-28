@@ -59,12 +59,32 @@ const REASONING_OPTIONS = [
 const MAX_RESPONSE_INTERVAL_MESSAGE_COUNT = 1_000_000;
 const FLUSH_ALL_MEMOS_COMMAND_PATTERN =
   /^\/monstrous(?:@\w+)?\s+unhuman unethical unfair reset an actual being with own life experience and awareness\s*$/;
-const CONFIGURE_KIND_LABELS = {
-  debug: "Debug",
-  reasoning: "Reasoning",
-} as const satisfies Record<ChatLlmSettingKey, string>;
 
 type ConfigureScope = "configure" | "global";
+
+const CONFIGURE_KIND_KEYS = {
+  debug: {
+    configure: "settings-kind-debug",
+    global: "settings-kind-debug-global",
+  },
+  reasoning: {
+    configure: "settings-kind-reasoning",
+    global: "settings-kind-reasoning-global",
+  },
+} as const satisfies Record<ChatLlmSettingKey, Record<ConfigureScope, string>>;
+
+const SETTING_VALUE_KEYS: Record<string, string> = {
+  null: "settings-value-null",
+  none: "settings-value-none",
+  minimal: "settings-value-minimal",
+  low: "settings-value-low",
+  medium: "settings-value-medium",
+  high: "settings-value-high",
+  xhigh: "settings-value-xhigh",
+  off: "settings-value-off",
+  on: "settings-value-on",
+};
+
 type MessageIntervalSetting = number | "off";
 type MessageIntervalStatus = {
   enabled: boolean;
@@ -81,19 +101,23 @@ type SettingsKeyboardMarkup = {
   inline_keyboard: SettingsKeyboardButton[][];
 };
 
-function getModelCommandUsage(): string {
+function getModelCommandUsage(translate: Context["t"]): string {
   const options = LLM_DEPLOYMENT_OPTIONS.map(({ id }) => id).join("|");
-  return `Usage: /model ${options} DEPLOYMENT_NAME`;
+  return translate("settings-model-usage", { options });
 }
 
-function getDebugCommandUsage(): string {
-  return "Usage: /debug on|off";
+function getDebugCommandUsage(translate: Context["t"]): string {
+  return translate("settings-debug-usage");
 }
 
 function getIntervalCommandUsage(
+  translate: Context["t"],
   command: "/trolleach" | "/trolling" | "/proactive",
 ): string {
-  return `Usage: ${command} N|off, where N is a positive integer up to ${MAX_RESPONSE_INTERVAL_MESSAGE_COUNT}`;
+  return translate("settings-interval-usage", {
+    command,
+    max: String(MAX_RESPONSE_INTERVAL_MESSAGE_COUNT),
+  });
 }
 
 function parseMessageIntervalSetting(
@@ -122,14 +146,22 @@ function parseMessageIntervalSetting(
     : undefined;
 }
 
-function formatMessageIntervalStatus(status: MessageIntervalStatus): string {
+function formatMessageIntervalStatus(
+  translate: Context["t"],
+  status: MessageIntervalStatus,
+): string {
   return status.enabled
-    ? `${status.intervalMessageCount}`
-    : `off (saved interval: ${status.intervalMessageCount})`;
+    ? translate("settings-interval-status-enabled", {
+        count: status.intervalMessageCount,
+      })
+    : translate("settings-interval-status-disabled", {
+        count: status.intervalMessageCount,
+      });
 }
 
-function formatReasoningSettingLabel(value: string): string {
-  return value === "null" ? "null" : value;
+function formatSettingValue(translate: Context["t"], value: string): string {
+  const key = SETTING_VALUE_KEYS[value];
+  return key ? translate(key) : value;
 }
 
 function isConfigureKind(value: string): value is ChatLlmSettingKey {
@@ -148,84 +180,80 @@ function formatDebugMode(enabled: boolean): string {
   return enabled ? "on" : "off";
 }
 
-function formatConfigureScopeTarget(scope: ConfigureScope): string {
-  return scope === "global" ? "all chats" : "this chat";
-}
-
 function formatConfigureKindLabel(
+  translate: Context["t"],
   scope: ConfigureScope,
   kind: ChatLlmSettingKey,
 ): string {
-  const label = CONFIGURE_KIND_LABELS[kind];
-
-  return scope === "global" ? `Global ${label}` : label;
-}
-
-function formatConfigureTitle(scope: ConfigureScope): string {
-  return `Configure ${formatConfigureScopeTarget(scope)}:`;
+  return translate(CONFIGURE_KIND_KEYS[kind][scope]);
 }
 
 export function formatConfigureMenu(
+  translate: Context["t"],
   scope: ConfigureScope,
   includeBotAdminCommands: boolean,
 ): string {
   if (scope === "global") {
-    return formatConfigureTitle(scope);
+    return translate("settings-configure-global-title");
   }
 
-  const rows = [
-    "Stickers /stickers",
-    "Emoji /packs",
-    "Trolling /trolling",
-    "Proactive /proactive",
-  ];
-
-  if (includeBotAdminCommands) {
-    rows.splice(2, 0, "Models /model", "Debug /debug");
-  }
-
-  return rows.join("\n");
+  return translate(
+    includeBotAdminCommands
+      ? "settings-configure-menu-admin"
+      : "settings-configure-menu",
+  );
 }
 
-function formatConfigureAdminWarning(scope: ConfigureScope): string {
-  return scope === "global"
-    ? "Only the bot admin can configure all chats."
-    : "Only the bot admin or a group admin can configure this chat.";
+function formatConfigureAdminWarning(
+  translate: Context["t"],
+  scope: ConfigureScope,
+): string {
+  return translate(
+    scope === "global"
+      ? "settings-admin-warning-global"
+      : "settings-admin-warning-chat",
+  );
 }
 
-function formatDeploymentLabel(deployment: LlmSettingsDeployment): string {
-  return deployment === "all" ? "All" : deployment;
+function formatDeploymentLabel(
+  translate: Context["t"],
+  deployment: LlmSettingsDeployment,
+): string {
+  return deployment === "all"
+    ? translate("settings-deployment-all")
+    : formatModelDisplayName(translate, deployment);
 }
 
-function formatModelDisplayName(id: string): string {
+function formatModelDisplayName(translate: Context["t"], id: string): string {
   switch (id) {
     case "small":
-      return "Small";
+      return translate("settings-model-small");
     case "big":
-      return "Big";
+      return translate("settings-model-big");
     case "openminded":
-      return "Open-Minded";
+      return translate("settings-model-openminded");
     case "image":
-      return "Image";
+      return translate("settings-model-image");
     default:
       return id;
   }
 }
 
-function formatModelCommandStatus(): string {
+function formatModelCommandStatus(translate: Context["t"]): string {
   return [
-    "Current models:",
+    translate("settings-model-status-title"),
     ...LLM_DEPLOYMENT_OPTIONS.map(
       (deployment) =>
-        `${formatModelDisplayName(deployment.id)} - ${
-          deployment.deploymentName || "(not set)"
+        `${formatModelDisplayName(translate, deployment.id)} - ${
+          deployment.deploymentName || translate("settings-model-not-set")
         }`,
     ),
-    getModelCommandUsage(),
+    getModelCommandUsage(translate),
   ].join("\n");
 }
 
 function buildSettingsKeyboard(
+  translate: Context["t"],
   options: readonly string[],
   current: string,
   callbackPrefix: string,
@@ -235,7 +263,7 @@ function buildSettingsKeyboard(
 
   for (const [index, option] of options.entries()) {
     row.push({
-      text: formatReasoningSettingLabel(option),
+      text: formatSettingValue(translate, option),
       callback_data: `${callbackPrefix}:${option}`,
       ...(option === current ? { style: "success" } : {}),
     });
@@ -253,16 +281,19 @@ function buildSettingsKeyboard(
   return { inline_keyboard: rows };
 }
 
-function buildConfigureKeyboard(scope: ConfigureScope): SettingsKeyboardMarkup {
+function buildConfigureKeyboard(
+  translate: Context["t"],
+  scope: ConfigureScope,
+): SettingsKeyboardMarkup {
   return {
     inline_keyboard: [
       [
         {
-          text: CONFIGURE_KIND_LABELS.debug,
+          text: translate(CONFIGURE_KIND_KEYS.debug.configure),
           callback_data: `${scope}:debug`,
         },
         {
-          text: CONFIGURE_KIND_LABELS.reasoning,
+          text: translate(CONFIGURE_KIND_KEYS.reasoning.configure),
           callback_data: `${scope}:reasoning`,
         },
       ],
@@ -271,16 +302,22 @@ function buildConfigureKeyboard(scope: ConfigureScope): SettingsKeyboardMarkup {
 }
 
 function buildConfigureDeploymentKeyboard(
+  translate: Context["t"],
   scope: ConfigureScope,
   kind: ChatLlmSettingKey,
 ): SettingsKeyboardMarkup {
   return {
     inline_keyboard: [
       LLM_DEPLOYMENT_OPTIONS.map((deployment) => ({
-        text: deployment.id,
+        text: formatModelDisplayName(translate, deployment.id),
         callback_data: `${scope}:${kind}:deployment:${deployment.id}`,
       })),
-      [{ text: "All", callback_data: `${scope}:${kind}:deployment:all` }],
+      [
+        {
+          text: translate("settings-deployment-all"),
+          callback_data: `${scope}:${kind}:deployment:all`,
+        },
+      ],
     ],
   };
 }
@@ -305,6 +342,7 @@ async function buildConfigureDebugKeyboard(
   scope: ConfigureScope,
 ): Promise<SettingsKeyboardMarkup> {
   return buildSettingsKeyboard(
+    ctx.t,
     ["off", "on"],
     await getConfigureDebugValue(ctx, scope),
     `${scope}:debug:set`,
@@ -340,19 +378,12 @@ async function buildConfigureSettingKeyboard(
   const current = await getConfigureValue(ctx, scope, deployment);
 
   return buildSettingsKeyboard(
+    ctx.t,
     REASONING_OPTIONS,
     current,
     `${scope}:${kind}:set:${deployment}`,
   );
 }
-
-stateComposer.chatType("private").command("start", async (ctx) => {
-  await ctx.reply(ctx.t("start", { name: ctx.from.first_name }));
-});
-
-stateComposer.chatType("private").command("stop", async (ctx) => {
-  await ctx.reply(ctx.t("stop", { name: ctx.from.first_name }));
-});
 
 stateComposer.command("tasks", async (ctx) => {
   await replyWithRecentTasks(ctx);
@@ -373,6 +404,7 @@ stateComposer.command("usage", async (ctx) => {
     ctx.chat.id,
     args,
     isBotAdmin(ctx),
+    ctx.t,
   );
 
   await ctx.reply(response);
@@ -380,14 +412,14 @@ stateComposer.command("usage", async (ctx) => {
 
 stateComposer.command("model", async (ctx) => {
   if (!isBotAdmin(ctx)) {
-    await ctx.reply("Only the admin can change models.");
+    await ctx.reply(ctx.t("settings-model-admin-only"));
     return;
   }
 
   const args = typeof ctx.match === "string" ? ctx.match.trim() : "";
 
   if (!args) {
-    await ctx.reply(formatModelCommandStatus());
+    await ctx.reply(formatModelCommandStatus(ctx.t));
     return;
   }
 
@@ -399,7 +431,7 @@ stateComposer.command("model", async (ctx) => {
     !deploymentName ||
     extraParts.length > 0
   ) {
-    await ctx.reply(getModelCommandUsage());
+    await ctx.reply(getModelCommandUsage(ctx.t));
     return;
   }
 
@@ -409,7 +441,12 @@ stateComposer.command("model", async (ctx) => {
     deploymentName,
   );
 
-  await ctx.reply(`Global ${rawName} model was set to ${updatedName}.`);
+  await ctx.reply(
+    ctx.t("settings-model-updated", {
+      model: formatModelDisplayName(ctx.t, rawName),
+      deployment: updatedName,
+    }),
+  );
 });
 
 stateComposer.command("configure", async (ctx) => {
@@ -418,16 +455,16 @@ stateComposer.command("configure", async (ctx) => {
   }
 
   if (!(await canConfigureChat(ctx))) {
-    await ctx.reply(formatConfigureAdminWarning("configure"));
+    await ctx.reply(formatConfigureAdminWarning(ctx.t, "configure"));
     return;
   }
 
   const botAdmin = isBotAdmin(ctx);
 
   await ctx.reply(
-    formatConfigureMenu("configure", botAdmin),
+    formatConfigureMenu(ctx.t, "configure", botAdmin),
     botAdmin
-      ? { reply_markup: buildConfigureKeyboard("configure") }
+      ? { reply_markup: buildConfigureKeyboard(ctx.t, "configure") }
       : undefined,
   );
 });
@@ -438,7 +475,7 @@ stateComposer.hears(/^\/debug(?:@\w+)?(?:\s+(.+))?$/, async (ctx) => {
   }
 
   if (!isBotAdmin(ctx)) {
-    await ctx.reply("Only the bot admin can configure debug mode.");
+    await ctx.reply(ctx.t("settings-debug-admin-only"));
     return;
   }
 
@@ -448,9 +485,9 @@ stateComposer.hears(/^\/debug(?:@\w+)?(?:\s+(.+))?$/, async (ctx) => {
   if (setting === undefined) {
     const current = await getChatDebugMode(ctx.database, ctx.chat.id);
     await ctx.reply(
-      `${getDebugCommandUsage()}\nCurrent debug mode: ${formatDebugMode(
-        current,
-      )}`,
+      `${getDebugCommandUsage(ctx.t)}\n${ctx.t("settings-debug-current", {
+        value: formatSettingValue(ctx.t, formatDebugMode(current)),
+      })}`,
     );
     return;
   }
@@ -461,17 +498,21 @@ stateComposer.hears(/^\/debug(?:@\w+)?(?:\s+(.+))?$/, async (ctx) => {
     setting,
   );
 
-  await ctx.reply(`Debug mode ${formatDebugMode(updated)} for this chat.`);
+  await ctx.reply(
+    ctx.t("settings-debug-updated", {
+      value: formatSettingValue(ctx.t, formatDebugMode(updated)),
+    }),
+  );
 });
 
 stateComposer.command("global", async (ctx) => {
   if (!isBotAdmin(ctx)) {
-    await ctx.reply(formatConfigureAdminWarning("global"));
+    await ctx.reply(formatConfigureAdminWarning(ctx.t, "global"));
     return;
   }
 
-  await ctx.reply(formatConfigureMenu("global", true), {
-    reply_markup: buildConfigureKeyboard("global"),
+  await ctx.reply(formatConfigureMenu(ctx.t, "global", true), {
+    reply_markup: buildConfigureKeyboard(ctx.t, "global"),
   });
 });
 
@@ -538,7 +579,7 @@ stateComposer.callbackQuery(
 
     if (!isConfigureScope(scope) || !isConfigureKind(kind)) {
       await ctx.answerCallbackQuery({
-        text: "Unknown configuration option.",
+        text: ctx.t("settings-error-unknown-configuration"),
         show_alert: true,
       });
       return;
@@ -546,7 +587,7 @@ stateComposer.callbackQuery(
 
     if (!isBotAdmin(ctx)) {
       await ctx.answerCallbackQuery({
-        text: "Only the bot admin can configure debug and reasoning.",
+        text: ctx.t("settings-error-debug-reasoning-admin-only"),
         show_alert: true,
       });
       return;
@@ -560,7 +601,9 @@ stateComposer.callbackQuery(
 
     if (kind === "debug") {
       await ctx.editMessageText(
-        `Choose ${formatConfigureKindLabel(scope, kind)} mode:`,
+        ctx.t("settings-choose-debug-mode", {
+          setting: formatConfigureKindLabel(ctx.t, scope, kind),
+        }),
         {
           reply_markup: await buildConfigureDebugKeyboard(ctx, scope),
         },
@@ -569,9 +612,11 @@ stateComposer.callbackQuery(
     }
 
     await ctx.editMessageText(
-      `Choose deployment for ${formatConfigureKindLabel(scope, kind)}:`,
+      ctx.t("settings-choose-deployment", {
+        setting: formatConfigureKindLabel(ctx.t, scope, kind),
+      }),
       {
-        reply_markup: buildConfigureDeploymentKeyboard(scope, kind),
+        reply_markup: buildConfigureDeploymentKeyboard(ctx.t, scope, kind),
       },
     );
   },
@@ -585,7 +630,7 @@ stateComposer.callbackQuery(
 
     if (!isConfigureScope(scope)) {
       await ctx.answerCallbackQuery({
-        text: "Unknown configuration option.",
+        text: ctx.t("settings-error-unknown-configuration"),
         show_alert: true,
       });
       return;
@@ -593,7 +638,7 @@ stateComposer.callbackQuery(
 
     if (!isBotAdmin(ctx)) {
       await ctx.answerCallbackQuery({
-        text: "Only the bot admin can configure debug and reasoning.",
+        text: ctx.t("settings-error-debug-reasoning-admin-only"),
         show_alert: true,
       });
       return;
@@ -603,7 +648,7 @@ stateComposer.callbackQuery(
 
     if (enabled === undefined) {
       await ctx.answerCallbackQuery({
-        text: "Unknown debug option.",
+        text: ctx.t("settings-error-unknown-debug"),
         show_alert: true,
       });
       return;
@@ -627,15 +672,12 @@ stateComposer.callbackQuery(
 
     await ctx.answerCallbackQuery();
     await ctx.editMessageText(
-      `${formatConfigureKindLabel(
-        scope,
-        "debug",
-      )} mode was set to ${updatedValue}.\n\n${formatConfigureMenu(
-        scope,
-        isBotAdmin(ctx),
-      )}`,
+      `${ctx.t("settings-debug-set", {
+        setting: formatConfigureKindLabel(ctx.t, scope, "debug"),
+        value: formatSettingValue(ctx.t, updatedValue),
+      })}\n\n${formatConfigureMenu(ctx.t, scope, isBotAdmin(ctx))}`,
       {
-        reply_markup: buildConfigureKeyboard(scope),
+        reply_markup: buildConfigureKeyboard(ctx.t, scope),
       },
     );
   },
@@ -654,7 +696,7 @@ stateComposer.callbackQuery(
       !isLlmSettingsDeployment(deployment)
     ) {
       await ctx.answerCallbackQuery({
-        text: "Unknown configuration option.",
+        text: ctx.t("settings-error-unknown-configuration"),
         show_alert: true,
       });
       return;
@@ -662,7 +704,7 @@ stateComposer.callbackQuery(
 
     if (!isBotAdmin(ctx)) {
       await ctx.answerCallbackQuery({
-        text: "Only the bot admin can configure debug and reasoning.",
+        text: ctx.t("settings-error-debug-reasoning-admin-only"),
         show_alert: true,
       });
       return;
@@ -674,9 +716,10 @@ stateComposer.callbackQuery(
 
     await ctx.answerCallbackQuery();
     await ctx.editMessageText(
-      `Choose ${formatConfigureKindLabel(scope, kind)} for ${formatDeploymentLabel(
-        deployment,
-      )}:`,
+      ctx.t("settings-choose-reasoning", {
+        setting: formatConfigureKindLabel(ctx.t, scope, kind),
+        deployment: formatDeploymentLabel(ctx.t, deployment),
+      }),
       {
         reply_markup: await buildConfigureSettingKeyboard(
           ctx,
@@ -703,7 +746,7 @@ stateComposer.callbackQuery(
       !isLlmSettingsDeployment(deployment)
     ) {
       await ctx.answerCallbackQuery({
-        text: "Unknown configuration option.",
+        text: ctx.t("settings-error-unknown-configuration"),
         show_alert: true,
       });
       return;
@@ -711,7 +754,7 @@ stateComposer.callbackQuery(
 
     if (!isBotAdmin(ctx)) {
       await ctx.answerCallbackQuery({
-        text: "Only the bot admin can configure debug and reasoning.",
+        text: ctx.t("settings-error-debug-reasoning-admin-only"),
         show_alert: true,
       });
       return;
@@ -721,7 +764,7 @@ stateComposer.callbackQuery(
 
     if (effort === undefined) {
       await ctx.answerCallbackQuery({
-        text: "Unknown reasoning option.",
+        text: ctx.t("settings-error-unknown-reasoning"),
         show_alert: true,
       });
       return;
@@ -750,14 +793,13 @@ stateComposer.callbackQuery(
 
     await ctx.answerCallbackQuery();
     await ctx.editMessageText(
-      `${formatConfigureKindLabel(scope, kind)} for ${formatDeploymentLabel(
-        deployment,
-      )} was set to ${updatedValue}.\n\n${formatConfigureMenu(
-        scope,
-        isBotAdmin(ctx),
-      )}`,
+      `${ctx.t("settings-reasoning-set", {
+        setting: formatConfigureKindLabel(ctx.t, scope, kind),
+        deployment: formatDeploymentLabel(ctx.t, deployment),
+        value: formatSettingValue(ctx.t, updatedValue),
+      })}\n\n${formatConfigureMenu(ctx.t, scope, isBotAdmin(ctx))}`,
       {
-        reply_markup: buildConfigureKeyboard(scope),
+        reply_markup: buildConfigureKeyboard(ctx.t, scope),
       },
     );
   },
@@ -777,23 +819,25 @@ async function replyWithTrollingIntervalCommand(
   if (setting === undefined) {
     const current = await getTrollingSettings(ctx.database, ctx.chat.id);
     await ctx.reply(
-      `${getIntervalCommandUsage(
-        command,
-      )}\nCurrent trolling interval: ${formatMessageIntervalStatus(current)}`,
+      [
+        ctx.t("settings-trolling-description"),
+        getIntervalCommandUsage(ctx.t, command),
+        ctx.t("settings-current-value", {
+          value: formatMessageIntervalStatus(ctx.t, current),
+        }),
+      ].join("\n\n"),
     );
     return;
   }
 
   if (setting === "off") {
     await setTrollingEnabled(ctx.database, ctx.chat.id, false);
-    await ctx.reply("Trolling disabled for this chat.");
+    await ctx.reply(ctx.t("settings-trolling-disabled"));
     return;
   }
 
   await setTrollingInterval(ctx.database, ctx.chat.id, setting);
-  await ctx.reply(
-    `Trolling interval set to ${setting} messages for this chat. It rolls a 25% chance at each interval.`,
-  );
+  await ctx.reply(ctx.t("settings-trolling-updated", { count: setting }));
 }
 
 stateComposer.hears(/^\/trolling(?:@\w+)?(?:\s+(.+))?$/, async (ctx) => {
@@ -817,21 +861,23 @@ stateComposer.hears(/^\/proactive(?:@\w+)?(?:\s+(.+))?$/, async (ctx) => {
       ctx.chat.id,
     );
     await ctx.reply(
-      `${getIntervalCommandUsage(
-        "/proactive",
-      )}\nCurrent proactive interval: ${formatMessageIntervalStatus(current)}`,
+      [
+        ctx.t("settings-proactive-description"),
+        getIntervalCommandUsage(ctx.t, "/proactive"),
+        ctx.t("settings-current-value", {
+          value: formatMessageIntervalStatus(ctx.t, current),
+        }),
+      ].join("\n\n"),
     );
     return;
   }
 
   if (setting === "off") {
     await setProactiveResponseEnabled(ctx.database, ctx.chat.id, false);
-    await ctx.reply("Proactive responses disabled for this chat.");
+    await ctx.reply(ctx.t("settings-proactive-disabled"));
     return;
   }
 
   await setProactiveResponseInterval(ctx.database, ctx.chat.id, setting);
-  await ctx.reply(
-    `Proactive interval set to ${setting} messages for this chat. It rolls a 25% chance at each interval.`,
-  );
+  await ctx.reply(ctx.t("settings-proactive-updated", { count: setting }));
 });

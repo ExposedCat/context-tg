@@ -1,4 +1,5 @@
 import type { Insertable, Selectable } from "@kysely/kysely";
+import type { TranslateFunction } from "grammy-i18n";
 import type { Database } from "./database.ts";
 
 export type UsageKey = "text_responses" | "tool_usages" | "image_responses";
@@ -42,6 +43,12 @@ export const DEFAULT_USAGE_LIMITS = {
   tool_usages: 20,
   image_responses: 3,
 } as const satisfies Record<UsageKey, number>;
+
+const USAGE_LABEL_KEYS = {
+  text_responses: "settings-usage-category-text-responses",
+  tool_usages: "settings-usage-category-tool-usages",
+  image_responses: "settings-usage-category-image-responses",
+} as const satisfies Record<UsageKey, string>;
 
 const USAGE_KEY_ALIASES: Record<string, UsageKey> = {
   text: "text_responses",
@@ -295,19 +302,26 @@ export async function setUsageQuota(
 }
 
 export function formatUsageSnapshot(
+  translate: TranslateFunction,
   snapshot: UsageStatus[],
   usageDate = getUsageDate(),
 ): string {
   return [
-    `Usage for ${usageDate}`,
-    ...snapshot.map((item) => `${item.key}: ${item.used}/${item.quota}`),
+    translate("settings-usage-title", { date: usageDate }),
+    ...snapshot.map((item) =>
+      translate("settings-usage-line", {
+        category: translate(USAGE_LABEL_KEYS[item.key]),
+        used: item.used,
+        quota: item.quota,
+      }),
+    ),
   ].join("\n");
 }
 
-export function getUsageCommandUsage(): string {
-  return ["Usage: /usage", `Usage: /usage ${USAGE_KEYS.join("|")} QUOTA`].join(
-    "\n",
-  );
+export function getUsageCommandUsage(translate: TranslateFunction): string {
+  return translate("settings-usage-usage", {
+    options: USAGE_KEYS.join("|"),
+  });
 }
 
 export async function handleUsageCommand(
@@ -315,6 +329,7 @@ export async function handleUsageCommand(
   chatId: number,
   args: string,
   canSetQuota: boolean,
+  translate: TranslateFunction,
 ): Promise<string> {
   const trimmedArgs = args.trim();
 
@@ -322,11 +337,11 @@ export async function handleUsageCommand(
     const usageDate = getUsageDate();
     const snapshot = await getUsageSnapshot(database, chatId, usageDate);
 
-    return formatUsageSnapshot(snapshot, usageDate);
+    return formatUsageSnapshot(translate, snapshot, usageDate);
   }
 
   if (!canSetQuota) {
-    return "Only the admin can set usage quotas.";
+    return translate("settings-usage-admin-only");
   }
 
   const [rawKey, rawQuota, ...extraParts] = trimmedArgs.split(/\s+/);
@@ -334,10 +349,13 @@ export async function handleUsageCommand(
   const quota = rawQuota ? Number(rawQuota) : Number.NaN;
 
   if (!key || extraParts.length > 0 || !Number.isInteger(quota) || quota < 0) {
-    return getUsageCommandUsage();
+    return getUsageCommandUsage(translate);
   }
 
   const status = await setUsageQuota(database, chatId, key, quota);
 
-  return `Updated ${status.key} quota to ${status.quota}`;
+  return translate("settings-usage-updated", {
+    category: translate(USAGE_LABEL_KEYS[status.key]),
+    quota: status.quota,
+  });
 }

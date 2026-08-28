@@ -2825,6 +2825,7 @@ chatComposer.on("guest_message", async (ctx, next) => {
       ctx.chat.id,
       usageArgs,
       isBotAdmin(ctx),
+      ctx.t,
     );
 
     await sendGuestMarkdownResponse(ctx, message, response);

@@ -23,14 +23,15 @@ import { delay } from "./utils/async.ts";
 const RUNNER_CONCURRENCY = 500;
 const TELEGRAM_RATE_LIMIT_RETRY_DELAY_MS = 3000;
 const TELEGRAM_RATE_LIMIT_MAX_RETRIES = 5;
+const BOT_COMMAND_LOCALES = ["ru", "uk", "de"] as const;
 const BOT_COMMANDS = [
-  { command: "configure", description: "Configure chat settings" },
-  { command: "debug", description: "Toggle debug details" },
-  { command: "stickers", description: "List sticker packs" },
-  { command: "packs", description: "List emoji packs" },
-  { command: "tasks", description: "Show recent tasks" },
-  { command: "schedule", description: "Show scheduled messages" },
-  { command: "usage", description: "Show usage quotas" },
+  { command: "configure", descriptionKey: "command-configure-description" },
+  { command: "debug", descriptionKey: "command-debug-description" },
+  { command: "stickers", descriptionKey: "command-stickers-description" },
+  { command: "packs", descriptionKey: "command-packs-description" },
+  { command: "tasks", descriptionKey: "command-tasks-description" },
+  { command: "schedule", descriptionKey: "command-schedule-description" },
+  { command: "usage", descriptionKey: "command-usage-description" },
 ] as const;
 
 const logDebug = createDebug("app:bot:debug");
@@ -106,7 +107,20 @@ export function initBot(token: string, database: Database) {
 
   return async () => {
     await bot.init();
-    await bot.api.setMyCommands(BOT_COMMANDS);
+    const getLocalizedCommands = (locale: string) =>
+      BOT_COMMANDS.map(({ command, descriptionKey }) => ({
+        command,
+        description: i18n.t(locale, descriptionKey),
+      }));
+
+    await bot.api.setMyCommands(getLocalizedCommands("en"));
+
+    for (const locale of BOT_COMMAND_LOCALES) {
+      await bot.api.setMyCommands(getLocalizedCommands(locale), {
+        language_code: locale,
+      });
+    }
+
     await startScheduleDispatcher(database, bot.api);
     await bot.api.deleteWebhook({ drop_pending_updates: true });
 
