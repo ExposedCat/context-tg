@@ -24,12 +24,18 @@ for (const [name, value] of Object.entries(TEST_ENV)) {
 
 const [
   { assembleMessageSearchWindows },
-  { containsExactPhrase, fuseRankedMessageLists },
+  {
+    containsExactPhrase,
+    formatRememberedMessageContent,
+    fuseRankedMessageLists,
+  },
   { formatMessageContextJson },
+  { initDatabase },
 ] = await Promise.all([
   import("./message-search.ts"),
   import("./messages.ts"),
   import("./llm-tools/chat.ts"),
+  import("./database.ts"),
 ]);
 
 type MessageMetadata = import("./messages.ts").MessageMetadata;
@@ -119,6 +125,35 @@ Deno.test("exact phrase validation behaves like case-insensitive grep", () => {
     containsExactPhrase("Let us deploy the service", "DEPLOY-123"),
     false,
   );
+});
+
+Deno.test("remembered Telegram photos render as reusable Markdown", async () => {
+  const database = await initDatabase()();
+
+  try {
+    const content = await formatRememberedMessageContent(database, {
+      message_id: 1,
+      date: 1,
+      caption: "Architecture sketch",
+      photo: [
+        { file_id: "small-photo", width: 90, height: 90 },
+        { file_id: "large-photo", width: 1200, height: 800 },
+      ],
+    });
+
+    ok(
+      /^!\[\]\(tg:\/\/photo\?id=image_[a-f0-9]{32}\)\nArchitecture sketch$/.test(
+        content ?? "",
+      ),
+    );
+    strictEqual(
+      (await database.selectFrom("images").select("file_id").executeTakeFirst())
+        ?.file_id,
+      "large-photo",
+    );
+  } finally {
+    await database.destroy();
+  }
 });
 
 Deno.test("message context output marks the requested target", () => {

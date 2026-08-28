@@ -35,14 +35,18 @@ repository bind mount cannot make the settings unreadable to SearXNG.
 
 `search_images` returns direct `image_url` values and source metadata. The agent
 then calls `read_image` with one of those URLs to provide the selected image to
-the vision model. Existing JPG, MP4, MP3, OGG, and GIF URLs can be inserted into
-a response with `![](URL)` or `![](URL "caption")`.
+the vision model. `read_image` also accepts a saved image ID from a
+`tg://photo` reference. Existing JPG, MP4, MP3, OGG, and GIF URLs can be
+inserted into a response with `![](URL)` or `![](URL "caption")`.
 
 ## Saved images
 
 Set `MEDIA_CACHE_CHAT_ID` to a private group or channel where the bot can send
 photos. Generated images are uploaded to that chat once, and their Telegram
 `file_id` values are stored in SQLite behind persistent `image_<uuid>` IDs.
+Photos received from Telegram are registered directly from their existing
+`file_id` and use the same persistent references in live context and newly
+indexed message-search results.
 
 Agents receive `![](tg://photo?id=IMAGE_ID)` from the image generation tool and
 can place those references anywhere in rich Markdown, including collages and

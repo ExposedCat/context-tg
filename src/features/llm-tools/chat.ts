@@ -20,7 +20,7 @@ export const searchChatToolDefinition = {
   type: "function",
   name: "search_chat",
   description:
-    "Search remembered messages in the current Telegram chat or forum topic using semantic and lexical matching. Returns a JSON array of relevant conversation windows, with each matched anchor surrounded by nearby messages and its reply parent when available. Telegram photos are represented as [photo attachment], followed by their caption when present. Telegram stickers are represented as [sticker EMOJI]. The sender_id and date filters are optional; only use them when the user explicitly needs a sender or date range filter. Prefer using only queries.",
+    "Search remembered messages in the current Telegram chat or forum topic using semantic and lexical matching. Returns a JSON array of relevant conversation windows, with each matched anchor surrounded by nearby messages and its reply parent when available. Telegram photos are represented as reusable ![](tg://photo?id=IMAGE_ID) Markdown, followed by their caption when present; inspect one by passing its exact ID to read_image. Telegram stickers are represented as [sticker EMOJI]. The sender_id and date filters are optional; only use them when the user explicitly needs a sender or date range filter. Prefer using only queries.",
   parameters: {
     type: "object",
     properties: {

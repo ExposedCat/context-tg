@@ -18,9 +18,14 @@ import {
   stripMessageAgentName,
 } from "./agents/index.ts";
 import { isBotAdmin } from "./authorization.ts";
+import type { Database } from "./database.ts";
 import { findRandomStickerForEmoji } from "./emoji-packs.ts";
-import { APP_ENV } from "./env.ts";
-import { resolveRichMessageImageMedia } from "./images.ts";
+import {
+  downloadTelegramImageDataUrl,
+  formatImageMarkdown,
+  resolveRichMessageImageMedia,
+  saveImageFileId,
+} from "./images.ts";
 import { readLastMessages } from "./last-messages.ts";
 import {
   type LlmCitation,
@@ -477,16 +482,15 @@ function getMessageSenderName(
 function getLlmMessageContent(
   message: LlmContextMessage | undefined,
   text?: string,
+  photoMarkdown?: string,
 ): string | undefined {
   const messageText =
     message && text !== undefined
       ? buildLlmMessageText(message, text)
       : getLlmContextText(message);
-  const parts = [
-    getStickerMarker(message),
-    hasImageAttachments(message) ? "[Attached image]" : undefined,
-    messageText,
-  ].filter((part): part is string => part !== undefined && part.trim() !== "");
+  const parts = [getStickerMarker(message), photoMarkdown, messageText].filter(
+    (part): part is string => part !== undefined && part.trim() !== "",
+  );
 
   return parts.length > 0 ? parts.join("\n") : undefined;
 }
@@ -500,6 +504,20 @@ function getLargestPhoto(
 
     return rightPixels - leftPixels;
   })[0];
+}
+
+async function getMessagePhotoMarkdown(
+  database: Database,
+  message: LlmContextMessage | undefined,
+): Promise<string | undefined> {
+  const photo = getLargestPhoto(message?.photo);
+
+  if (!photo) {
+    return undefined;
+  }
+
+  const image = await saveImageFileId(database, photo.file_id);
+  return formatImageMarkdown(image.id);
 }
 
 function getImageMimeTypeFromFilename(filename: string | undefined) {
@@ -658,11 +676,16 @@ function formatRegularMessageXml(
   );
 }
 
-function formatRegularLlmMessage(
+async function formatRegularLlmMessage(
+  database: Database,
   message: LlmContextMessage | undefined,
   text?: string,
-): string | undefined {
-  const content = getLlmMessageContent(message, text);
+): Promise<string | undefined> {
+  const content = getLlmMessageContent(
+    message,
+    text,
+    await getMessagePhotoMarkdown(database, message),
+  );
 
   if (!content) {
     return undefined;
@@ -671,12 +694,18 @@ function formatRegularLlmMessage(
   return formatRegularMessageXml(message, content);
 }
 
-function formatCurrentLlmMessage(
+async function formatCurrentLlmMessage(
+  database: Database,
   message: TextMessage,
   text: string,
   replyContext: LlmContextMessage | undefined,
-): string {
-  const content = getLlmMessageContent(message, text) ?? text;
+): Promise<string> {
+  const content =
+    getLlmMessageContent(
+      message,
+      text,
+      await getMessagePhotoMarkdown(database, message),
+    ) ?? text;
   const quoteText = getQuoteReplyContextText(message);
   const reply =
     replyContext || quoteText
@@ -695,15 +724,19 @@ function formatCurrentLlmMessage(
   );
 }
 
-function buildRootRequestMessages(
+async function buildRootRequestMessages(
+  database: Database,
   message: TextMessage,
   text: string,
   replyContext: LlmContextMessage | undefined,
-): Array<{
-  text: string;
-  message: LlmContextMessage | undefined;
-}> {
-  const currentMessageText = formatCurrentLlmMessage(
+): Promise<
+  Array<{
+    text: string;
+    message: LlmContextMessage | undefined;
+  }>
+> {
+  const currentMessageText = await formatCurrentLlmMessage(
+    database,
     message,
     text,
     replyContext,
@@ -711,7 +744,7 @@ function buildRootRequestMessages(
   const quoteText = getQuoteReplyContextText(message);
   const replyMessageText =
     replyContext && !quoteText
-      ? formatRegularLlmMessage(replyContext)
+      ? await formatRegularLlmMessage(database, replyContext)
       : undefined;
 
   if (replyMessageText) {
@@ -724,12 +757,13 @@ function buildRootRequestMessages(
   return [{ text: currentMessageText, message }];
 }
 
-function buildThreadRequest(
+async function buildThreadRequest(
+  database: Database,
   message: TextMessage,
   text: string,
   replyContext: LlmContextMessage | undefined,
-): string {
-  return formatCurrentLlmMessage(message, text, replyContext);
+): Promise<string> {
+  return await formatCurrentLlmMessage(database, message, text, replyContext);
 }
 
 function getLlmToolContext(
@@ -748,65 +782,18 @@ function getLlmToolContext(
   };
 }
 
-function getTelegramFileUrl(filePath: string): string {
-  const encodedPath = filePath.split("/").map(encodeURIComponent).join("/");
-  return `https://api.telegram.org/file/bot${APP_ENV.BOT_TOKEN}/${encodedPath}`;
-}
-
-function getResponseMimeType(
-  response: Response,
-  fallbackMimeType: string | undefined,
-  filePath: string,
-): string {
-  const responseMimeType = response.headers.get("content-type")?.split(";")[0];
-
-  if (responseMimeType?.startsWith("image/")) {
-    return responseMimeType;
-  }
-
-  return (
-    fallbackMimeType ?? getImageMimeTypeFromFilename(filePath) ?? "image/jpeg"
-  );
-}
-
-function encodeBase64(bytes: Uint8Array): string {
-  const chunkSize = 0x8000;
-  let binary = "";
-
-  for (let index = 0; index < bytes.length; index += chunkSize) {
-    binary += String.fromCharCode(...bytes.subarray(index, index + chunkSize));
-  }
-
-  return btoa(binary);
-}
-
 async function downloadImageDataUrl(
   ctx: Context,
   attachment: TelegramImageAttachment,
   signal?: AbortSignal,
 ): Promise<LlmImageInput> {
-  const telegramSignal = signal as Parameters<Context["api"]["getFile"]>[1];
-  const file = await ctx.api.getFile(attachment.fileId, telegramSignal);
-
-  if (!file.file_path) {
-    throw new Error("Telegram image file path is unavailable.");
-  }
-
-  const response = await fetch(getTelegramFileUrl(file.file_path), { signal });
-
-  if (!response.ok) {
-    throw new Error(`Telegram image download failed: ${response.status}`);
-  }
-
-  const bytes = new Uint8Array(await response.arrayBuffer());
-  const mimeType = getResponseMimeType(
-    response,
-    attachment.mimeType,
-    file.file_path,
-  );
-
   return {
-    image_url: `data:${mimeType};base64,${encodeBase64(bytes)}`,
+    image_url: await downloadTelegramImageDataUrl(
+      ctx.api,
+      attachment.fileId,
+      attachment.mimeType,
+      signal,
+    ),
     detail: "auto",
   };
 }
@@ -2082,7 +2069,12 @@ async function handleChatRequest(
           if (responseId) {
             const request = await buildLlmRequestInput(
               ctx,
-              buildThreadRequest(message, text, replyContext),
+              await buildThreadRequest(
+                ctx.database,
+                message,
+                text,
+                replyContext,
+              ),
               message,
               taskAbortController.signal,
             );
@@ -2100,7 +2092,12 @@ async function handleChatRequest(
           const request = await buildLlmRequestInputs(
             ctx,
             options.requestMessages ??
-              buildRootRequestMessages(message, text, replyContext),
+              (await buildRootRequestMessages(
+                ctx.database,
+                message,
+                text,
+                replyContext,
+              )),
             taskAbortController.signal,
           );
 
@@ -2493,12 +2490,17 @@ async function handleGuestChatRequest(
     const request = responseId
       ? await buildLlmRequestInput(
           ctx,
-          buildThreadRequest(message, text, replyContext),
+          await buildThreadRequest(ctx.database, message, text, replyContext),
           message,
         )
       : await buildLlmRequestInputs(
           ctx,
-          buildRootRequestMessages(message, text, replyContext),
+          await buildRootRequestMessages(
+            ctx.database,
+            message,
+            text,
+            replyContext,
+          ),
         );
     const llmResponse = await requestLlm(
       request,
@@ -2506,6 +2508,7 @@ async function handleGuestChatRequest(
       responseId,
       {
         database: ctx.database,
+        api: ctx.api,
         context: toolContext,
         agentId: guestAgent.id,
       },

@@ -2,10 +2,12 @@ import { createDebug } from "@grammyjs/debug";
 import OpenAI from "@openai/openai";
 import { Composer } from "grammy";
 import type { Context } from "../bot.ts";
+import type { Database } from "./database.ts";
 import { APP_ENV } from "./env.ts";
+import { formatImageMarkdown, saveImageFileId } from "./images.ts";
 import { startsWithCommandPrefix } from "./message-filter.ts";
 
-type RememberedMessage = {
+export type RememberedMessage = {
   message_id: number;
   message_thread_id?: number;
   is_topic_message?: boolean;
@@ -18,7 +20,11 @@ type RememberedMessage = {
   caption?: string;
   entities?: MessageEntity[];
   caption_entities?: MessageEntity[];
-  photo?: unknown[];
+  photo?: Array<{
+    file_id: string;
+    width: number;
+    height: number;
+  }>;
   sticker?: {
     emoji?: string;
   };
@@ -135,7 +141,6 @@ const logError = createDebug("app:messages:error");
 
 const DEFAULT_SEARCH_LIMIT = 20;
 const RRF_RANK_CONSTANT = 60;
-const PHOTO_ATTACHMENT_MARKER = "[photo attachment]";
 const MESSAGE_PAYLOAD_INDEXES = [
   { fieldName: "chat_id", fieldSchema: "integer" },
   { fieldName: "thread_id", fieldSchema: "integer" },
@@ -475,6 +480,33 @@ function hasPhotoAttachment(message: RememberedMessage): boolean {
   return message.photo !== undefined && message.photo.length > 0;
 }
 
+function getLargestPhoto(message: RememberedMessage) {
+  return message.photo?.toSorted(
+    (left, right) => right.width * right.height - left.width * left.height,
+  )[0];
+}
+
+async function getPhotoMarkdown(
+  database: Database,
+  message: RememberedMessage,
+): Promise<string | undefined> {
+  const photo = getLargestPhoto(message);
+
+  if (!photo) {
+    return undefined;
+  }
+
+  const image = await saveImageFileId(database, photo.file_id);
+  return formatImageMarkdown(image.id);
+}
+
+export async function formatRememberedMessageContent(
+  database: Database,
+  message: RememberedMessage,
+): Promise<string | undefined> {
+  return getMessageContent(message, await getPhotoMarkdown(database, message));
+}
+
 function formatStickerMarker(emoji: string | undefined): string {
   const trimmedEmoji = emoji?.trim();
   return trimmedEmoji ? `[sticker ${trimmedEmoji}]` : "[sticker]";
@@ -486,19 +518,23 @@ function getStickerMarker(message: RememberedMessage): string | undefined {
     : undefined;
 }
 
-function getMessageContent(message: RememberedMessage): string | undefined {
+function getMessageContent(
+  message: RememberedMessage,
+  photoMarkdown?: string,
+): string | undefined {
   const text = getMessageText(message);
-  const parts = [
-    hasPhotoAttachment(message) ? PHOTO_ATTACHMENT_MARKER : undefined,
-    getStickerMarker(message),
-    text,
-  ].filter((part): part is string => part !== undefined && part.trim() !== "");
+  const parts = [photoMarkdown, getStickerMarker(message), text].filter(
+    (part): part is string => part !== undefined && part.trim() !== "",
+  );
 
   return parts.length > 0 ? parts.join("\n") : undefined;
 }
 
-function getIndexableText(message: RememberedMessage): string | undefined {
-  const content = getMessageContent(message);
+function getIndexableText(
+  message: RememberedMessage,
+  photoMarkdown?: string,
+): string | undefined {
+  const content = getMessageContent(message, photoMarkdown);
 
   if (!content) {
     return undefined;
@@ -532,16 +568,22 @@ function shouldSkipIndexing(message: RememberedMessage): boolean {
     return true;
   }
 
-  return getIndexableText(message) === undefined;
+  return (
+    !hasPhotoAttachment(message) && getIndexableText(message) === undefined
+  );
 }
 
 async function indexMessage(
+  database: Database,
   message: RememberedMessage,
   sender: Sender,
   chatId: number,
 ): Promise<void> {
   const senderName = getSenderName(sender);
-  const text = getIndexableText(message);
+  const text = getIndexableText(
+    message,
+    await getPhotoMarkdown(database, message),
+  );
   if (!text) {
     return;
   }
@@ -829,6 +871,7 @@ export async function search(
 }
 
 async function handleIndexMessage(
+  database: Database,
   message: RememberedMessage,
   sender: Sender,
   chatId: number,
@@ -851,7 +894,7 @@ async function handleIndexMessage(
   }
 
   try {
-    await indexMessage(message, sender, chatId);
+    await indexMessage(database, message, sender, chatId);
     logDebug(`Message ${action}`, {
       chatId,
       messageId: message.message_id,
@@ -878,6 +921,7 @@ messagesComposer.on("message", async (ctx, next) => {
     }
 
     const indexed = await handleIndexMessage(
+      ctx.database,
       ctx.message as RememberedMessage,
       ctx.from,
       ctx.chat.id,
@@ -903,6 +947,7 @@ messagesComposer.on("edited_message", async (ctx, next) => {
   }
 
   void handleIndexMessage(
+    ctx.database,
     ctx.editedMessage as RememberedMessage,
     ctx.from,
     ctx.chat.id,

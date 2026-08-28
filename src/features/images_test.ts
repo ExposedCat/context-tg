@@ -25,8 +25,29 @@ for (const [name, value] of Object.entries(TEST_ENV)) {
 
 const [
   { initDatabase },
-  { getRichMessageImageIds, resolveRichMessageImageMedia, saveImage },
+  {
+    getImageById,
+    getRichMessageImageIds,
+    resolveRichMessageImageMedia,
+    saveImage,
+    saveImageFileId,
+  },
 ] = await Promise.all([import("./database.ts"), import("./images.ts")]);
+
+Deno.test("Telegram photo file ids receive stable saved image ids", async () => {
+  const database = await initDatabase()();
+
+  try {
+    const first = await saveImageFileId(database, "telegram-photo-file");
+    const reused = await saveImageFileId(database, "telegram-photo-file");
+
+    match(first.id, /^image_[a-f0-9]{32}$/);
+    strictEqual(reused.id, first.id);
+    deepStrictEqual(await getImageById(database, first.id), first);
+  } finally {
+    await database.destroy();
+  }
+});
 
 Deno.test("saved images are cached and resolved for rich Markdown", async () => {
   const database = await initDatabase()();

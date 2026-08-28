@@ -1,5 +1,6 @@
 import { createDebug } from "@grammyjs/debug";
 import { APP_ENV } from "../env.ts";
+import { downloadTelegramImageDataUrl, getImageById } from "../images.ts";
 import type { FunctionToolRunner } from "./types.ts";
 import { asRecord, getJsonError, getString } from "./utils.ts";
 
@@ -37,7 +38,7 @@ export const readImageToolDefinition = {
   type: "function",
   name: "read_image",
   description:
-    "Load one image result into vision so you can inspect its actual visual content. Use the image_url returned by search_images, not the source_url or thumbnail_url.",
+    "Load one image into vision so you can inspect its actual visual content. Pass either the direct image_url returned by search_images or the exact saved image ID from a tg://photo Markdown reference. Do not pass source_url or thumbnail_url.",
   parameters: {
     type: "object",
     properties: {
@@ -45,11 +46,16 @@ export const readImageToolDefinition = {
         type: "string",
         description: "The direct image_url returned by search_images.",
       },
+      id: {
+        type: "string",
+        description:
+          "The exact saved image ID from ![](tg://photo?id=IMAGE_ID).",
+      },
     },
-    required: ["url"],
+    anyOf: [{ required: ["url"] }, { required: ["id"] }],
     additionalProperties: false,
   },
-  strict: true,
+  strict: false,
 } as const;
 
 function getSearchApiUrl(): URL {
@@ -189,17 +195,64 @@ export const execute: FunctionToolRunner = async (args, _context, options) => {
   }
 };
 
-export const executeReadImage: FunctionToolRunner = (args) => {
-  const url = getHttpUrl(args?.url);
+export const executeReadImage: FunctionToolRunner = async (
+  args,
+  _context,
+  options,
+) => {
+  const rawUrl = getString(args?.url);
+  const imageId = getString(args?.id);
 
-  if (!url) {
+  if (rawUrl && imageId) {
+    return getJsonError(
+      "Cannot read image: provide either url or id, not both.",
+    );
+  }
+
+  const url = getHttpUrl(rawUrl);
+
+  if (rawUrl && !url) {
     return getJsonError(
       "Cannot read image: url must be a direct HTTP(S) image URL from search_images.",
     );
   }
 
+  if (url) {
+    return {
+      output: JSON.stringify({ image_url: url, loaded: true }),
+      inputImages: [{ image_url: url, detail: "auto" }],
+    };
+  }
+
+  if (!imageId) {
+    return getJsonError(
+      "Cannot read image: provide a direct HTTP(S) url or saved image id.",
+    );
+  }
+
+  if (!options?.database || !options.api) {
+    return getJsonError(
+      "Cannot read saved image: database or Telegram API is unavailable.",
+    );
+  }
+
+  const image = await getImageById(options.database, imageId);
+
+  if (!image) {
+    return getJsonError(
+      `Cannot read image: unknown saved image id ${imageId}.`,
+    );
+  }
+
+  const dataUrl = await downloadTelegramImageDataUrl(
+    options.api,
+    image.file_id,
+    "image/jpeg",
+    options.signal,
+  );
+
   return {
-    output: JSON.stringify({ image_url: url, loaded: true }),
-    inputImages: [{ image_url: url, detail: "auto" }],
+    output: JSON.stringify({ image_id: image.id, loaded: true }),
+    inputImages: [{ image_url: dataUrl, detail: "auto" }],
   };
 };

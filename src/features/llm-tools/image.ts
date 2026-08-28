@@ -1,5 +1,5 @@
 import { APP_ENV } from "../env.ts";
-import { saveImage } from "../images.ts";
+import { formatImageMarkdown, saveImage } from "../images.ts";
 import { LLM_DEPLOYMENTS } from "../llm-deployments.ts";
 import type { FunctionToolRunner } from "./types.ts";
 import { getJsonError, getString } from "./utils.ts";
@@ -266,7 +266,7 @@ function getImageToolResult(
   image: Awaited<ReturnType<typeof createImage>>,
   imageId: string,
 ): ReturnType<FunctionToolRunner> {
-  const markdown = `![](tg://photo?id=${imageId})`;
+  const markdown = formatImageMarkdown(imageId);
 
   return {
     output: JSON.stringify({

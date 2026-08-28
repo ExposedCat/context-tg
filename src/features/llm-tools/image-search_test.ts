@@ -1,4 +1,5 @@
 import { deepStrictEqual, strictEqual } from "node:assert";
+import type { Api } from "grammy";
 
 const TEST_ENV = {
   BOT_TOKEN: "test",
@@ -23,7 +24,12 @@ for (const [name, value] of Object.entries(TEST_ENV)) {
   Deno.env.set(name, value);
 }
 
-const { execute, executeReadImage } = await import("./image-search.ts");
+const [{ initDatabase }, { saveImageFileId }, { execute, executeReadImage }] =
+  await Promise.all([
+    import("../database.ts"),
+    import("../images.ts"),
+    import("./image-search.ts"),
+  ]);
 
 Deno.test("search_images queries all image engines and ignores failed engines", async () => {
   const originalFetch = globalThis.fetch;
@@ -114,4 +120,48 @@ Deno.test("read_image rejects non-HTTP URLs", async () => {
         "Cannot read image: url must be a direct HTTP(S) image URL from search_images.",
     }),
   );
+});
+
+Deno.test("read_image resolves a saved image id into vision input", async () => {
+  const database = await initDatabase()();
+  const image = await saveImageFileId(database, "saved-telegram-photo");
+  const originalFetch = globalThis.fetch;
+  const api = {
+    getFile: async (fileId: string) => {
+      strictEqual(fileId, "saved-telegram-photo");
+      return { file_path: "photos/saved.png" };
+    },
+  } as unknown as Api;
+
+  globalThis.fetch = (async (input) => {
+    const request = new Request(input);
+    strictEqual(
+      request.url,
+      "https://api.telegram.org/file/bottest/photos/saved.png",
+    );
+    return new Response(new Uint8Array([0]), {
+      status: 200,
+      headers: { "content-type": "image/png" },
+    });
+  }) as typeof fetch;
+
+  try {
+    const result = await executeReadImage({ id: image.id }, undefined, {
+      database,
+      api,
+    });
+
+    deepStrictEqual(result, {
+      output: JSON.stringify({ image_id: image.id, loaded: true }),
+      inputImages: [
+        {
+          image_url: "data:image/png;base64,AA==",
+          detail: "auto",
+        },
+      ],
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+    await database.destroy();
+  }
 });

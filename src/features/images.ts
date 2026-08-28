@@ -26,6 +26,14 @@ export type RichMessagePhotoMedia = {
 };
 
 const IMAGE_REFERENCE_PATTERN = /tg:\/\/photo\?id=([A-Za-z0-9_-]{1,64})/g;
+const pendingImageRegistrations = new WeakMap<
+  Database,
+  Map<string, Promise<StoredImage>>
+>();
+
+export function formatImageMarkdown(imageId: string): string {
+  return `![](tg://photo?id=${imageId})`;
+}
 
 export async function migrateImages(database: Database): Promise<void> {
   await database.schema
@@ -93,6 +101,14 @@ function createImageId(): string {
   return `image_${crypto.randomUUID().replaceAll("-", "")}`;
 }
 
+function createStoredImage(fileId: string): Insertable<ImagesTable> {
+  return {
+    id: createImageId(),
+    file_id: fileId,
+    created_at: new Date().toISOString(),
+  };
+}
+
 function getMediaCacheChatId(): number {
   if (APP_ENV.MEDIA_CACHE_CHAT_ID === undefined) {
     throw new Error("MEDIA_CACHE_CHAT_ID is not set.");
@@ -118,15 +134,138 @@ export async function saveImage(
     throw new Error("Telegram media cache response did not contain a photo.");
   }
 
-  const image: Insertable<ImagesTable> = {
-    id: createImageId(),
-    file_id: photo.file_id,
-    created_at: new Date().toISOString(),
-  };
+  return await saveImageFileId(database, photo.file_id);
+}
 
-  await database.insertInto("images").values(image).execute();
+export async function getImageById(
+  database: Database,
+  imageId: string,
+): Promise<StoredImage | undefined> {
+  return await database
+    .selectFrom("images")
+    .selectAll()
+    .where("id", "=", imageId)
+    .executeTakeFirst();
+}
 
-  return image;
+export async function saveImageFileId(
+  database: Database,
+  fileId: string,
+): Promise<StoredImage> {
+  const normalizedFileId = fileId.trim();
+
+  if (!normalizedFileId) {
+    throw new Error("Telegram image file id is empty.");
+  }
+
+  let databaseRegistrations = pendingImageRegistrations.get(database);
+  if (!databaseRegistrations) {
+    databaseRegistrations = new Map();
+    pendingImageRegistrations.set(database, databaseRegistrations);
+  }
+
+  const pending = databaseRegistrations.get(normalizedFileId);
+  if (pending) {
+    return await pending;
+  }
+
+  const registration = (async () => {
+    const existing = await database
+      .selectFrom("images")
+      .selectAll()
+      .where("file_id", "=", normalizedFileId)
+      .executeTakeFirst();
+
+    if (existing) {
+      return existing;
+    }
+
+    const image = createStoredImage(normalizedFileId);
+    await database.insertInto("images").values(image).execute();
+    return image;
+  })();
+  databaseRegistrations.set(normalizedFileId, registration);
+
+  try {
+    return await registration;
+  } finally {
+    if (databaseRegistrations.get(normalizedFileId) === registration) {
+      databaseRegistrations.delete(normalizedFileId);
+    }
+  }
+}
+
+function getTelegramFileUrl(filePath: string): string {
+  const encodedPath = filePath.split("/").map(encodeURIComponent).join("/");
+  return `https://api.telegram.org/file/bot${APP_ENV.BOT_TOKEN}/${encodedPath}`;
+}
+
+function getDownloadedImageMimeType(
+  response: Response,
+  fallbackMimeType: string | undefined,
+  filePath: string,
+): string {
+  const responseMimeType = response.headers.get("content-type")?.split(";")[0];
+
+  if (responseMimeType?.startsWith("image/")) {
+    return responseMimeType;
+  }
+
+  const extension = filePath.split(".").at(-1)?.toLocaleLowerCase();
+  let pathMimeType: string | undefined;
+
+  switch (extension) {
+    case "png":
+      pathMimeType = "image/png";
+      break;
+    case "webp":
+      pathMimeType = "image/webp";
+      break;
+    case "gif":
+      pathMimeType = "image/gif";
+      break;
+  }
+
+  return fallbackMimeType ?? pathMimeType ?? "image/jpeg";
+}
+
+function encodeBase64(bytes: Uint8Array): string {
+  const chunkSize = 0x8000;
+  let binary = "";
+
+  for (let index = 0; index < bytes.length; index += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(index, index + chunkSize));
+  }
+
+  return btoa(binary);
+}
+
+export async function downloadTelegramImageDataUrl(
+  api: Api,
+  fileId: string,
+  fallbackMimeType?: string,
+  signal?: AbortSignal,
+): Promise<string> {
+  const telegramSignal = signal as Parameters<Api["getFile"]>[1];
+  const file = await api.getFile(fileId, telegramSignal);
+
+  if (!file.file_path) {
+    throw new Error("Telegram image file path is unavailable.");
+  }
+
+  const response = await fetch(getTelegramFileUrl(file.file_path), { signal });
+
+  if (!response.ok) {
+    throw new Error(`Telegram image download failed: ${response.status}`);
+  }
+
+  const bytes = new Uint8Array(await response.arrayBuffer());
+  const mimeType = getDownloadedImageMimeType(
+    response,
+    fallbackMimeType,
+    file.file_path,
+  );
+  return `data:${mimeType};base64,${encodeBase64(bytes)}`;
 }
 
 export function getRichMessageImageIds(markdown: string): string[] {
