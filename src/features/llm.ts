@@ -175,6 +175,11 @@ export type LlmDebugInfo = {
   tool_calls: LlmDebugToolCall[];
 };
 
+export type LlmToolError = {
+  tool: ToolName;
+  details: string;
+};
+
 export type LlmResponse = {
   response_id?: string;
   response?: string;
@@ -182,7 +187,7 @@ export type LlmResponse = {
   report?: LlmReport;
   generatedImageIds: string[];
   stickers: LlmSticker[];
-  errors: string[];
+  errors: LlmToolError[];
   web_search: {
     used: boolean;
     citations: LlmCitation[];
@@ -246,7 +251,7 @@ type LlmRequestState = {
   report?: LlmReport;
   generatedImageIds: string[];
   stickers: LlmSticker[];
-  errors: string[];
+  errors: LlmToolError[];
   debug: LlmDebugInfo;
 };
 
@@ -961,8 +966,7 @@ async function runFunctionToolCall(
   } catch (error) {
     throwIfAborted(signal);
     const details = getErrorDetail(error);
-    const message = `Tool ${call.name} failed: ${details}`;
-    state.errors.push(message);
+    state.errors.push({ tool: call.name, details });
     if (reservedStickerSlot) {
       state.hasStickerSlot = state.stickers.length > 0;
     }

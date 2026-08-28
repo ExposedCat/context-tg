@@ -34,6 +34,7 @@ import {
   type LlmResponse,
   type LlmSticker,
   type LlmToolContext,
+  type LlmToolError,
   requestLlm,
   type ToolName,
 } from "./llm.ts";
@@ -1242,6 +1243,14 @@ function getUniqueNonEmptyLines(values: string[]): string[] {
   return [...new Set(lines)];
 }
 
+export function formatLlmToolError(
+  error: LlmToolError,
+  includeDetails: boolean,
+): string {
+  const summary = `Tool ${error.tool} failed`;
+  return includeDetails ? `${summary}: ${error.details}` : `${summary}.`;
+}
+
 function appendResponseFooterMarkdown(
   text: string,
   tools: ToolName[],
@@ -1434,7 +1443,12 @@ function formatLlmResponse(
     formatMarkdownCitations(response, llmResponse.web_search.citations),
     llmResponse.stickers,
   );
-  const errors = [...llmResponse.errors, ...(options.errors ?? [])];
+  const errors = [
+    ...llmResponse.errors.map((error) =>
+      formatLlmToolError(error, options.debug === true),
+    ),
+    ...(options.errors ?? []),
+  ];
   const responseWithFooter = appendResponseFooterMarkdown(
     richMarkdown,
     llmResponse.tools,
