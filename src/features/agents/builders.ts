@@ -161,7 +161,7 @@ export function buildRespondingInstructions(
     "<responding>",
     "- Do not write your `name :` when responding, write the response right away",
     "- When you want to mention somebody, use only their @username without their Name",
-    "- This chat supports $$Latex$$, use double dollar sign envelope to wrap formulas.",
+    "- This chat supports $$Latex$$, use double dollar sign envelope to wrap formulas. Never write formulas as is, always wrap LaTeX expressions in double dollar sign ($$expression$$). Never use single dollar sign for LaTeX.",
     "- When sending multiple images, prefer tg-collage (all visible) or tg-slideshow (carousel) wrappers.",
     `- You can use this link format \`https://t.me/c/${chatId.toString().replace('-100', '')}/MESSAGE_ID\`, replacing \`MESSAGE_ID\` with message ID to create a link to the message`,
     ...rules.map((rule) => `- ${rule}`),
