@@ -1,4 +1,5 @@
 import type OpenAI from "@openai/openai";
+import type { Api } from "grammy";
 import type { AgentId } from "../agents/index.ts";
 import type { Database } from "../database.ts";
 
@@ -9,14 +10,6 @@ export type LlmToolContext = {
   userName?: string;
   replyMessageId?: number;
   threadId?: number;
-};
-
-export type LlmGeneratedImage = {
-  prompt: string;
-  revisedPrompt?: string;
-  url?: string;
-  dataUrl?: string;
-  mimeType?: string;
 };
 
 export type LlmImageInput = {
@@ -32,7 +25,7 @@ export type FunctionToolResult = {
   output: string;
   inputImages?: LlmImageInput[];
   replyMessageId?: number | null;
-  image?: LlmGeneratedImage;
+  generatedImageId?: string;
   sticker?: LlmSticker;
   stickers?: LlmSticker[];
   report?: {
@@ -49,5 +42,6 @@ export type FunctionToolRunner = (
     database?: Database;
     agentId?: AgentId;
     client?: OpenAI;
+    api?: Api;
   },
 ) => FunctionToolResult | string | Promise<FunctionToolResult | string>;

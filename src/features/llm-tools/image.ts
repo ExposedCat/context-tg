@@ -1,4 +1,5 @@
 import { APP_ENV } from "../env.ts";
+import { saveImage } from "../images.ts";
 import { LLM_DEPLOYMENTS } from "../llm-deployments.ts";
 import type { FunctionToolRunner } from "./types.ts";
 import { getJsonError, getString } from "./utils.ts";
@@ -20,7 +21,7 @@ export const toolDefinition = {
   type: "function",
   name: "generate_image",
   description:
-    "Generate one image from a text prompt. Never use proactively. Use this only when the user explicitly asks to create, draw, render, or visualize an image. After using it, respond with a short caption or note that the image is attached.",
+    "Generate and save one image from a text prompt. Never use proactively. Use this only when the user explicitly asks to create, draw, render, or visualize an image. The result contains a ready-to-use rich Markdown image reference. Include that reference in your response wherever you want the image to appear.",
   parameters: {
     type: "object",
     properties: {
@@ -206,41 +207,55 @@ export const execute: FunctionToolRunner = async (args, _context, options) => {
     return getJsonError("Missing image prompt.");
   }
 
+  if (!options?.database) {
+    return getJsonError(
+      "Cannot save generated image: database is unavailable.",
+    );
+  }
+
+  if (!options.api) {
+    return getJsonError(
+      "Cannot save generated image: Telegram API is unavailable.",
+    );
+  }
+
   let defaultError: unknown;
+  let image: Awaited<ReturnType<typeof createImage>>;
 
   try {
     if (!isConfigured()) {
       throw new Error("Default image generation is not configured.");
     }
 
-    const image = await createImage(prompt, options?.signal);
-    return getImageToolResult(image);
+    image = await createImage(prompt, options.signal);
   } catch (error) {
-    if (options?.signal?.aborted) {
+    if (options.signal?.aborted) {
       throw error;
     }
     defaultError = error;
+
+    try {
+      if (!isAlternateConfigured()) {
+        throw new Error("Alternate image generation is not configured.");
+      }
+
+      image = await createAlternateImage(prompt, options.signal);
+    } catch (alternateError) {
+      if (options.signal?.aborted) {
+        throw alternateError;
+      }
+
+      throw new Error(
+        [
+          `Default image model failed: ${getErrorMessage(defaultError)}`,
+          `Alternate image model failed: ${getErrorMessage(alternateError)}`,
+        ].join("\n"),
+      );
+    }
   }
 
-  try {
-    if (!isAlternateConfigured()) {
-      throw new Error("Alternate image generation is not configured.");
-    }
-
-    const image = await createAlternateImage(prompt, options?.signal);
-    return getImageToolResult(image);
-  } catch (alternateError) {
-    if (options?.signal?.aborted) {
-      throw alternateError;
-    }
-
-    throw new Error(
-      [
-        `Default image model failed: ${getErrorMessage(defaultError)}`,
-        `Alternate image model failed: ${getErrorMessage(alternateError)}`,
-      ].join("\n"),
-    );
-  }
+  const storedImage = await saveImage(options.database, options.api, image);
+  return getImageToolResult(image, storedImage.id);
 };
 
 function getErrorMessage(error: unknown): string {
@@ -249,16 +264,19 @@ function getErrorMessage(error: unknown): string {
 
 function getImageToolResult(
   image: Awaited<ReturnType<typeof createImage>>,
+  imageId: string,
 ): ReturnType<FunctionToolRunner> {
+  const markdown = `![](tg://photo?id=${imageId})`;
+
   return {
     output: JSON.stringify({
       generated_image: {
-        attached: true,
+        id: imageId,
+        markdown,
         prompt: image.prompt,
         revised_prompt: image.revisedPrompt,
-        url: image.url,
       },
     }),
-    image,
+    generatedImageId: imageId,
   };
 }

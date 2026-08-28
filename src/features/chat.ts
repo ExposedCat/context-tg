@@ -20,11 +20,11 @@ import {
 import { isBotAdmin } from "./authorization.ts";
 import { findRandomStickerForEmoji } from "./emoji-packs.ts";
 import { APP_ENV } from "./env.ts";
+import { resolveRichMessageImageMedia } from "./images.ts";
 import { readLastMessages } from "./last-messages.ts";
 import {
   type LlmCitation,
   type LlmDebugInfo,
-  type LlmGeneratedImage,
   type LlmImageInput,
   type LlmReport,
   LlmRequestError,
@@ -784,7 +784,8 @@ async function downloadImageDataUrl(
   attachment: TelegramImageAttachment,
   signal?: AbortSignal,
 ): Promise<LlmImageInput> {
-  const file = await ctx.api.getFile(attachment.fileId, signal);
+  const telegramSignal = signal as Parameters<Context["api"]["getFile"]>[1];
+  const file = await ctx.api.getFile(attachment.fileId, telegramSignal);
 
   if (!file.file_path) {
     throw new Error("Telegram image file path is unavailable.");
@@ -1450,90 +1451,6 @@ function formatLlmResponse(
   };
 }
 
-function getHttpUrl(value: string | undefined): string | undefined {
-  if (!value) {
-    return undefined;
-  }
-
-  try {
-    const url = new URL(value);
-    return url.protocol === "http:" || url.protocol === "https:"
-      ? url.href
-      : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-function getImageFileExtension(mimeType: string | undefined): string {
-  switch (mimeType) {
-    case "image/jpeg":
-      return "jpg";
-    case "image/webp":
-      return "webp";
-    default:
-      return "png";
-  }
-}
-
-function decodeBase64(value: string): Uint8Array {
-  return Uint8Array.from(atob(value), (char) => char.charCodeAt(0));
-}
-
-function parseDataUrlImage(dataUrl: string): {
-  bytes: Uint8Array;
-  mimeType: string;
-} {
-  const match = /^data:([^;,]+);base64,(.*)$/i.exec(dataUrl);
-
-  if (!match) {
-    throw new Error("Generated image data URL is invalid.");
-  }
-
-  return {
-    mimeType: match[1],
-    bytes: decodeBase64(match[2]),
-  };
-}
-
-async function createGeneratedImageInputFile(
-  image: LlmGeneratedImage,
-): Promise<{ input: string | InputFile; cleanup: () => Promise<void> }> {
-  const url = getHttpUrl(image.url);
-
-  if (url) {
-    return {
-      input: url,
-      cleanup: async () => {},
-    };
-  }
-
-  if (!image.dataUrl) {
-    throw new Error("Generated image is missing image data.");
-  }
-
-  const parsed = parseDataUrlImage(image.dataUrl);
-  const extension = getImageFileExtension(image.mimeType ?? parsed.mimeType);
-  const tmpPath = await Deno.makeTempFile({
-    prefix: "context-tg-image-",
-    suffix: `.${extension}`,
-  });
-
-  await Deno.writeFile(tmpPath, parsed.bytes);
-
-  return {
-    input: new InputFile(tmpPath, `generated-image.${extension}`),
-    cleanup: async () => {
-      await Deno.remove(tmpPath).catch((error) =>
-        logError("Failed to delete temporary generated image:", {
-          tmpPath,
-          error,
-        }),
-      );
-    },
-  };
-}
-
 function getErrorDetails(error: unknown): string {
   if (error instanceof LlmRequestError) {
     return error.details;
@@ -1674,31 +1591,6 @@ async function sendReportResponse(
   return sentMessages;
 }
 
-async function sendGeneratedImagePhotos(
-  ctx: Context,
-  message: TextMessage,
-  images: LlmGeneratedImage[],
-  replyMessageId?: number | null,
-): Promise<Array<{ message_id: number }>> {
-  const sentMessages = [];
-
-  for (const image of images) {
-    const { input, cleanup } = await createGeneratedImageInputFile(image);
-
-    try {
-      const sentPhoto = await ctx.replyWithPhoto(
-        input,
-        getReplyDeliveryOptions(message, replyMessageId),
-      );
-      sentMessages.push(sentPhoto);
-    } finally {
-      await cleanup();
-    }
-  }
-
-  return sentMessages;
-}
-
 async function sendStickerMessages(
   ctx: Context,
   message: TextMessage,
@@ -1757,10 +1649,12 @@ async function sendRichMarkdownResponse(
   );
 
   for (const chunk of splitRichMarkdownMessage(content)) {
+    const media = await resolveRichMessageImageMedia(ctx.database, chunk);
     const sentMessage = await ctx.api.sendRichMessage(
       ctx.chat.id,
       {
         markdown: chunk,
+        ...(media.length > 0 ? { media } : {}),
       },
       {
         ...getReplyDeliveryOptions(message, replyMessageId),
@@ -2160,6 +2054,7 @@ async function handleChatRequest(
         return await withTypingAction(ctx, async () => {
           const requestOptions: LlmRequestOptions = {
             database: ctx.database,
+            api: ctx.api,
             context: toolContext,
             agentId: agent.id,
             onProgress: async (progress) => {
@@ -2217,7 +2112,7 @@ async function handleChatRequest(
     );
 
     const imageAttachmentCount =
-      llmResponse.images.length + (llmResponse.report ? 1 : 0);
+      llmResponse.generatedImageIds.length + (llmResponse.report ? 1 : 0);
 
     if (imageAttachmentCount > 0) {
       const imageUsage = await consumeUsage(
@@ -2236,14 +2131,7 @@ async function handleChatRequest(
       imageUsageConsumedCount = imageAttachmentCount;
     }
 
-    const sentMessages = [
-      ...(await sendGeneratedImagePhotos(
-        ctx,
-        message,
-        llmResponse.images,
-        llmResponse.replyMessageId,
-      )),
-    ];
+    const sentMessages: Array<{ message_id: number }> = [];
     const stickerMessages = await sendStickerMessages(
       ctx,
       message,
@@ -2267,15 +2155,6 @@ async function handleChatRequest(
           message,
           llmResponse.report,
           formattedResponse,
-          llmResponse.replyMessageId,
-        )),
-      );
-    } else if (llmResponse.images.length > 0) {
-      sentMessages.push(
-        ...(await sendRichMarkdownResponse(
-          ctx,
-          message,
-          formattedResponse.richMarkdown || "Image attached.",
           llmResponse.replyMessageId,
         )),
       );

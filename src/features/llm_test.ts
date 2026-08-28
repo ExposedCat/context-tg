@@ -4,14 +4,19 @@ import {
   ok,
   strictEqual,
 } from "node:assert";
+import { type Api, InputFile } from "grammy";
 import { parseLlmResponseInputItems } from "./llm-chat-responses.ts";
 
 const TEST_ENV = {
   BOT_TOKEN: "test",
   ADMIN_ID: "1",
   SQLITE_PATH: ":memory:",
+  MEDIA_CACHE_CHAT_ID: "-10042",
   LLM_BASE_URL: "https://llm.test/v1",
   LLM_API_KEY: "test",
+  LLM_IMAGE_BASE_URL: "https://images.test/v1",
+  LLM_IMAGE_MODEL: "test-image",
+  LLM_IMAGE_API_KEY: "test",
   KEENABLE_API_KEY: "test",
   LLM_TEMPERATURE: "0.2",
   EMBEDDER_BASE_URL: "https://embedder.test/v1",
@@ -24,8 +29,15 @@ for (const [name, value] of Object.entries(TEST_ENV)) {
   Deno.env.set(name, value);
 }
 
-const [{ LlmRequestError, requestLlm }, { setLlmDeploymentName }] =
-  await Promise.all([import("./llm.ts"), import("./llm-deployments.ts")]);
+const [
+  { LlmRequestError, requestLlm },
+  { setLlmDeploymentName },
+  { initDatabase },
+] = await Promise.all([
+  import("./llm.ts"),
+  import("./llm-deployments.ts"),
+  import("./database.ts"),
+]);
 
 type ResponseOutput =
   | {
@@ -665,5 +677,120 @@ Deno.test("failed tool follow-up preserves the complete context for the next tur
     ok(String(toolOutput?.output).includes('tool="send_sticker"'));
   } finally {
     globalThis.fetch = originalFetch;
+  }
+});
+
+Deno.test("generate_image caches media and returns reusable rich Markdown", async () => {
+  setLlmDeploymentName("small", "test-model");
+  const database = await initDatabase()();
+  const originalFetch = globalThis.fetch;
+  const llmRequests: Array<Record<string, unknown>> = [];
+  let cachedPhotoInput: unknown;
+  const api = {
+    sendPhoto: async (chatId: number, input: unknown) => {
+      strictEqual(chatId, -10042);
+      cachedPhotoInput = input;
+      return {
+        photo: [
+          { file_id: "generated-small", width: 90, height: 90 },
+          { file_id: "generated-large", width: 1024, height: 1024 },
+        ],
+      };
+    },
+  } as unknown as Api;
+
+  globalThis.fetch = (async (input, init) => {
+    const request = new Request(input, init);
+
+    if (request.url === "https://images.test/v1/images/generations") {
+      return new Response(
+        JSON.stringify({
+          data: [
+            {
+              b64_json: "AA==",
+              revised_prompt: "A tiny generated test image",
+            },
+          ],
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }
+
+    const payload = (await request.json()) as Record<string, unknown>;
+    llmRequests.push(payload);
+
+    if (llmRequests.length === 1) {
+      return new Response(
+        JSON.stringify(
+          createApiResponse("resp_generate_image", [
+            {
+              id: "fc_generate_image",
+              type: "function_call",
+              call_id: "call_generate_image",
+              name: "generate_image",
+              arguments: '{"prompt":"Draw a tiny test image"}',
+              status: "completed",
+            },
+          ]),
+        ),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }
+
+    const imageId = JSON.stringify(payload).match(/image_[a-f0-9]{32}/)?.[0];
+    ok(imageId);
+
+    return new Response(
+      JSON.stringify(
+        createApiResponse("resp_generated_image_final", [
+          {
+            id: "msg_generated_image_final",
+            type: "message",
+            role: "assistant",
+            status: "completed",
+            content: [
+              {
+                type: "output_text",
+                text: `Here it is.\n\n![](tg://photo?id=${imageId})`,
+                annotations: [],
+              },
+            ],
+          },
+        ]),
+      ),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
+  }) as typeof fetch;
+
+  try {
+    const response = await requestLlm(
+      "Generate an image",
+      ["generate_image"],
+      undefined,
+      {
+        api,
+        database,
+        context: { chatId: 1, messageId: 1 },
+      },
+    );
+
+    strictEqual(llmRequests.length, 2);
+    ok(cachedPhotoInput instanceof InputFile);
+    strictEqual(response.generatedImageIds.length, 1);
+    strictEqual(
+      response.response,
+      `Here it is.\n\n![](tg://photo?id=${response.generatedImageIds[0]})`,
+    );
+    const storedImages = await database
+      .selectFrom("images")
+      .selectAll()
+      .execute();
+    strictEqual(storedImages.length, 1);
+    strictEqual(storedImages[0].id, response.generatedImageIds[0]);
+    strictEqual(storedImages[0].file_id, "generated-large");
+    ok(!Number.isNaN(Date.parse(storedImages[0].created_at)));
+  } finally {
+    globalThis.fetch = originalFetch;
+    await database.destroy();
   }
 });

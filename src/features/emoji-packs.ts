@@ -40,7 +40,7 @@ type StickerSet = {
 };
 
 type StickerSetReader = {
-  getStickerSet(name: string, signal?: AbortSignal): Promise<StickerSet>;
+  getStickerSet(name: string): Promise<StickerSet>;
 };
 
 type EmojiReplacement = {

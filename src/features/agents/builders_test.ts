@@ -13,6 +13,8 @@ Deno.test("responding instructions describe Telegram rich formatting", () => {
     "- [x] completed task list item",
     ">Block quotation started",
     '![](https://telegram.org/example/photo.jpg "Photo caption")',
+    "![](tg://photo?id=IMAGE_ID)",
+    "using the exact returned ID",
     "|:---------|:--------:|",
     "[^id1]: Definition of the first footnote.",
     "$$E = mc^2$$",

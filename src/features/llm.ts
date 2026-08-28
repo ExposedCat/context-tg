@@ -1,5 +1,6 @@
 import { createDebug } from "@grammyjs/debug";
 import OpenAI from "@openai/openai";
+import type { Api } from "grammy";
 import { delay, throwIfAborted } from "../utils/async.ts";
 import { escapeXmlAttribute } from "../utils/text.ts";
 import {
@@ -41,7 +42,6 @@ import * as stickerTool from "./llm-tools/sticker.ts";
 import type {
   FunctionToolResult,
   FunctionToolRunner,
-  LlmGeneratedImage,
   LlmImageInput,
   LlmSticker,
   LlmToolContext,
@@ -52,7 +52,6 @@ import { buildMemosMetadataSection } from "./memos.ts";
 
 export type { LlmReport } from "./llm-tools/reports.ts";
 export type {
-  LlmGeneratedImage,
   LlmImageInput,
   LlmSticker,
   LlmToolContext,
@@ -119,6 +118,7 @@ export type LlmProgress = {
 
 export type LlmRequestOptions = {
   database?: Database;
+  api?: Api;
   context?: LlmToolContext;
   agentId?: AgentId;
   onProgress?: (progress: LlmProgress) => void | Promise<void>;
@@ -180,7 +180,7 @@ export type LlmResponse = {
   response?: string;
   replyMessageId?: number | null;
   report?: LlmReport;
-  images: LlmGeneratedImage[];
+  generatedImageIds: string[];
   stickers: LlmSticker[];
   errors: string[];
   web_search: {
@@ -244,7 +244,7 @@ type LlmRequestState = {
   sentImmediateContentFilterWarning: boolean;
   hasStickerSlot: boolean;
   report?: LlmReport;
-  images: LlmGeneratedImage[];
+  generatedImageIds: string[];
   stickers: LlmSticker[];
   errors: string[];
   debug: LlmDebugInfo;
@@ -926,6 +926,7 @@ async function runFunctionToolCall(
   state: LlmRequestState,
   context?: LlmToolContext,
   database?: Database,
+  api?: Api,
   signal?: AbortSignal,
   agentId: AgentId = normalAgent.id,
 ): Promise<FunctionToolCallResult> {
@@ -948,7 +949,13 @@ async function runFunctionToolCall(
   let result: FunctionToolResult;
   try {
     result = normalizeFunctionToolResult(
-      await runner(args, context, { signal, database, agentId, client }),
+      await runner(args, context, {
+        signal,
+        database,
+        agentId,
+        client,
+        api,
+      }),
     );
     throwIfAborted(signal);
   } catch (error) {
@@ -984,8 +991,8 @@ async function runFunctionToolCall(
     state.replyMessageId = result.replyMessageId;
   }
 
-  if (result.image) {
-    state.images.push(result.image);
+  if (result.generatedImageId) {
+    state.generatedImageIds.push(result.generatedImageId);
   }
 
   if (result.sticker) {
@@ -1452,6 +1459,7 @@ async function resolveFunctionToolCalls(
           state,
           options.context,
           options.database,
+          options.api,
           options.signal,
           options.agentId ?? normalAgent.id,
         ),
@@ -1530,7 +1538,7 @@ async function requestLlmWithInstructions(
     receivedResponse: false,
     sentImmediateContentFilterWarning: false,
     hasStickerSlot: false,
-    images: [],
+    generatedImageIds: [],
     stickers: [],
     errors: [],
     debug: {
@@ -1581,7 +1589,7 @@ async function requestLlmWithInstructions(
     response: responseText,
     replyMessageId: state.replyMessageId,
     report: state.report,
-    images: state.images,
+    generatedImageIds: state.generatedImageIds,
     stickers: state.stickers,
     errors: state.errors,
     web_search: {

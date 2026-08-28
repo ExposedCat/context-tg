@@ -22,10 +22,26 @@ function getRequiredNumberEnv(name: string): number {
   return value;
 }
 
+function getOptionalNumberEnv(name: string): number | undefined {
+  const rawValue = getOptionalEnv(name);
+
+  if (rawValue === undefined) {
+    return undefined;
+  }
+
+  const value = Number(rawValue);
+  if (!Number.isFinite(value)) {
+    throw new Error(`${name} must be a finite number`);
+  }
+
+  return value;
+}
+
 export const APP_ENV = {
   BOT_TOKEN: getRequiredEnv("BOT_TOKEN"),
   ADMIN_ID: getRequiredNumberEnv("ADMIN_ID"),
   SQLITE_PATH: getRequiredEnv("SQLITE_PATH"),
+  MEDIA_CACHE_CHAT_ID: getOptionalNumberEnv("MEDIA_CACHE_CHAT_ID"),
   LLM_BASE_URL: getRequiredEnv("LLM_BASE_URL"),
   LLM_API_KEY: getRequiredEnv("LLM_API_KEY"),
   KEENABLE_API_KEY: getRequiredEnv("KEENABLE_API_KEY"),

@@ -7,6 +7,7 @@ import {
   migrateEmojiPacks,
 } from "./emoji-packs.ts";
 import { APP_ENV } from "./env.ts";
+import { type ImagesTable, migrateImages } from "./images.ts";
 import {
   type LlmResponseHistoryTable,
   migrateLlmResponseHistory,
@@ -56,6 +57,7 @@ export type DatabaseSchema = {
   emoji_packs: EmojiPacksTable;
   global_emoji_packs: GlobalEmojiPacksTable;
   memos: MemosTable;
+  images: ImagesTable;
 };
 
 export type Database = Kysely<DatabaseSchema>;
@@ -99,6 +101,7 @@ export function initDatabase() {
     await migrateTrolling(database);
     await migrateEmojiPacks(database);
     await migrateMemos(database);
+    await migrateImages(database);
     await loadLlmSettings(database);
 
     return database;

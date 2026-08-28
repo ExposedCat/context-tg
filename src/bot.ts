@@ -68,7 +68,7 @@ function createTelegramRateLimitRetryTransformer(): Transformer {
 
       await delay(
         TELEGRAM_RATE_LIMIT_RETRY_DELAY_MS,
-        signal,
+        signal as unknown as AbortSignal,
         new Error("Telegram API retry aborted"),
       );
     }
