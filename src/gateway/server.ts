@@ -69,6 +69,13 @@ export class GatewayServer {
         return json(this.database.claimNext(this.config.contextMessages));
       }
 
+      const cancellationMatch = url.pathname.match(/^\/v1\/jobs\/(\d+)\/cancelled$/);
+      if (request.method === "GET" && cancellationMatch?.[1]) {
+        return json({
+          cancelled: this.database.isJobCancelled(Number.parseInt(cancellationMatch[1], 10)),
+        });
+      }
+
       const eventMatch = url.pathname.match(/^\/v1\/jobs\/(\d+)\/events$/);
       if (request.method === "POST" && eventMatch?.[1]) {
         await this.event(Number.parseInt(eventMatch[1], 10), await body<AgentEvent>(request));
@@ -167,6 +174,9 @@ export class GatewayServer {
   }
 
   private async event(jobId: number, event: AgentEvent): Promise<void> {
+    if (this.database.isJobCancelled(jobId)) {
+      return;
+    }
     const line = `${event.kind}: ${event.text.trim()}`;
     const status = this.database.appendStatus(jobId, line, event.threadId);
     const address = this.database.jobAddress(jobId);
@@ -194,6 +204,9 @@ export class GatewayServer {
   }
 
   private async complete(jobId: number, completion: AgentCompletion): Promise<void> {
+    if (this.database.isJobCancelled(jobId)) {
+      return;
+    }
     const address = this.database.jobAddress(jobId);
     const thinkingMessageId = this.database.thinkingMessage(jobId);
     const status = this.database.appendStatus(jobId, "Готово", completion.threadId);
@@ -211,6 +224,9 @@ export class GatewayServer {
   }
 
   private async fail(jobId: number, error: string): Promise<void> {
+    if (this.database.isJobCancelled(jobId)) {
+      return;
+    }
     const address = this.database.jobAddress(jobId);
     const thinkingMessageId = this.database.thinkingMessage(jobId);
     const markdown = `Не получилось завершить задачу.\n\n\`\`\`text\n${error.slice(0, 2_000)}\n\`\`\``;

@@ -6,7 +6,7 @@ export class GatewayClient {
     private readonly token: string,
   ) {}
 
-  private async request<T>(path: string, init: RequestInit = {}): Promise<T> {
+  private async request<T>(path: string, init: RequestInit = {}, timeoutMs = 65_000): Promise<T> {
     const response = await fetch(this.baseUrl + path, {
       ...init,
       headers: {
@@ -14,7 +14,7 @@ export class GatewayClient {
         ...(init.body ? { "content-type": "application/json" } : {}),
         ...init.headers,
       },
-      signal: AbortSignal.timeout(65_000),
+      signal: init.signal ?? AbortSignal.timeout(timeoutMs),
     });
     if (!response.ok) {
       throw new Error(`Gateway ${response.status}: ${await response.text()}`);
@@ -24,6 +24,15 @@ export class GatewayClient {
 
   next(): Promise<AgentJob | null> {
     return this.request<AgentJob | null>("/v1/jobs/next");
+  }
+
+  async isCancelled(jobId: number): Promise<boolean> {
+    const result = await this.request<{ cancelled: boolean }>(
+      `/v1/jobs/${jobId}/cancelled`,
+      {},
+      5_000,
+    );
+    return result.cancelled;
   }
 
   event(jobId: number, event: AgentEvent): Promise<{ ok: true }> {

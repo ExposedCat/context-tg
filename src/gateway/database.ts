@@ -331,6 +331,13 @@ export class LoylexDatabase {
         WHERE id = ?
       `)
       .run(text, threadId ?? null, jobId);
+    if (threadId) {
+      this.connection
+        .query(
+          "UPDATE outbound_messages SET codex_thread_id = ? WHERE job_id = ? AND codex_thread_id IS NULL",
+        )
+        .run(threadId, jobId);
+    }
     return (
       this.connection
         .query<{ status_log: string }, [number]>("SELECT status_log FROM jobs WHERE id = ?")
@@ -352,6 +359,77 @@ export class LoylexDatabase {
     this.connection
       .query("UPDATE jobs SET thinking_message_id = ? WHERE id = ?")
       .run(messageId, jobId);
+    this.recordOutboundMessage(jobId, messageId);
+  }
+
+  recordOutboundMessage(
+    jobId: number,
+    messageId: number,
+    codexThreadId: string | null = null,
+  ): void {
+    const address = this.jobAddress(jobId);
+    this.connection
+      .query(`
+        INSERT INTO outbound_messages (chat_id, message_id, job_id, codex_thread_id, sent_at)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(chat_id, message_id) DO UPDATE SET
+          job_id = excluded.job_id,
+          codex_thread_id = COALESCE(excluded.codex_thread_id, outbound_messages.codex_thread_id),
+          sent_at = excluded.sent_at
+      `)
+      .run(address.chatId, messageId, jobId, codexThreadId, Date.now());
+  }
+
+  cancelJobsForMessage(chatId: number, messageId: number): number[] {
+    const transaction = this.connection.transaction(() => {
+      const outbound = this.connection
+        .query<{ job_id: number | null; codex_thread_id: string | null }, [number, number]>(
+          "SELECT job_id, codex_thread_id FROM outbound_messages WHERE chat_id = ? AND message_id = ?",
+        )
+        .get(chatId, messageId);
+      const targetJobId = outbound?.job_id ?? -1;
+      const targetThreadId = outbound?.codex_thread_id ?? null;
+      const jobs = this.connection
+        .query<
+          { id: number },
+          [number, number, number, string | null, string | null, string | null]
+        >(`
+          SELECT DISTINCT id
+          FROM jobs
+          WHERE chat_id = ?
+            AND state IN ('pending', 'running')
+            AND (
+              id = ?
+              OR thinking_message_id = ?
+              OR (
+                ? IS NOT NULL
+                AND (resume_thread_id = ? OR codex_thread_id = ?)
+              )
+            )
+          ORDER BY id
+        `)
+        .all(chatId, targetJobId, messageId, targetThreadId, targetThreadId, targetThreadId);
+      const cancelledAt = Date.now();
+      for (const job of jobs) {
+        this.connection
+          .query(
+            "UPDATE jobs SET state = 'cancelled', completed_at = ?, error = ? WHERE id = ? AND state IN ('pending', 'running')",
+          )
+          .run(cancelledAt, "Остановлено пользователем", job.id);
+      }
+      return jobs.map((job) => job.id);
+    });
+    return transaction.immediate();
+  }
+
+  isJobCancelled(jobId: number): boolean {
+    return Boolean(
+      this.connection
+        .query<{ value: number }, [number]>(
+          "SELECT 1 AS value FROM jobs WHERE id = ? AND state = 'cancelled'",
+        )
+        .get(jobId),
+    );
   }
 
   jobAddress(jobId: number): {
@@ -382,24 +460,35 @@ export class LoylexDatabase {
     };
   }
 
-  complete(jobId: number, answerMessageId: number, codexThreadId: string): void {
+  complete(jobId: number, answerMessageId: number, codexThreadId: string): boolean {
     const address = this.jobAddress(jobId);
     const transaction = this.connection.transaction(() => {
-      this.connection
+      const result = this.connection
         .query(`
-          UPDATE jobs SET state = 'completed', completed_at = ?, codex_thread_id = ? WHERE id = ?
+          UPDATE jobs
+          SET state = 'completed', completed_at = ?, codex_thread_id = ?
+          WHERE id = ? AND state = 'running'
         `)
         .run(Date.now(), codexThreadId, jobId);
+      if (result.changes === 0) {
+        return false;
+      }
+      this.connection
+        .query("UPDATE outbound_messages SET codex_thread_id = ? WHERE job_id = ?")
+        .run(codexThreadId, jobId);
       this.connection
         .query("INSERT OR REPLACE INTO outbound_messages VALUES (?, ?, ?, ?, ?)")
         .run(address.chatId, answerMessageId, jobId, codexThreadId, Date.now());
+      return true;
     });
-    transaction.immediate();
+    return transaction.immediate();
   }
 
   fail(jobId: number, error: string): void {
     this.connection
-      .query("UPDATE jobs SET state = 'failed', completed_at = ?, error = ? WHERE id = ?")
+      .query(
+        "UPDATE jobs SET state = 'failed', completed_at = ?, error = ? WHERE id = ? AND state = 'running'",
+      )
       .run(Date.now(), error, jobId);
   }
 

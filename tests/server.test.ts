@@ -41,6 +41,7 @@ test("starts progress as a persistent rich details message", async () => {
       threadId: null,
     }),
     thinkingMessage: () => thinkingMessageId,
+    isJobCancelled: () => false,
     appendStatus: (_jobId: number, line: string) => line,
     setThinkingMessage: (_jobId: number, messageId: number) => {
       thinkingMessageId = messageId;
@@ -90,6 +91,7 @@ test("edits the existing group progress message even when newer chat messages ex
       threadId: null,
     }),
     thinkingMessage: () => 11,
+    isJobCancelled: () => false,
     appendStatus: () => "status: Готово",
     hasMessagesAfter: () => {
       hasMessagesAfterCalls += 1;
@@ -147,6 +149,7 @@ test("uses the same editable details flow in private chats", async () => {
       threadId: null,
     }),
     thinkingMessage: () => thinkingMessageId,
+    isJobCancelled: () => false,
     appendStatus: (_jobId: number, line: string) => line,
     setThinkingMessage: (_jobId: number, messageId: number) => {
       thinkingMessageId = messageId;

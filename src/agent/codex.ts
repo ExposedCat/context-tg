@@ -20,12 +20,23 @@ export type CodexRunResult = {
   threadId: string;
 };
 
+export class CodexCancelledError extends Error {
+  constructor() {
+    super("Codex run cancelled");
+    this.name = "CodexCancelledError";
+  }
+}
+
 export async function runCodex(
   config: AgentConfig,
   prompt: string,
   resumeThreadId: string | null,
   onEvent: (event: AgentEvent) => Promise<void>,
+  signal?: AbortSignal,
 ): Promise<CodexRunResult> {
+  if (signal?.aborted) {
+    throw new CodexCancelledError();
+  }
   const common = [
     "--json",
     "--model",
@@ -61,86 +72,114 @@ export async function runCodex(
     stderr: "pipe",
   });
 
-  let threadId = resumeThreadId;
-  let finalAnswer = "";
-  let pendingAgentMessage = "";
-  let buffered = "";
-  const decoder = new TextDecoder();
-
-  async function flushCommentary(): Promise<void> {
-    if (!pendingAgentMessage.trim()) {
+  let terminated = false;
+  let forceKillTimer: ReturnType<typeof setTimeout> | undefined;
+  const terminate = (): void => {
+    if (terminated) {
       return;
     }
-    await onEvent({
-      kind: "commentary",
-      text: pendingAgentMessage,
-      ...(threadId ? { threadId } : {}),
-    });
-    pendingAgentMessage = "";
+    terminated = true;
+    child.kill("SIGTERM");
+    forceKillTimer = setTimeout(() => child.kill("SIGKILL"), 2_000);
+  };
+  const abortHandler = (): void => terminate();
+  if (signal) {
+    signal.addEventListener("abort", abortHandler, { once: true });
+    if (signal.aborted) {
+      terminate();
+    }
   }
 
-  for await (const chunk of child.stdout) {
-    buffered += decoder.decode(chunk, { stream: true });
-    const lines = buffered.split("\n");
-    buffered = lines.pop() ?? "";
-    for (const line of lines) {
-      if (!line.trim()) {
-        continue;
+  try {
+    let threadId = resumeThreadId;
+    let finalAnswer = "";
+    let pendingAgentMessage = "";
+    let buffered = "";
+    const decoder = new TextDecoder();
+
+    async function flushCommentary(): Promise<void> {
+      if (!pendingAgentMessage.trim()) {
+        return;
       }
-      const event = JSON.parse(line) as CodexJsonEvent;
-      if (event.type === "thread.started" && event.thread_id) {
-        threadId = event.thread_id;
-      } else if (event.type === "item.completed" && event.item?.type === "agent_message") {
-        await flushCommentary();
-        pendingAgentMessage = event.item.text ?? pendingAgentMessage;
-      } else if (event.type === "turn.completed") {
-        finalAnswer = pendingAgentMessage || finalAnswer;
-        pendingAgentMessage = "";
-      } else if (event.type === "item.started" && event.item?.type === "command_execution") {
-        await flushCommentary();
-        await onEvent({
-          kind: "command",
-          text: (event.item.command ?? "terminal command").slice(0, 500),
-          ...(threadId ? { threadId } : {}),
-        });
-      } else if (event.type === "item.completed" && event.item?.type === "command_execution") {
-        await onEvent({
-          kind: "status",
-          text: `Команда завершена с кодом ${event.item.exit_code ?? "unknown"}`,
-          ...(threadId ? { threadId } : {}),
-        });
-      } else if (event.type === "item.completed" && event.item?.type === "reasoning") {
-        const text = event.item.text?.trim();
-        if (text) {
+      await onEvent({
+        kind: "commentary",
+        text: pendingAgentMessage,
+        ...(threadId ? { threadId } : {}),
+      });
+      pendingAgentMessage = "";
+    }
+
+    for await (const chunk of child.stdout) {
+      buffered += decoder.decode(chunk, { stream: true });
+      const lines = buffered.split("\n");
+      buffered = lines.pop() ?? "";
+      for (const line of lines) {
+        if (signal?.aborted || !line.trim()) {
+          continue;
+        }
+        const event = JSON.parse(line) as CodexJsonEvent;
+        if (event.type === "thread.started" && event.thread_id) {
+          threadId = event.thread_id;
+        } else if (event.type === "item.completed" && event.item?.type === "agent_message") {
+          await flushCommentary();
+          pendingAgentMessage = event.item.text ?? pendingAgentMessage;
+        } else if (event.type === "turn.completed") {
+          finalAnswer = pendingAgentMessage || finalAnswer;
+          pendingAgentMessage = "";
+        } else if (event.type === "item.started" && event.item?.type === "command_execution") {
+          await flushCommentary();
           await onEvent({
-            kind: "reasoning",
-            text: text.slice(0, 1_500),
+            kind: "command",
+            text: (event.item.command ?? "terminal command").slice(0, 500),
+            ...(threadId ? { threadId } : {}),
+          });
+        } else if (event.type === "item.completed" && event.item?.type === "command_execution") {
+          await onEvent({
+            kind: "status",
+            text: `Команда завершена с кодом ${event.item.exit_code ?? "unknown"}`,
+            ...(threadId ? { threadId } : {}),
+          });
+        } else if (event.type === "item.completed" && event.item?.type === "reasoning") {
+          const text = event.item.text?.trim();
+          if (text) {
+            await onEvent({
+              kind: "reasoning",
+              text: text.slice(0, 1_500),
+              ...(threadId ? { threadId } : {}),
+            });
+          }
+        } else if (event.type === "error") {
+          await onEvent({
+            kind: "status",
+            text: event.message ?? "Codex reported an error",
             ...(threadId ? { threadId } : {}),
           });
         }
-      } else if (event.type === "error") {
-        await onEvent({
-          kind: "status",
-          text: event.message ?? "Codex reported an error",
-          ...(threadId ? { threadId } : {}),
-        });
       }
     }
-  }
 
-  const status = await child.exited;
-  if (!finalAnswer && pendingAgentMessage) {
-    finalAnswer = pendingAgentMessage;
+    const status = await child.exited;
+    if (signal?.aborted) {
+      throw new CodexCancelledError();
+    }
+    if (!finalAnswer && pendingAgentMessage) {
+      finalAnswer = pendingAgentMessage;
+    }
+    if (status !== 0) {
+      const stderr = await new Response(child.stderr).text();
+      throw new Error(`Codex exited with ${status}: ${stderr.slice(-4_000)}`);
+    }
+    if (!threadId) {
+      throw new Error("Codex did not provide a thread ID");
+    }
+    if (!finalAnswer.trim()) {
+      throw new Error("Codex completed without an answer");
+    }
+    return { answer: finalAnswer, threadId };
+  } finally {
+    signal?.removeEventListener("abort", abortHandler);
+    if (forceKillTimer !== undefined) {
+      clearTimeout(forceKillTimer);
+    }
   }
-  if (status !== 0) {
-    const stderr = await new Response(child.stderr).text();
-    throw new Error(`Codex exited with ${status}: ${stderr.slice(-4_000)}`);
-  }
-  if (!threadId) {
-    throw new Error("Codex did not provide a thread ID");
-  }
-  if (!finalAnswer.trim()) {
-    throw new Error("Codex completed without an answer");
-  }
-  return { answer: finalAnswer, threadId };
 }

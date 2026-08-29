@@ -16,18 +16,65 @@ process.once("SIGTERM", () => {
   stopping = true;
 });
 
-async function processJob(job: AgentJob): Promise<void> {
+async function monitorCancellation(jobId: number, controller: AbortController): Promise<void> {
+  while (!controller.signal.aborted) {
+    try {
+      if (await gateway.isCancelled(jobId)) {
+        controller.abort();
+        return;
+      }
+    } catch {
+      // A transient bridge failure should not stop a running job. Retry on the next poll.
+    }
+    if (!controller.signal.aborted) {
+      await Bun.sleep(500);
+    }
+  }
+}
+
+async function cancellationRequested(jobId: number, controller: AbortController): Promise<boolean> {
+  if (controller.signal.aborted) {
+    return true;
+  }
   try {
+    return await gateway.isCancelled(jobId);
+  } catch {
+    return false;
+  }
+}
+
+async function processJob(job: AgentJob): Promise<void> {
+  const cancellation = new AbortController();
+  const cancellationMonitor = monitorCancellation(job.id, cancellation);
+  try {
+    if (await cancellationRequested(job.id, cancellation)) {
+      return;
+    }
     const buckets = await loadBuckets(config.memoryPath, `${job.prompt}\n${job.context}`);
     const prompt = buildPrompt(job, buckets);
-    const result = await runCodex(config, prompt, job.resumeThreadId, async (event) => {
-      await gateway.event(job.id, event);
-    });
+    const result = await runCodex(
+      config,
+      prompt,
+      job.resumeThreadId,
+      async (event) => {
+        await gateway.event(job.id, event);
+      },
+      cancellation.signal,
+    );
+    if (await cancellationRequested(job.id, cancellation)) {
+      return;
+    }
     await gateway.complete(job.id, result);
   } catch (error) {
+    if (await cancellationRequested(job.id, cancellation)) {
+      return;
+    }
     const message = error instanceof Error ? error.message : String(error);
     console.error(JSON.stringify({ level: "error", jobId: job.id, message }));
     await gateway.fail(job.id, message);
+  } finally {
+    cancellation.abort();
+    await cancellationMonitor;
   }
 }
 

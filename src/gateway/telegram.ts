@@ -154,6 +154,7 @@ export class TelegramClient {
       commands: [
         { command: "start", description: "Как обратиться к Loylex" },
         { command: "help", description: "Возможности и синтаксис" },
+        { command: "stop", description: "Остановить текущую работу в reply" },
       ] as JsonValue[],
     });
   }

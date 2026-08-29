@@ -59,4 +59,26 @@ describe("LoylexDatabase", () => {
     expect(database.search("первая", null, 10)).toHaveLength(0);
     database.close();
   });
+
+  test("cancels active jobs linked to an outbound message and its Codex thread", () => {
+    const database = setup();
+    const incoming = message(1, "Лойлекс, начни долгую работу");
+    database.archiveUpdate({ update_id: 55, message: incoming });
+    database.enqueue(55, incoming, "начни долгую работу", null);
+
+    const running = database.claimNext(10);
+    expect(running).not.toBeNull();
+    const runningJobId = running?.id ?? 0;
+    database.setThinkingMessage(runningJobId, 10);
+    database.appendStatus(runningJobId, "commentary: работаю", "thread-123");
+
+    const queued = message(2, "продолжай");
+    database.enqueue(56, queued, "продолжай", "thread-123");
+
+    expect(database.cancelJobsForMessage(-10042, 10)).toEqual([runningJobId, runningJobId + 1]);
+    expect(database.isJobCancelled(runningJobId)).toBe(true);
+    expect(database.complete(runningJobId, 99, "thread-123")).toBe(false);
+    expect(database.claimNext(10)).toBeNull();
+    database.close();
+  });
 });

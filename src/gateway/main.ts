@@ -2,7 +2,7 @@ import { loadGatewayConfig } from "./config.ts";
 import { LoylexDatabase } from "./database.ts";
 import { GatewayServer } from "./server.ts";
 import { TelegramClient } from "./telegram.ts";
-import { detectTrigger } from "./triggers.ts";
+import { detectTrigger, isStopCommand } from "./triggers.ts";
 
 const config = loadGatewayConfig();
 const database = new LoylexDatabase(config.databasePath);
@@ -25,6 +25,22 @@ async function poll(): Promise<void> {
         const message = database.archiveUpdate(update);
         offset = update.update_id + 1;
         if (!message || message.from?.is_bot) {
+          continue;
+        }
+        if (isStopCommand(message, bot.id, bot.username)) {
+          const cancelledJobIds = message.reply_to_message
+            ? database.cancelJobsForMessage(message.chat.id, message.reply_to_message.message_id)
+            : [];
+          if (cancelledJobIds.length > 0) {
+            console.log(
+              JSON.stringify({
+                level: "info",
+                component: "poller",
+                event: "jobs_cancelled",
+                jobIds: cancelledJobIds,
+              }),
+            );
+          }
           continue;
         }
         const trigger = detectTrigger(message, bot.id);

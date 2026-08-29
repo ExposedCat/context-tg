@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { detectTrigger } from "../src/gateway/triggers.ts";
+import { detectTrigger, isStopCommand } from "../src/gateway/triggers.ts";
 import type { TelegramMessage } from "../src/shared/types.ts";
 
 function message(text: string): TelegramMessage {
@@ -35,5 +35,27 @@ describe("detectTrigger", () => {
       from: { id: 42, is_bot: true, first_name: "Loylex" },
     };
     expect(detectTrigger(input, 42)).toEqual({ kind: "reply", prompt: "продолжай" });
+  });
+
+  test("recognizes /stop only as a reply to Loylex", () => {
+    const input = message("/stop@LoylexBot");
+    input.reply_to_message = {
+      message_id: 10,
+      date: 1,
+      chat: input.chat,
+      from: { id: 42, is_bot: true, first_name: "Loylex", username: "LoylexBot" },
+    };
+
+    expect(isStopCommand(input, 42, "LoylexBot")).toBe(true);
+    expect(isStopCommand(input, 42, "AnotherBot")).toBe(false);
+    expect(detectTrigger(input, 42)).toEqual({ kind: "reply", prompt: "/stop@LoylexBot" });
+
+    input.reply_to_message.from = { id: 8, is_bot: true, first_name: "Other bot" };
+    expect(isStopCommand(input, 42, "LoylexBot")).toBe(false);
+  });
+
+  test("does not recognize /stop outside a bot reply", () => {
+    expect(isStopCommand(message("/stop"), 42, "LoylexBot")).toBe(false);
+    expect(isStopCommand(message("/stop now"), 42, "LoylexBot")).toBe(false);
   });
 });
