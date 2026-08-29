@@ -88,8 +88,8 @@ window and matching private memory buckets are added to the request.
 
 While Codex works, terminal and reasoning events edit a Rich Message with a collapsed
 `<tg-spoiler>` history in groups and a native `<tg-thinking>` block in private chats.
-Completion replaces that same message with a collapsed `<details>` history and the final
-Rich Markdown.
+Completion replaces that same group message with the same collapsed `<tg-spoiler>` history
+and the final Rich Markdown. Private chats use a collapsed `<details>` history on completion.
 Telegram Bot API 10.2 supports up to 32,768 UTF-8 characters,
 500 rich blocks, tables, LaTeX, inline media, collages, slideshows, audio, custom emoji,
 quotes, and headings.

@@ -124,6 +124,8 @@ test("edits the existing group progress message even when newer chat messages ex
   expect(sent).toEqual([]);
   expect(edited).toHaveLength(1);
   expect(edited[0]).toContain("Ответ");
+  expect(edited[0]).toContain("<tg-spoiler><b>Ход работы</b>");
+  expect(edited[0]).not.toContain("<details>");
   expect(completed as { jobId: number; messageId: number; threadId: string } | null).toEqual({
     jobId: 7,
     messageId: 11,

@@ -18,8 +18,8 @@ function thinkingDocument(status: string): string {
   return `<tg-thinking>${escapeHtml(activity || "Думаю…")}</tg-thinking>`;
 }
 
-function groupThinkingDocument(status: string): string {
-  const activity = activityLines(status).slice(-4).map(escapeHtml).join("\n");
+function groupWorkDocument(status: string, lineLimit: number): string {
+  const activity = activityLines(status).slice(-lineLimit).map(escapeHtml).join("\n");
   return `<tg-spoiler><b>Ход работы</b>\n${activity || "Думаю…"}</tg-spoiler>`;
 }
 
@@ -29,8 +29,9 @@ function activityDocument(status: string): string {
   return `<details><summary>Ход работы</summary>\n\n${history || "- Готово"}\n\n</details>`;
 }
 
-function completedDocument(status: string, answer: string): string {
-  return `${activityDocument(status)}\n\n${answer}`.slice(0, 32_768);
+function completedDocument(status: string, answer: string, useGroupSpoiler: boolean): string {
+  const work = useGroupSpoiler ? groupWorkDocument(status, 8) : activityDocument(status);
+  return `${work}\n\n${answer}`.slice(0, 32_768);
 }
 
 function bearer(request: Request): string | null {
@@ -194,7 +195,7 @@ export class GatewayServer {
       }
       return;
     }
-    const document = groupThinkingDocument(status);
+    const document = groupWorkDocument(status, 4);
     if (thinkingMessageId === null) {
       const message = await this.telegram.sendRich(address.chatId, document, {
         replyTo: address.messageId,
@@ -219,7 +220,7 @@ export class GatewayServer {
     const address = this.database.jobAddress(jobId);
     const thinkingMessageId = this.database.thinkingMessage(jobId);
     const status = this.database.appendStatus(jobId, "Готово", completion.threadId);
-    const document = completedDocument(status, completion.answer);
+    const document = completedDocument(status, completion.answer, address.chatType !== "private");
     const message =
       address.chatType === "private" || thinkingMessageId === null
         ? await this.telegram.sendRich(address.chatId, document, {
