@@ -16,7 +16,6 @@ bridge_token_file="$(realpath "$2")"
 deploy_root="$(realpath "$(dirname "$0")/..")"
 
 dnf install -y \
-  containernetworking-plugins \
   curl \
   firewalld \
   fuse-overlayfs \
@@ -25,7 +24,6 @@ dnf install -y \
   podman \
   shadow-utils \
   slirp4netns \
-  uidmap \
   zstd
 
 if ! id loylex >/dev/null 2>&1; then
@@ -34,6 +32,7 @@ if ! id loylex >/dev/null 2>&1; then
 fi
 
 loginctl enable-linger loylex
+chown -R loylex:loylex /home/loylex
 systemctl enable --now firewalld
 firewall-cmd --permanent --add-service=ssh
 firewall-cmd --reload
@@ -63,6 +62,7 @@ install -m 0755 -o loylex -g loylex \
 
 runtime_directory="/run/user/$(id -u loylex)"
 install -d -m 0700 -o loylex -g loylex "$runtime_directory"
+cd /home/loylex
 
 if ! runuser -u loylex -- env XDG_RUNTIME_DIR="$runtime_directory" \
   podman secret inspect loylex-telegram-token >/dev/null 2>&1; then
