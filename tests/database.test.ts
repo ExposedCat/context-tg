@@ -36,6 +36,10 @@ describe("LoylexDatabase", () => {
     const update: TelegramUpdate = { update_id: 55, message: incoming };
     database.archiveUpdate(update);
     database.enqueue(55, incoming, "запомни этот контекст", null);
+    expect(database.hasMessagesAfter(-10042, incoming.message_id)).toBe(false);
+
+    database.archiveMessage(message(2, "сообщение после индикатора"), "bot_api");
+    expect(database.hasMessagesAfter(-10042, incoming.message_id)).toBe(true);
 
     const job = database.claimNext(10);
     expect(job?.prompt).toBe("запомни этот контекст");

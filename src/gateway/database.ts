@@ -356,7 +356,7 @@ export class LoylexDatabase {
 
   jobAddress(jobId: number): {
     chatId: number;
-    chatType: string;
+    chatType: AgentJob["chatType"];
     messageId: number;
     threadId: number | null;
   } {
@@ -364,7 +364,7 @@ export class LoylexDatabase {
       .query<
         {
           chat_id: number;
-          chat_type: string;
+          chat_type: AgentJob["chatType"];
           message_id: number;
           message_thread_id: number | null;
         },
@@ -380,6 +380,16 @@ export class LoylexDatabase {
       messageId: row.message_id,
       threadId: row.message_thread_id,
     };
+  }
+
+  hasMessagesAfter(chatId: number, messageId: number): boolean {
+    return Boolean(
+      this.connection
+        .query<{ value: number }, [number, number]>(
+          "SELECT 1 AS value FROM messages WHERE chat_id = ? AND message_id > ? LIMIT 1",
+        )
+        .get(chatId, messageId),
+    );
   }
 
   complete(jobId: number, answerMessageId: number, codexThreadId: string): void {

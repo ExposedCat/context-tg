@@ -161,13 +161,20 @@ export class TelegramClient {
     });
   }
 
-  editThinking(chatId: number, messageId: number, html: string): Promise<TelegramMessage> {
-    return this.call<TelegramMessage>("editMessageText", {
-      chat_id: chatId,
-      message_id: messageId,
-      text: html.slice(0, 4_096),
-      parse_mode: "HTML",
-    });
+  async editThinking(chatId: number, messageId: number, html: string): Promise<void> {
+    try {
+      await this.call<TelegramMessage>("editMessageText", {
+        chat_id: chatId,
+        message_id: messageId,
+        text: html.slice(0, 4_096),
+        parse_mode: "HTML",
+      });
+    } catch (error) {
+      if (error instanceof TelegramApiError && error.message.includes("message is not modified")) {
+        return;
+      }
+      throw error;
+    }
   }
 
   async editRich(chatId: number, messageId: number, markdown: string): Promise<TelegramMessage> {

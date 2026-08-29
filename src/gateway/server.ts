@@ -1,5 +1,5 @@
 import type { Server } from "bun";
-import type { AgentCompletion, AgentEvent } from "../shared/types.ts";
+import type { AgentCompletion, AgentEvent, TelegramMessage } from "../shared/types.ts";
 import type { GatewayConfig } from "./config.ts";
 import type { LoylexDatabase } from "./database.ts";
 import { activityLines } from "./presentation.ts";
@@ -23,14 +23,14 @@ function groupThinkingDocument(status: string): string {
   return `<blockquote expandable><b>Ход работы</b>\n${activity || "Думаю…"}</blockquote>`;
 }
 
-function completedDocument(status: string, answer: string): string {
+function activityDocument(status: string): string {
   const activity = activityLines(status).slice(-8);
-  if (activity.length === 0) {
-    return answer.slice(0, 32_768);
-  }
   const history = activity.map((line) => `- ${escapeHtml(line)}`).join("\n");
-  const prefix = `<details><summary>Ход работы</summary>\n\n${history}\n\n</details>\n\n`;
-  return (prefix + answer).slice(0, 32_768);
+  return `<details><summary>Ход работы</summary>\n\n${history || "- Готово"}\n\n</details>`;
+}
+
+function completedDocument(status: string, answer: string): string {
+  return `${activityDocument(status)}\n\n${answer}`.slice(0, 32_768);
 }
 
 function bearer(request: Request): string | null {
@@ -44,6 +44,7 @@ async function body<T>(request: Request): Promise<T> {
 
 export class GatewayServer {
   readonly #lastStreamEdit = new Map<number, number>();
+  readonly #lastStreamDocument = new Map<number, string>();
   #server: Server<undefined> | null = null;
 
   constructor(
@@ -182,37 +183,35 @@ export class GatewayServer {
     const thinkingMessageId = this.database.thinkingMessage(jobId);
     const now = Date.now();
     if (address.chatType === "private") {
+      const document = thinkingDocument(status);
+      if (this.#lastStreamDocument.get(jobId) === document) {
+        return;
+      }
       if (now - (this.#lastStreamEdit.get(jobId) ?? 0) >= 1_500) {
-        await this.telegram.sendRichDraft(
-          address.chatId,
-          jobId,
-          thinkingDocument(status),
-          address.threadId,
-        );
+        await this.telegram.sendRichDraft(address.chatId, jobId, document, address.threadId);
         this.#lastStreamEdit.set(jobId, now);
+        this.#lastStreamDocument.set(jobId, document);
       }
       return;
     }
+    const document = groupThinkingDocument(status);
     if (thinkingMessageId === null) {
-      const message = await this.telegram.sendThinking(
-        address.chatId,
-        groupThinkingDocument(status),
-        {
-          replyTo: address.messageId,
-          threadId: address.threadId,
-        },
-      );
+      const message = await this.telegram.sendThinking(address.chatId, document, {
+        replyTo: address.messageId,
+        threadId: address.threadId,
+      });
       this.database.setThinkingMessage(jobId, message.message_id);
       this.#lastStreamEdit.set(jobId, now);
+      this.#lastStreamDocument.set(jobId, document);
+      return;
+    }
+    if (this.#lastStreamDocument.get(jobId) === document) {
       return;
     }
     if (now - (this.#lastStreamEdit.get(jobId) ?? 0) >= 1_500) {
-      await this.telegram.editThinking(
-        address.chatId,
-        thinkingMessageId,
-        groupThinkingDocument(status),
-      );
+      await this.telegram.editThinking(address.chatId, thinkingMessageId, document);
       this.#lastStreamEdit.set(jobId, now);
+      this.#lastStreamDocument.set(jobId, document);
     }
   }
 
@@ -220,16 +219,30 @@ export class GatewayServer {
     const address = this.database.jobAddress(jobId);
     const thinkingMessageId = this.database.thinkingMessage(jobId);
     const status = this.database.appendStatus(jobId, "Готово", completion.threadId);
-    const document = completedDocument(status, completion.answer);
-    const message =
-      address.chatType === "private" || thinkingMessageId === null
-        ? await this.telegram.sendRich(address.chatId, document, {
-            replyTo: address.messageId,
-            threadId: address.threadId,
-          })
-        : await this.telegram.editRich(address.chatId, thinkingMessageId, document);
+    let message: TelegramMessage;
+    if (
+      thinkingMessageId !== null &&
+      address.chatType !== "private" &&
+      this.database.hasMessagesAfter(address.chatId, thinkingMessageId)
+    ) {
+      await this.telegram.editRich(address.chatId, thinkingMessageId, activityDocument(status));
+      message = await this.telegram.sendRich(address.chatId, completion.answer, {
+        replyTo: address.messageId,
+        threadId: address.threadId,
+      });
+    } else {
+      const document = completedDocument(status, completion.answer);
+      message =
+        address.chatType === "private" || thinkingMessageId === null
+          ? await this.telegram.sendRich(address.chatId, document, {
+              replyTo: address.messageId,
+              threadId: address.threadId,
+            })
+          : await this.telegram.editRich(address.chatId, thinkingMessageId, document);
+    }
     this.database.complete(jobId, message.message_id, completion.threadId);
     this.#lastStreamEdit.delete(jobId);
+    this.#lastStreamDocument.delete(jobId);
   }
 
   private async fail(jobId: number, error: string): Promise<void> {
@@ -246,5 +259,6 @@ export class GatewayServer {
     }
     this.database.fail(jobId, error.slice(0, 8_000));
     this.#lastStreamEdit.delete(jobId);
+    this.#lastStreamDocument.delete(jobId);
   }
 }
