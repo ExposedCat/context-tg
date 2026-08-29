@@ -13,25 +13,14 @@ function escapeHtml(value: string): string {
   return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
 }
 
-function thinkingDocument(status: string): string {
-  const activity = activityLines(status).slice(-4).join("\n");
-  return `<tg-thinking>${escapeHtml(activity || "Думаю…")}</tg-thinking>`;
-}
-
-function groupWorkDocument(status: string, lineLimit: number): string {
-  const activity = activityLines(status).slice(-lineLimit).map(escapeHtml).join("\n");
-  return `<tg-spoiler><b>Ход работы</b>\n${activity || "Думаю…"}</tg-spoiler>`;
-}
-
-function activityDocument(status: string): string {
+function workDocument(status: string): string {
   const activity = activityLines(status).slice(-8);
   const history = activity.map((line) => `- ${escapeHtml(line)}`).join("\n");
   return `<details><summary>Ход работы</summary>\n\n${history || "- Готово"}\n\n</details>`;
 }
 
-function completedDocument(status: string, answer: string, useGroupSpoiler: boolean): string {
-  const work = useGroupSpoiler ? groupWorkDocument(status, 8) : activityDocument(status);
-  return `${work}\n\n${answer}`.slice(0, 32_768);
+function completedDocument(status: string, answer: string): string {
+  return `${workDocument(status)}\n\n${answer}`.slice(0, 32_768);
 }
 
 function bearer(request: Request): string | null {
@@ -183,19 +172,7 @@ export class GatewayServer {
     const address = this.database.jobAddress(jobId);
     const thinkingMessageId = this.database.thinkingMessage(jobId);
     const now = Date.now();
-    if (address.chatType === "private") {
-      const document = thinkingDocument(status);
-      if (this.#lastStreamDocument.get(jobId) === document) {
-        return;
-      }
-      if (now - (this.#lastStreamEdit.get(jobId) ?? 0) >= 1_500) {
-        await this.telegram.sendRichDraft(address.chatId, jobId, document, address.threadId);
-        this.#lastStreamEdit.set(jobId, now);
-        this.#lastStreamDocument.set(jobId, document);
-      }
-      return;
-    }
-    const document = groupWorkDocument(status, 4);
+    const document = workDocument(status);
     if (thinkingMessageId === null) {
       const message = await this.telegram.sendRich(address.chatId, document, {
         replyTo: address.messageId,
@@ -220,9 +197,9 @@ export class GatewayServer {
     const address = this.database.jobAddress(jobId);
     const thinkingMessageId = this.database.thinkingMessage(jobId);
     const status = this.database.appendStatus(jobId, "Готово", completion.threadId);
-    const document = completedDocument(status, completion.answer, address.chatType !== "private");
+    const document = completedDocument(status, completion.answer);
     const message =
-      address.chatType === "private" || thinkingMessageId === null
+      thinkingMessageId === null
         ? await this.telegram.sendRich(address.chatId, document, {
             replyTo: address.messageId,
             threadId: address.threadId,
@@ -237,7 +214,7 @@ export class GatewayServer {
     const address = this.database.jobAddress(jobId);
     const thinkingMessageId = this.database.thinkingMessage(jobId);
     const markdown = `Не получилось завершить задачу.\n\n\`\`\`text\n${error.slice(0, 2_000)}\n\`\`\``;
-    if (address.chatType === "private" || thinkingMessageId === null) {
+    if (thinkingMessageId === null) {
       await this.telegram.sendRich(address.chatId, markdown, {
         replyTo: address.messageId,
         threadId: address.threadId,

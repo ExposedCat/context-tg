@@ -25,7 +25,7 @@ function config(): GatewayConfig {
   };
 }
 
-test("starts group progress as a rich spoiler", async () => {
+test("starts progress as a persistent rich details message", async () => {
   const sent: Array<{
     chatId: number;
     markdown: string;
@@ -70,10 +70,10 @@ test("starts group progress as a rich spoiler", async () => {
   expect(sent).toHaveLength(1);
   expect(sent[0]).toEqual({
     chatId: -10042,
-    markdown: "<tg-spoiler><b>Ход работы</b>\nПроверяю код</tg-spoiler>",
+    markdown: "<details><summary>Ход работы</summary>\n\n- Проверяю код\n\n</details>",
     options: { replyTo: 10, threadId: null },
   });
-  expect(sent[0]?.markdown).not.toContain("blockquote");
+  expect(sent[0]?.markdown).not.toContain("tg-spoiler");
 });
 
 test("edits the existing group progress message even when newer chat messages exist", async () => {
@@ -124,11 +124,67 @@ test("edits the existing group progress message even when newer chat messages ex
   expect(sent).toEqual([]);
   expect(edited).toHaveLength(1);
   expect(edited[0]).toContain("Ответ");
-  expect(edited[0]).toContain("<tg-spoiler><b>Ход работы</b>");
-  expect(edited[0]).not.toContain("<details>");
+  expect(edited[0]).toContain("<details><summary>Ход работы</summary>");
+  expect(edited[0]).not.toContain("tg-spoiler");
   expect(completed as { jobId: number; messageId: number; threadId: string } | null).toEqual({
     jobId: 7,
     messageId: 11,
     threadId: "thread-1",
   });
+});
+
+test("uses the same editable details flow in private chats", async () => {
+  const sent: string[] = [];
+  const edited: string[] = [];
+  let thinkingMessageId: number | null = null;
+  let completedMessageId: number | null = null;
+
+  const database = {
+    jobAddress: () => ({
+      chatId: 42,
+      chatType: "private" as const,
+      messageId: 10,
+      threadId: null,
+    }),
+    thinkingMessage: () => thinkingMessageId,
+    appendStatus: (_jobId: number, line: string) => line,
+    setThinkingMessage: (_jobId: number, messageId: number) => {
+      thinkingMessageId = messageId;
+    },
+    complete: (_jobId: number, messageId: number) => {
+      completedMessageId = messageId;
+    },
+  } as unknown as LoylexDatabase;
+
+  const telegram = {
+    sendRich: async (_chatId: number, markdown: string) => {
+      sent.push(markdown);
+      return botMessage(21);
+    },
+    editRich: async (_chatId: number, _messageId: number, markdown: string) => {
+      edited.push(markdown);
+      return botMessage(21);
+    },
+  } as unknown as TelegramClient;
+
+  const server = new GatewayServer(config(), database, telegram);
+  const event = (
+    server as unknown as {
+      event: (jobId: number, event: { kind: "commentary"; text: string }) => Promise<void>;
+    }
+  ).event;
+  const complete = (
+    server as unknown as {
+      complete: (jobId: number, completion: AgentCompletion) => Promise<void>;
+    }
+  ).complete;
+
+  await event.call(server, 7, { kind: "commentary", text: "Проверяю код" });
+  await complete.call(server, 7, { answer: "Ответ", threadId: "thread-1" });
+
+  expect(sent).toEqual(["<details><summary>Ход работы</summary>\n\n- Проверяю код\n\n</details>"]);
+  expect(edited).toEqual([
+    "<details><summary>Ход работы</summary>\n\n- Готово\n\n</details>\n\nОтвет",
+  ]);
+  expect(completedMessageId as number | null).toBe(21);
 });

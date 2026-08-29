@@ -86,17 +86,14 @@ Every Bot API update is stored raw. Messages and edits are normalized, reply rel
 and media file IDs are retained, and text is indexed with FTS5. On a trigger, the latest chat
 window and matching private memory buckets are added to the request.
 
-While Codex works, terminal and reasoning events edit a Rich Message with a collapsed
-`<tg-spoiler>` history in groups and a native `<tg-thinking>` block in private chats.
-Completion replaces that same group message with the same collapsed `<tg-spoiler>` history
-and the final Rich Markdown. Private chats use a collapsed `<details>` history on completion.
+While Codex works, terminal and reasoning events create or edit one persistent Rich Message
+with a collapsed `<details>` history in every chat. Completion replaces that same message
+with the same collapsed `<details>` history and the final Rich Markdown.
 Telegram Bot API 10.2 supports up to 32,768 UTF-8 characters,
 500 rich blocks, tables, LaTeX, inline media, collages, slideshows, audio, custom emoji,
 quotes, and headings.
 
-In private chats Telegram's ephemeral `sendRichMessageDraft` also exists; Loylex
-uses persistent editable rich messages so the same streaming path works in groups and
-private chats.
+Loylex uses the same persistent editable Rich Message path in groups and private chats.
 
 ## Initial chat backfill
 

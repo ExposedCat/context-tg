@@ -130,20 +130,6 @@ export class TelegramClient {
     }
   }
 
-  sendRichDraft(
-    chatId: number,
-    draftId: number,
-    markdown: string,
-    threadId: number | null,
-  ): Promise<boolean> {
-    return this.call<boolean>("sendRichMessageDraft", {
-      chat_id: chatId,
-      draft_id: draftId,
-      rich_message: { markdown: markdown.slice(0, 32_768) },
-      ...(threadId === null ? {} : { message_thread_id: threadId }),
-    });
-  }
-
   async editRich(chatId: number, messageId: number, markdown: string): Promise<TelegramMessage> {
     try {
       return await this.call<TelegramMessage>("editMessageText", {
