@@ -5,15 +5,13 @@ import { join } from "node:path";
 import { scheduleSupervisorOperation, supervisorStatus } from "../src/agent/supervisor.ts";
 
 const temporaryDirectory = mkdtempSync(join(tmpdir(), "loylex-supervisor-client-"));
-const socket = join(temporaryDirectory, "supervisor.sock");
 const token = join(temporaryDirectory, "token");
 writeFileSync(token, "test-secret\n");
-process.env.LOYLEX_SUPERVISOR_SOCKET = socket;
 process.env.LOYLEX_SUPERVISOR_TOKEN_FILE = token;
 
 const requests: Array<{ path: string; authorization: string | null; body: unknown }> = [];
 const server = Bun.serve({
-  unix: socket,
+  port: 0,
   async fetch(request) {
     const body = request.method === "POST" ? await request.json() : null;
     requests.push({
@@ -24,6 +22,7 @@ const server = Bun.serve({
     return Response.json({ accepted: true });
   },
 });
+process.env.LOYLEX_SUPERVISOR_URL = server.url.toString().replace(/\/$/, "");
 
 afterAll(() => {
   server.stop(true);
@@ -31,7 +30,7 @@ afterAll(() => {
 });
 
 describe("supervisor client", () => {
-  test("authenticates status over the Unix socket", async () => {
+  test("authenticates status", async () => {
     expect(await supervisorStatus()).toEqual({ accepted: true });
     expect(requests.at(-1)).toEqual({
       path: "/v1/status",

@@ -35,7 +35,7 @@ socket, host PID namespace, host devices, privileged mode, or host mounts. The g
 is pinned by digest, and `main` requires review, so an agent-authored branch cannot replace
 the component holding the secret.
 
-An authenticated Unix-socket supervisor lets the agent restart or deploy only the Loylex
+An authenticated host-local supervisor lets the agent restart or deploy only the Loylex
 agent and gateway. It validates workspace changes, pins pulled images by digest, verifies
 container health, and rolls Quadlet image references back when deployment fails. The agent
 never receives a Podman socket, systemd bus, general host shell, or host reboot capability.

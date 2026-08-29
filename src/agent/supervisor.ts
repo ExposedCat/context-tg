@@ -12,14 +12,10 @@ function loadToken(): string {
   return value;
 }
 
-function socketPath(): string {
-  return process.env.LOYLEX_SUPERVISOR_SOCKET ?? "/run/loylex-supervisor/supervisor.sock";
-}
-
 async function request(path: string, init: RequestInit = {}): Promise<unknown> {
-  const response = await fetch(`http://localhost${path}`, {
+  const baseUrl = process.env.LOYLEX_SUPERVISOR_URL ?? "http://host.containers.internal:8790";
+  const response = await fetch(`${baseUrl}${path}`, {
     ...init,
-    unix: socketPath(),
     headers: {
       authorization: `Bearer ${loadToken()}`,
       ...init.headers,

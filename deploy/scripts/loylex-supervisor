@@ -3,21 +3,16 @@
 import hmac
 import json
 import os
-import socketserver
 import subprocess
 import threading
 import time
-from http.server import BaseHTTPRequestHandler
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
 
-SOCKET_PATH = Path(
-    os.environ.get(
-        "LOYLEX_SUPERVISOR_SOCKET",
-        str(Path.home() / ".local/share/loylex-supervisor/supervisor.sock"),
-    )
-)
+LISTEN_HOST = os.environ.get("LOYLEX_SUPERVISOR_LISTEN_HOST", "0.0.0.0")
+LISTEN_PORT = int(os.environ.get("LOYLEX_SUPERVISOR_LISTEN_PORT", "8790"))
 TOKEN_PATH = Path(
     os.environ.get("LOYLEX_SUPERVISOR_TOKEN_FILE", str(Path.home() / ".config/loylex/supervisor-token"))
 )
@@ -296,21 +291,13 @@ class RequestHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
 
-class UnixServer(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
-    daemon_threads = True
-
-
 def main() -> None:
     global SUPERVISOR, TOKEN
     TOKEN = TOKEN_PATH.read_text().strip()
     if not TOKEN:
         raise SupervisorError("Supervisor token is empty")
     SUPERVISOR = Supervisor()
-    SOCKET_PATH.parent.mkdir(parents=True, exist_ok=True)
-    if SOCKET_PATH.exists():
-        SOCKET_PATH.unlink()
-    with UnixServer(str(SOCKET_PATH), RequestHandler) as server:
-        SOCKET_PATH.chmod(0o666)
+    with ThreadingHTTPServer((LISTEN_HOST, LISTEN_PORT), RequestHandler) as server:
         server.serve_forever()
 
 

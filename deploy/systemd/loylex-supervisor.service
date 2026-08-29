@@ -4,7 +4,8 @@ After=default.target
 
 [Service]
 Type=simple
-Environment=LOYLEX_SUPERVISOR_SOCKET=%h/.local/share/loylex-supervisor/supervisor.sock
+Environment=LOYLEX_SUPERVISOR_LISTEN_HOST=0.0.0.0
+Environment=LOYLEX_SUPERVISOR_LISTEN_PORT=8790
 ExecStart=%h/.local/bin/loylex-supervisor
 Restart=always
 RestartSec=3

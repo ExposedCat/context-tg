@@ -49,7 +49,6 @@ install -d -m 0700 -o loylex -g loylex /home/loylex/.config/containers/systemd
 install -d -m 0700 -o loylex -g loylex /home/loylex/.config/loylex
 install -d -m 0700 -o loylex -g loylex /home/loylex/.config/systemd/user
 install -d -m 0700 -o loylex -g loylex /home/loylex/.local/bin
-install -d -m 0755 -o loylex -g loylex /home/loylex/.local/share/loylex-supervisor
 install -d -m 0700 -o loylex -g loylex /home/loylex/.local/state/loylex-supervisor
 install -d -m 0700 -o loylex -g loylex /home/loylex/backups/loylex
 

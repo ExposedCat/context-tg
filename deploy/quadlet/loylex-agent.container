@@ -13,12 +13,11 @@ Network=loylex.network
 Volume=loylex-agent-home.volume:/home/loylex:Z,U
 Volume=loylex-memory.volume:/memory:Z,U
 Volume=loylex-workspace.volume:/workspace:Z,U
-Volume=/home/loylex/.local/share/loylex-supervisor:/run/loylex-supervisor:z
 Secret=loylex-bridge-token,type=mount,target=bridge_token
 Secret=loylex-supervisor-token,type=mount,target=supervisor_token
 Environment=LOYLEX_BRIDGE_TOKEN_FILE=/run/secrets/bridge_token
 Environment=LOYLEX_BRIDGE_URL=http://loylex-gateway:8787
-Environment=LOYLEX_SUPERVISOR_SOCKET=/run/loylex-supervisor/supervisor.sock
+Environment=LOYLEX_SUPERVISOR_URL=http://host.containers.internal:8790
 Environment=LOYLEX_SUPERVISOR_TOKEN_FILE=/run/secrets/supervisor_token
 Environment=CODEX_MODEL=gpt-5.6-luna
 Environment=CODEX_REASONING_EFFORT=max
