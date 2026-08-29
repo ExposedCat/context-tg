@@ -86,9 +86,10 @@ Every Bot API update is stored raw. Messages and edits are normalized, reply rel
 and media file IDs are retained, and text is indexed with FTS5. On a trigger, the latest chat
 window and matching private memory buckets are added to the request.
 
-While Codex works, terminal and reasoning events edit a native `<tg-thinking>`
-block. Completion replaces that same message with a collapsed `<details>` history
-and the final Rich Markdown.
+While Codex works, terminal and reasoning events edit a Rich Message with a collapsed
+`<tg-spoiler>` history in groups and a native `<tg-thinking>` block in private chats.
+Completion replaces that same message with a collapsed `<details>` history and the final
+Rich Markdown.
 Telegram Bot API 10.2 supports up to 32,768 UTF-8 characters,
 500 rich blocks, tables, LaTeX, inline media, collages, slideshows, audio, custom emoji,
 quotes, and headings.

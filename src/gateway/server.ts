@@ -20,7 +20,7 @@ function thinkingDocument(status: string): string {
 
 function groupThinkingDocument(status: string): string {
   const activity = activityLines(status).slice(-4).map(escapeHtml).join("\n");
-  return `<blockquote expandable><b>Ход работы</b>\n${activity || "Думаю…"}</blockquote>`;
+  return `<tg-spoiler><b>Ход работы</b>\n${activity || "Думаю…"}</tg-spoiler>`;
 }
 
 function activityDocument(status: string): string {
@@ -196,7 +196,7 @@ export class GatewayServer {
     }
     const document = groupThinkingDocument(status);
     if (thinkingMessageId === null) {
-      const message = await this.telegram.sendThinking(address.chatId, document, {
+      const message = await this.telegram.sendRich(address.chatId, document, {
         replyTo: address.messageId,
         threadId: address.threadId,
       });
@@ -209,7 +209,7 @@ export class GatewayServer {
       return;
     }
     if (now - (this.#lastStreamEdit.get(jobId) ?? 0) >= 1_500) {
-      await this.telegram.editThinking(address.chatId, thinkingMessageId, document);
+      await this.telegram.editRich(address.chatId, thinkingMessageId, document);
       this.#lastStreamEdit.set(jobId, now);
       this.#lastStreamDocument.set(jobId, document);
     }

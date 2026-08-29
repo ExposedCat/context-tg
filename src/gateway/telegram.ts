@@ -144,39 +144,6 @@ export class TelegramClient {
     });
   }
 
-  sendThinking(
-    chatId: number,
-    html: string,
-    options: { replyTo: number; threadId: number | null },
-  ): Promise<TelegramMessage> {
-    return this.call<TelegramMessage>("sendMessage", {
-      chat_id: chatId,
-      text: html.slice(0, 4_096),
-      parse_mode: "HTML",
-      reply_parameters: {
-        message_id: options.replyTo,
-        allow_sending_without_reply: true,
-      },
-      ...(options.threadId === null ? {} : { message_thread_id: options.threadId }),
-    });
-  }
-
-  async editThinking(chatId: number, messageId: number, html: string): Promise<void> {
-    try {
-      await this.call<TelegramMessage>("editMessageText", {
-        chat_id: chatId,
-        message_id: messageId,
-        text: html.slice(0, 4_096),
-        parse_mode: "HTML",
-      });
-    } catch (error) {
-      if (error instanceof TelegramApiError && error.message.includes("message is not modified")) {
-        return;
-      }
-      throw error;
-    }
-  }
-
   async editRich(chatId: number, messageId: number, markdown: string): Promise<TelegramMessage> {
     try {
       return await this.call<TelegramMessage>("editMessageText", {
