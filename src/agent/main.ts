@@ -16,20 +16,7 @@ process.once("SIGTERM", () => {
   stopping = true;
 });
 
-while (!stopping) {
-  let job: AgentJob | null;
-  try {
-    job = await gateway.next();
-  } catch (error) {
-    console.error(error);
-    await Bun.sleep(2_000);
-    continue;
-  }
-  if (!job) {
-    await Bun.sleep(config.pollIntervalMs);
-    continue;
-  }
-
+async function processJob(job: AgentJob): Promise<void> {
   try {
     const buckets = await loadBuckets(config.memoryPath, `${job.prompt}\n${job.context}`);
     const prompt = buildPrompt(job, buckets);
@@ -43,3 +30,30 @@ while (!stopping) {
     await gateway.fail(job.id, message);
   }
 }
+
+const activeJobs = new Set<Promise<void>>();
+
+function startJob(job: AgentJob): void {
+  let task: Promise<void>;
+  task = processJob(job).finally(() => activeJobs.delete(task));
+  activeJobs.add(task);
+}
+
+while (!stopping) {
+  if (activeJobs.size >= config.maxConcurrentJobs) {
+    await Promise.race(activeJobs);
+    continue;
+  }
+  try {
+    const job = await gateway.next();
+    if (job) {
+      startJob(job);
+      continue;
+    }
+  } catch (error) {
+    console.error(error);
+  }
+  await Promise.race([Bun.sleep(config.pollIntervalMs), ...activeJobs]);
+}
+
+await Promise.allSettled(activeJobs);

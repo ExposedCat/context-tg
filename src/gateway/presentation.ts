@@ -31,22 +31,26 @@ function commandActivity(command: string): string {
 }
 
 export function activityLines(status: string): string[] {
-  const lines: string[] = [];
+  const fallback: string[] = [];
+  const narrative: string[] = [];
+  let started = false;
   for (const entry of status.split("\n\n")) {
     const separator = entry.indexOf(":");
     const kind = separator === -1 ? "status" : entry.slice(0, separator);
     const text = (separator === -1 ? entry : entry.slice(separator + 1)).trim();
-    let visible: string | null = null;
     if (kind === "command") {
-      visible = commandActivity(text);
+      const visible = commandActivity(text);
+      if (!fallback.includes(visible)) {
+        fallback.push(visible);
+      }
     } else if (kind === "reasoning" || kind === "commentary") {
-      visible = text.slice(0, 280);
+      const visible = text.slice(0, 600);
+      if (visible && narrative.at(-1) !== visible) {
+        narrative.push(visible);
+      }
     } else if (text === "Начал работу") {
-      visible = text;
-    }
-    if (visible && lines.at(-1) !== visible) {
-      lines.push(visible);
+      started = true;
     }
   }
-  return lines;
+  return [...(started ? ["Начал работу"] : []), ...(narrative.length > 0 ? narrative : fallback)];
 }

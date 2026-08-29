@@ -63,8 +63,21 @@ export async function runCodex(
 
   let threadId = resumeThreadId;
   let finalAnswer = "";
+  let pendingAgentMessage = "";
   let buffered = "";
   const decoder = new TextDecoder();
+
+  async function flushCommentary(): Promise<void> {
+    if (!pendingAgentMessage.trim()) {
+      return;
+    }
+    await onEvent({
+      kind: "commentary",
+      text: pendingAgentMessage,
+      ...(threadId ? { threadId } : {}),
+    });
+    pendingAgentMessage = "";
+  }
 
   for await (const chunk of child.stdout) {
     buffered += decoder.decode(chunk, { stream: true });
@@ -79,8 +92,13 @@ export async function runCodex(
         threadId = event.thread_id;
         await onEvent({ kind: "status", text: "Начал работу", threadId });
       } else if (event.type === "item.completed" && event.item?.type === "agent_message") {
-        finalAnswer = event.item.text ?? finalAnswer;
+        await flushCommentary();
+        pendingAgentMessage = event.item.text ?? pendingAgentMessage;
+      } else if (event.type === "turn.completed") {
+        finalAnswer = pendingAgentMessage || finalAnswer;
+        pendingAgentMessage = "";
       } else if (event.type === "item.started" && event.item?.type === "command_execution") {
+        await flushCommentary();
         await onEvent({
           kind: "command",
           text: (event.item.command ?? "terminal command").slice(0, 500),
@@ -112,6 +130,9 @@ export async function runCodex(
   }
 
   const status = await child.exited;
+  if (!finalAnswer && pendingAgentMessage) {
+    finalAnswer = pendingAgentMessage;
+  }
   if (status !== 0) {
     const stderr = await new Response(child.stderr).text();
     throw new Error(`Codex exited with ${status}: ${stderr.slice(-4_000)}`);

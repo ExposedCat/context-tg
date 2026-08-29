@@ -17,11 +17,28 @@ describe("activityLines", () => {
     ]);
   });
 
-  test("deduplicates repeated generic terminal activity", () => {
-    const status = ["command: uname -a", "command: whoami", "reasoning: Проверяю результат"].join(
-      "\n\n",
-    );
+  test("prefers Codex commentary over command classifications", () => {
+    const status = [
+      "status: Начал работу",
+      "command: uname -a",
+      "commentary: Сначала проверю окружение, затем сопоставлю результаты.",
+      "command: git status --short",
+    ].join("\n\n");
 
-    expect(activityLines(status)).toEqual(["Работаю в терминале", "Проверяю результат"]);
+    expect(activityLines(status)).toEqual([
+      "Начал работу",
+      "Сначала проверю окружение, затем сопоставлю результаты.",
+    ]);
+  });
+
+  test("deduplicates command fallback globally", () => {
+    const status = [
+      "command: uname -a",
+      "command: git status --short",
+      "command: whoami",
+      "command: git diff --stat",
+    ].join("\n\n");
+
+    expect(activityLines(status)).toEqual(["Работаю в терминале", "Проверяю состояние проекта"]);
   });
 });
