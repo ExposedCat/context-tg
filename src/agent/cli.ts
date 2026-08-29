@@ -41,7 +41,10 @@ async function run(): Promise<void> {
     const response = await request("/v1/telegram/send", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ chatId: Number(chatId), markdown: markdown.join(" ") }),
+      body: JSON.stringify({
+        chatId: Number(chatId),
+        markdown: markdown.join(" ").replaceAll("\\n", "\n"),
+      }),
     });
     console.log(JSON.stringify(await response.json(), null, 2));
     return;

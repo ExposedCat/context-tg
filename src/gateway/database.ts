@@ -354,16 +354,32 @@ export class LoylexDatabase {
       .run(messageId, jobId);
   }
 
-  jobAddress(jobId: number): { chatId: number; messageId: number; threadId: number | null } {
+  jobAddress(jobId: number): {
+    chatId: number;
+    chatType: string;
+    messageId: number;
+    threadId: number | null;
+  } {
     const row = this.connection
-      .query<{ chat_id: number; message_id: number; message_thread_id: number | null }, [number]>(
-        "SELECT chat_id, message_id, message_thread_id FROM jobs WHERE id = ?",
-      )
+      .query<
+        {
+          chat_id: number;
+          chat_type: string;
+          message_id: number;
+          message_thread_id: number | null;
+        },
+        [number]
+      >("SELECT chat_id, chat_type, message_id, message_thread_id FROM jobs WHERE id = ?")
       .get(jobId);
     if (!row) {
       throw new Error(`Unknown job ${jobId}`);
     }
-    return { chatId: row.chat_id, messageId: row.message_id, threadId: row.message_thread_id };
+    return {
+      chatId: row.chat_id,
+      chatType: row.chat_type,
+      messageId: row.message_id,
+      threadId: row.message_thread_id,
+    };
   }
 
   complete(jobId: number, answerMessageId: number, codexThreadId: string): void {

@@ -14,6 +14,7 @@ export function buildPrompt(job: AgentJob, buckets: string): string {
     "Answer the user in the user's language. Work for as long as the task genuinely needs.",
     "Use your full Linux environment and terminal. Follow AGENTS.md in your repository.",
     "The Telegram bot token is intentionally unavailable. Use the loylex CLI for archive search, status, media download, and outbound Telegram actions.",
+    "Your final response is delivered automatically. Never call `loylex send` merely to send that response; use outbound actions only when the task explicitly requires a separate proactive message.",
     "Do not merely describe a safe in-scope action when you can execute it.",
     "Request metadata:",
     JSON.stringify(metadata, null, 2),

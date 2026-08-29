@@ -16,6 +16,10 @@ Use the `loylex` command. The gateway owns the bot token; never seek or recreate
   archive.
 - `loylex upload CHAT_ID FILE [CAPTION]` uploads a local file as a document.
 
+The runtime automatically delivers the final Codex response to the current request. Do not
+call `loylex send` for that ordinary response. Use it only when the task explicitly requires
+a separate proactive message or another destination.
+
 Rich Markdown supports GitHub-flavored Markdown, tables, `$$LaTeX$$`, arbitrary
 supported Rich HTML, `<details>`, `<tg-collage>`,
 `<tg-slideshow>`, and media URLs. Keep a rich message within 32,768 UTF-8
