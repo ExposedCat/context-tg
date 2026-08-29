@@ -13,10 +13,10 @@ function botMessage(id: number): TelegramMessage {
   };
 }
 
-test("edits the existing group progress message even when newer chat messages exist", async () => {
+test("sends a self-contained final message and deletes group progress", async () => {
   const sent: string[] = [];
-  const edited: string[] = [];
-  let hasMessagesAfterCalls = 0;
+  const deleted: Array<{ chatId: number; messageId: number }> = [];
+  const calls: string[] = [];
   let completed: { jobId: number; messageId: number; threadId: string } | null = null;
 
   const database = {
@@ -28,10 +28,6 @@ test("edits the existing group progress message even when newer chat messages ex
     }),
     thinkingMessage: () => 11,
     appendStatus: () => "status: Готово",
-    hasMessagesAfter: () => {
-      hasMessagesAfterCalls += 1;
-      return true;
-    },
     complete: (jobId: number, messageId: number, threadId: string) => {
       completed = { jobId, messageId, threadId };
     },
@@ -39,12 +35,14 @@ test("edits the existing group progress message even when newer chat messages ex
 
   const telegram = {
     sendRich: async (_chatId: number, markdown: string) => {
+      calls.push("send");
       sent.push(markdown);
       return botMessage(12);
     },
-    editRich: async (_chatId: number, _messageId: number, markdown: string) => {
-      edited.push(markdown);
-      return botMessage(11);
+    deleteMessage: async (chatId: number, messageId: number) => {
+      calls.push("delete");
+      deleted.push({ chatId, messageId });
+      return true;
     },
   } as unknown as TelegramClient;
 
@@ -66,13 +64,14 @@ test("edits the existing group progress message even when newer chat messages ex
 
   await complete.call(server, 7, { answer: "Ответ", threadId: "thread-1" });
 
-  expect(hasMessagesAfterCalls).toBe(0);
-  expect(sent).toEqual([]);
-  expect(edited).toHaveLength(1);
-  expect(edited[0]).toContain("Ответ");
+  expect(calls).toEqual(["send", "delete"]);
+  expect(sent).toHaveLength(1);
+  expect(sent[0]).toContain("Ответ");
+  expect(sent[0]).toContain("Ход работы");
+  expect(deleted).toEqual([{ chatId: -10042, messageId: 11 }]);
   expect(completed as { jobId: number; messageId: number; threadId: string } | null).toEqual({
     jobId: 7,
-    messageId: 11,
+    messageId: 12,
     threadId: "thread-1",
   });
 });

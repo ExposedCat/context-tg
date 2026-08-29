@@ -1,5 +1,5 @@
 import type { Server } from "bun";
-import type { AgentCompletion, AgentEvent } from "../shared/types.ts";
+import type { AgentCompletion, AgentEvent, TelegramMessage } from "../shared/types.ts";
 import type { GatewayConfig } from "./config.ts";
 import type { LoylexDatabase } from "./database.ts";
 import { activityLines } from "./presentation.ts";
@@ -220,13 +220,19 @@ export class GatewayServer {
     const thinkingMessageId = this.database.thinkingMessage(jobId);
     const status = this.database.appendStatus(jobId, "Готово", completion.threadId);
     const document = completedDocument(status, completion.answer);
-    const message =
-      address.chatType === "private" || thinkingMessageId === null
-        ? await this.telegram.sendRich(address.chatId, document, {
-            replyTo: address.messageId,
-            threadId: address.threadId,
-          })
-        : await this.telegram.editRich(address.chatId, thinkingMessageId, document);
+    let message: TelegramMessage;
+    if (address.chatType === "private" || thinkingMessageId === null) {
+      message = await this.telegram.sendRich(address.chatId, document, {
+        replyTo: address.messageId,
+        threadId: address.threadId,
+      });
+    } else {
+      message = await this.telegram.sendRich(address.chatId, document, {
+        replyTo: address.messageId,
+        threadId: address.threadId,
+      });
+      await this.telegram.deleteMessage(address.chatId, thinkingMessageId);
+    }
     this.database.complete(jobId, message.message_id, completion.threadId);
     this.#lastStreamEdit.delete(jobId);
     this.#lastStreamDocument.delete(jobId);
