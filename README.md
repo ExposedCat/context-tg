@@ -26,7 +26,9 @@ gateway container                 agent container
 
 The bridge exposes jobs, archive search, media transfer, status, and scoped outbound
 Telegram operations. It never exposes the Telegram token. The agent has no host Podman
-socket, host PID namespace, host devices, privileged mode, or host mounts.
+socket, host PID namespace, host devices, privileged mode, or host mounts. The gateway image
+is pinned by digest, and `main` requires review, so an agent-authored branch cannot replace
+the component holding the secret.
 
 Root inside the agent is root only in a rootless user namespace. It can maintain its own
 computer but cannot reboot or kill the Rocky Linux host.
@@ -89,10 +91,11 @@ podman build -f containers/gateway.Containerfile -t loylex-gateway .
 podman build -f containers/agent.Containerfile -t loylex-agent .
 ```
 
-Main-branch pushes test the TypeScript runtime and publish
+Reviewed main-branch pushes test the TypeScript runtime and publish
 `ghcr.io/chelokot/loylex-gateway:main` and
-`ghcr.io/chelokot/loylex-agent:main`. Rootless Podman auto-update replaces
-containers while leaving all volumes intact.
+`ghcr.io/chelokot/loylex-agent:main`. Rootless Podman auto-update replaces the agent
+container while leaving all volumes intact. Gateway updates are deliberately pinned by
+digest and require updating its Quadlet after reviewing the secret-holding code.
 
 ## Host installation
 
@@ -105,13 +108,14 @@ sudo deploy/scripts/install-host.sh /root/loylex-telegram-token /root/loylex-bri
 
 The installer creates the locked `loylex` host user, enables lingering rootless
 Podman, installs Quadlets, adds a 4 GiB swap file when the server has no swap, opens only SSH,
-and enables backups and registry auto-update.
+and enables backups and registry auto-update for the agent.
 
 The agent still needs:
 
 1. a writable GitHub deploy key scoped only to `chelokot/Loylex` in its persistent
-   home volume;
-2. `$CODEX_HOME/auth.json__ created with `codex login --device-auth` or copied
+   home volume; protected `main` rejects direct changes while personal branches remain
+   writable;
+2. `$CODEX_HOME/auth.json` created with `codex login --device-auth` or copied
    through a trusted channel;
 3. the two Quadlet services started with `systemctl --user start loylex-gateway
    loylex-agent`.

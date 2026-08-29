@@ -4,9 +4,8 @@ After=network-online.target
 Wants=network-online.target
 
 [Container]
-Image=ghcr.io/chelokot/loylex-gateway:main
+Image=ghcr.io/chelokot/loylex-gateway@sha256:e5ebbccb79a61b4e1a39f273fdac64443d114d56993fe257142c7fbe1061fb25
 ContainerName=loylex-gateway
-AutoUpdate=registry
 Network=loylex.network
 Volume=loylex-gateway-data.volume:/data:Z,U
 Secret=loylex-telegram-token,type=mount,target=telegram_token
