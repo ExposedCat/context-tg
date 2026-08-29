@@ -1,0 +1,36 @@
+[Unit]
+Description=Loylex Telegram gateway
+After=network-online.target
+Wants=network-online.target
+
+[Container]
+Image=ghcr.io/chelokot/loylex-gateway:main
+ContainerName=loylex-gateway
+AutoUpdate=registry
+Network=loylex.network
+Volume=loylex-gateway-data.volume:/data:Z,U
+Secret=loylex-telegram-token,type=mount,target=telegram_token
+Secret=loylex-bridge-token,type=mount,target=bridge_token
+Environment=TELEGRAM_BOT_TOKEN_FILE=/run/secrets/telegram_token
+Environment=LOYLEX_BRIDGE_TOKEN_FILE=/run/secrets/bridge_token
+Environment=LOYLEX_DATABASE_PATH=/data/loylex.sqlite
+Environment=LOYLEX_CONTEXT_MESSAGES=80
+ReadOnly=true
+NoNewPrivileges=true
+DropCapability=all
+Tmpfs=/tmp:rw,nodev,nosuid,noexec,size=128m
+PodmanArgs=--memory=768m --cpus=1.0 --pids-limit=256
+HealthCmd=bun /app/src/gateway/health.ts
+HealthInterval=30s
+HealthTimeout=5s
+HealthRetries=3
+HealthStartPeriod=20s
+
+[Service]
+Restart=always
+RestartSec=3
+TimeoutStartSec=900
+TimeoutStopSec=90
+
+[Install]
+WantedBy=default.target

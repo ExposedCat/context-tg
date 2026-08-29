@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+umask 077
+backup_root="$HOME/backups/loylex"
+timestamp="$(date --utc +%Y%m%dT%H%M%SZ)"
+destination="$backup_root/$timestamp"
+mkdir -p "$destination"
+
+for volume in loylex-gateway-data loylex-agent-home loylex-memory loylex-workspace; do
+  podman volume export "$volume" | zstd -T0 -q -o "$destination/$volume.tar.zst"
+done
+
+find "$backup_root" -mindepth 1 -maxdepth 1 -type d -mtime +14 -exec rm -rf -- {} +

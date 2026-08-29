@@ -1,0 +1,35 @@
+[Unit]
+Description=Loylex persistent Codex agent
+After=network-online.target loylex-gateway.service
+Wants=network-online.target
+Requires=loylex-gateway.service
+
+[Container]
+Image=ghcr.io/chelokot/loylex-agent:main
+ContainerName=loylex-agent
+AutoUpdate=registry
+Network=loylex.network
+Volume=loylex-agent-home.volume:/home/loylex:Z,U
+Volume=loylex-memory.volume:/memory:Z,U
+Volume=loylex-workspace.volume:/workspace:Z,U
+Secret=loylex-bridge-token,type=mount,target=bridge_token
+Environment=LOYLEX_BRIDGE_TOKEN_FILE=/run/secrets/bridge_token
+Environment=LOYLEX_BRIDGE_URL=http://loylex-gateway:8787
+Environment=CODEX_MODEL=gpt-5.6-luna
+Environment=CODEX_REASONING_EFFORT=max
+NoNewPrivileges=false
+PodmanArgs=--memory=9g --memory-swap=13g --cpus=5.5 --pids-limit=4096
+HealthCmd=pgrep -f /opt/loylex/app/src/agent/main.ts
+HealthInterval=60s
+HealthTimeout=5s
+HealthRetries=5
+HealthStartPeriod=300s
+
+[Service]
+Restart=always
+RestartSec=5
+TimeoutStartSec=900
+TimeoutStopSec=300
+
+[Install]
+WantedBy=default.target

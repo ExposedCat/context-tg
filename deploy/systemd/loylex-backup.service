@@ -1,0 +1,6 @@
+[Unit]
+Description=Back up Loylex persistent volumes
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/loylex-backup

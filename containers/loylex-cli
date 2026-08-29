@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+exec bun /opt/loylex/app/src/agent/cli.ts "$@"

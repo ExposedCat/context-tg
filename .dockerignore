@@ -1,5 +1,5 @@
-.env
 .git
-.vscode
+.github
 data
 node_modules
+result.json
