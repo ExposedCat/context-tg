@@ -18,9 +18,6 @@ function commandActivity(command: string): string {
   if (normalized.includes("systemctl") || normalized.includes("ps -")) {
     return "Проверяю процессы и сервисы";
   }
-  if (normalized.includes("git ")) {
-    return "Проверяю состояние проекта";
-  }
   if (normalized.includes("loylex status")) {
     return "Проверяю Telegram и очередь задач";
   }

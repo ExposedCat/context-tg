@@ -24,7 +24,7 @@ describe("activityLines", () => {
     ]);
   });
 
-  test("deduplicates command fallback globally", () => {
+  test("deduplicates command fallback globally without command-specific placeholders", () => {
     const status = [
       "command: uname -a",
       "command: git status --short",
@@ -32,6 +32,6 @@ describe("activityLines", () => {
       "command: git diff --stat",
     ].join("\n\n");
 
-    expect(activityLines(status)).toEqual(["Работаю в терминале", "Проверяю состояние проекта"]);
+    expect(activityLines(status)).toEqual(["Работаю в терминале"]);
   });
 });
