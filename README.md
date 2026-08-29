@@ -55,9 +55,8 @@ and media file IDs are retained, and text is indexed with FTS5. On a trigger, th
 window and matching private memory buckets are added to the request.
 
 While Codex works, terminal and reasoning events edit a native `<tg-thinking>`
-block.
-Completion sends one self-contained Rich Markdown message with a collapsed `<details>` history,
-then removes the temporary progress message.
+block. Completion replaces that same message with a collapsed `<details>` history
+and the final Rich Markdown.
 Telegram Bot API 10.2 supports up to 32,768 UTF-8 characters,
 500 rich blocks, tables, LaTeX, inline media, collages, slideshows, audio, custom emoji,
 quotes, and headings.

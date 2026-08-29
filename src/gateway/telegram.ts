@@ -177,13 +177,6 @@ export class TelegramClient {
     }
   }
 
-  deleteMessage(chatId: number, messageId: number): Promise<boolean> {
-    return this.call<boolean>("deleteMessage", {
-      chat_id: chatId,
-      message_id: messageId,
-    });
-  }
-
   async editRich(chatId: number, messageId: number, markdown: string): Promise<TelegramMessage> {
     try {
       return await this.call<TelegramMessage>("editMessageText", {
