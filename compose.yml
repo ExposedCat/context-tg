@@ -20,6 +20,8 @@ services:
     env_file:
       - .env
     environment:
+      CODEX_APP_SERVER_TOKEN: ${CODEX_APP_SERVER_TOKEN:-context-tg-internal}
+      CODEX_APP_SERVER_URL: ws://codex:4500
       DENO_DIR: /deno-dir
       DEBUG: app:*:warn,app:*:error
       QDRANT_URL: http://qdrant:6333
@@ -29,8 +31,56 @@ services:
       - .:/app:Z
       - deno_cache:/deno-dir
     depends_on:
-      - qdrant
-      - searxng
+      codex:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+      searxng:
+        condition: service_started
+    restart: unless-stopped
+
+  codex:
+    build:
+      context: ./codex
+      dockerfile: Containerfile
+      args:
+        CODEX_VERSION: ${CODEX_VERSION:-0.151.0}
+    image: context-tg-codex:${CODEX_VERSION:-0.151.0}
+    command:
+      - app-server
+      - --listen
+      - ws://0.0.0.0:4500
+    environment:
+      CODEX_APP_SERVER_TOKEN: ${CODEX_APP_SERVER_TOKEN:-context-tg-internal}
+      CODEX_HOME: /codex-home
+      CODEX_HOME_CHECK_INTERVAL_SECONDS: ${CODEX_HOME_CHECK_INTERVAL_SECONDS:-30}
+      CODEX_HOME_MAX_BYTES: ${CODEX_HOME_MAX_BYTES:-536870912}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+    volumes:
+      - codex_home:/codex-home
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=64m,mode=1777
+    read_only: true
+    mem_limit: ${CODEX_MEMORY_LIMIT:-512m}
+    memswap_limit: ${CODEX_MEMORY_LIMIT:-512m}
+    cpus: ${CODEX_CPU_LIMIT:-1.0}
+    pids_limit: 128
+    shm_size: 16m
+    init: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - fetch('http://127.0.0.1:4500/readyz').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 10s
     restart: unless-stopped
 
   qdrant:
@@ -59,5 +109,6 @@ services:
     restart: unless-stopped
 
 volumes:
+  codex_home:
   deno_cache:
   qdrant_data:

@@ -201,6 +201,10 @@ function normalizeMemoText(text: string): string {
 }
 
 function getMemoPruningClient(): OpenAI {
+  if (!APP_ENV.LLM_API_KEY || !APP_ENV.LLM_BASE_URL) {
+    throw new Error("Legacy LLM memo pruning is not configured.");
+  }
+
   return new OpenAI({
     apiKey: APP_ENV.LLM_API_KEY,
     baseURL: APP_ENV.LLM_BASE_URL,
@@ -208,6 +212,10 @@ function getMemoPruningClient(): OpenAI {
 }
 
 function getMemoPruningDeploymentName(): string | undefined {
+  if (!APP_ENV.LLM_API_KEY || !APP_ENV.LLM_BASE_URL) {
+    return undefined;
+  }
+
   return LLM_DEPLOYMENTS.big.deploymentName || undefined;
 }
 

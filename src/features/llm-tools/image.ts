@@ -38,7 +38,7 @@ export const toolDefinition = {
       images: {
         type: "array",
         description:
-          "Reference images. Could be remote URL or local photo id (string number).",
+          "Optional ordered input images to reference, transform, or combine. Each item must be either a direct HTTP(S) image URL or the exact saved image ID from a tg://photo or tg://document reference.",
         items: { type: "string" },
       },
     },

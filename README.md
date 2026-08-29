@@ -1,5 +1,67 @@
 # Chat Context | Telegram
 
+## Codex chat runtime
+
+Normal chat generation runs through a separate Codex app-server container.
+The bot opens an authenticated WebSocket connection, starts a durable Codex
+thread for a new Telegram conversation, and stores that thread UUID in the
+existing `response_id` columns. Later messages resume the same thread and send
+only the new message and attachments; the bot no longer reconstructs and sends
+the full conversation to the Azure Responses endpoint.
+
+`LLM_BASE_URL`, `LLM_API_KEY`, and `LLM_TEMPERATURE` are now optional legacy
+settings. If the URL/key pair is kept, it is used only by the existing memo
+pruning job, not for Telegram conversation turns.
+
+Codex receives the bot's existing tools as dynamic tools, so message search,
+image search, schedules, memos, stickers, reports, and reply selection still run
+inside the bot with the current Telegram/database context. Codex's built-in
+shell, file editing, web search, image generation, and multi-agent features are
+disabled for these threads.
+
+The image installs `@openai/codex` at the version selected by `CODEX_VERSION`
+(`0.151.0` by default). Configure authentication in `.env` with an OpenAI API
+key:
+
+```dotenv
+OPENAI_API_KEY=...
+CODEX_APP_SERVER_TOKEN=replace-with-a-long-random-token
+# Optional; otherwise the existing /model setting or Codex default is used.
+CODEX_MODEL=your-codex-model
+```
+
+Alternatively, persist a ChatGPT login directly in the Codex volume before
+starting the stack:
+
+```sh
+docker compose run --rm --entrypoint codex codex login --device-auth
+```
+
+`CODEX_HOME` is `/codex-home`, backed by the persistent `codex_home` named
+volume. A completed conversation can therefore be resumed after the Codex
+container is replaced or restarted. `docker compose down -v` intentionally
+deletes this history. Old Azure response IDs are not Codex thread UUIDs, so the
+first message after migration starts a new Codex thread without replaying the
+old Azure history.
+
+The service defaults to 512 MiB RAM with no additional swap, one CPU, 128 PIDs,
+a read-only root filesystem, and a 64 MiB `/tmp`. Compose does not provide a
+portable hard quota for persistent local volumes, so the entrypoint enforces a
+fail-closed 512 MiB high-water limit (`CODEX_HOME_MAX_BYTES`). It checks every
+30 seconds and stops Codex if the volume crosses the limit; it never silently
+deletes chats. To perform maintenance after that happens, bypass only the guard
+for the one-off command:
+
+```sh
+docker compose run --rm --entrypoint codex \
+  -e CODEX_HOME_QUOTA_BYPASS=1 codex delete THREAD_ID
+```
+
+The limits can be adjusted with `CODEX_MEMORY_LIMIT`, `CODEX_CPU_LIMIT`,
+`CODEX_HOME_MAX_BYTES`, and `CODEX_HOME_CHECK_INTERVAL_SECONDS`. The app-server
+port is available only on the Compose network and requires the shared bearer
+token.
+
 ## Remembered-message search
 
 Chat search combines the existing dense embeddings with Qdrant full-text

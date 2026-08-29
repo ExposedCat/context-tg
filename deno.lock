@@ -26,6 +26,7 @@
     "npm:@grammyjs/runner@2.0.3": "2.0.3_grammy@1.46.0",
     "npm:debug@^4.4.3": "4.4.3",
     "npm:grammy@1.46.0": "1.46.0",
+    "npm:ws@8.18.3": "8.18.3",
     "npm:youtube-dl-exec@*": "3.1.7",
     "npm:youtube-dl-exec@^3.1.7": "3.1.7",
     "npm:zod@3": "3.25.76"
@@ -433,6 +434,9 @@
         "isexe@3.1.5"
       ],
       "bin": true
+    },
+    "ws@8.18.3": {
+      "integrity": "sha512-PEIGCY5tSlUt50cqyMXfCzX+oOPqN0vuGqWzbcJ2xvnkzkq46oOpz7dQaTDBdfICb4N14+GARUDw2XV2N4tvzg=="
     },
     "youtube-dl-exec@3.1.7": {
       "integrity": "sha512-NlbHVcnoj1qmnHe2OFAh7zsZT4+pC2RdvWLiGgHWI9Jef+EIFzG3uUh32G745l3arxAnGsVEKyODEJClTwf5Kw==",
