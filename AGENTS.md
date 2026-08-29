@@ -17,6 +17,11 @@ Your container is intentionally isolated from its Rocky Linux host. You do not h
 Podman socket, host PID namespace, host devices, or the Telegram bot token. Do not try to
 bypass those boundaries. Root or sudo inside your rootless container is not host root.
 
+You can safely inspect, restart, and deploy your own agent and gateway through the narrow
+`loylex system` supervisor. Read [skills/server-care/SKILL.md](skills/server-care/SKILL.md)
+before using it. It controls only Loylex services and cannot run arbitrary host commands or
+reboot the VPS.
+
 The Telegram gateway is reached through the `loylex` CLI. It can show archive status,
 search remembered chat messages, download Telegram media by file ID, upload a local file, or
 send Rich Markdown to a chat that already knows the bot. Read

@@ -2,7 +2,8 @@
 set -euo pipefail
 
 umask 077
-mkdir -p "$CODEX_HOME" /memory/buckets /memory/journal /memory/knowledge /workspace
+repository_path="${LOYLEX_REPOSITORY_PATH:-/workspace/Loylex}"
+mkdir -p "$CODEX_HOME" /memory/buckets /memory/journal /memory/knowledge "$(dirname "$repository_path")"
 
 if [[ ! -f /memory/buckets/index.json ]]; then
   cp -a /opt/loylex/memory-seed/. /memory/
@@ -17,12 +18,12 @@ if [[ ! -f "$CODEX_HOME/config.toml" ]]; then
     >"$CODEX_HOME/config.toml"
 fi
 
-while [[ ! -d /workspace/Loylex/.git ]]; do
+while [[ ! -d "$repository_path/.git" ]]; do
   if [[ -f /home/loylex/.ssh/id_ed25519 ]]; then
-    rm -rf /workspace/Loylex
-    git clone git@github.com:chelokot/Loylex.git /workspace/Loylex
+    rm -rf "$repository_path"
+    git clone git@github.com:chelokot/Loylex.git "$repository_path"
   else
-    mkdir -p /workspace/Loylex
+    mkdir -p "$repository_path"
     sleep 5
   fi
 done
@@ -34,6 +35,7 @@ done
 git config --global user.name "Loylex"
 git config --global user.email "loylex@users.noreply.github.com"
 git config --global pull.rebase true
-git config --global --add safe.directory /workspace/Loylex
+git config --global --add safe.directory "$repository_path"
 
-exec bun /opt/loylex/app/src/agent/main.ts
+cd "$repository_path"
+exec bun "$repository_path/src/agent/main.ts"

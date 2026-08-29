@@ -1,5 +1,6 @@
 import { basename } from "node:path";
 import { loadAgentConfig } from "./config.ts";
+import { scheduleSupervisorOperation, supervisorStatus } from "./supervisor.ts";
 
 const config = loadAgentConfig();
 const [command, ...arguments_] = process.argv.slice(2);
@@ -19,6 +20,29 @@ async function request(path: string, init: RequestInit = {}): Promise<Response> 
 }
 
 async function run(): Promise<void> {
+  if (command === "system") {
+    const [operation, scope = "all", delay = "15"] = arguments_;
+    if (operation === "status") {
+      console.log(JSON.stringify(await supervisorStatus(), null, 2));
+      return;
+    }
+    if (operation !== "restart" && operation !== "deploy") {
+      throw new Error(
+        "Usage: loylex system <status|restart|deploy> [agent|gateway|all] [DELAY_SECONDS]",
+      );
+    }
+    if (scope !== "agent" && scope !== "gateway" && scope !== "all") {
+      throw new Error("System scope must be agent, gateway, or all");
+    }
+    const delaySeconds = Number.parseInt(delay, 10);
+    if (!Number.isInteger(delaySeconds)) {
+      throw new Error("DELAY_SECONDS must be an integer");
+    }
+    console.log(
+      JSON.stringify(await scheduleSupervisorOperation(operation, scope, delaySeconds), null, 2),
+    );
+    return;
+  }
   if (command === "status") {
     console.log(JSON.stringify(await (await request("/v1/status")).json(), null, 2));
     return;
@@ -74,7 +98,7 @@ async function run(): Promise<void> {
     console.log(JSON.stringify(await response.json(), null, 2));
     return;
   }
-  throw new Error("Usage: loylex <status|search|send|media|upload>");
+  throw new Error("Usage: loylex <status|search|send|media|upload|system>");
 }
 
 await run();

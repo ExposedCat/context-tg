@@ -22,6 +22,11 @@ gateway container                 agent container
 - rich streaming/editing          - repo-scoped Git push key
         |                                  |
         +------ authenticated bridge ------+
+                          |
+                          v
+                 host supervisor
+                 - fixed restart/deploy API
+                 - no arbitrary host commands
 ```
 
 The bridge exposes jobs, archive search, media transfer, status, and scoped outbound
@@ -29,6 +34,11 @@ Telegram operations. It never exposes the Telegram token. The agent has no host 
 socket, host PID namespace, host devices, privileged mode, or host mounts. The gateway image
 is pinned by digest, and `main` requires review, so an agent-authored branch cannot replace
 the component holding the secret.
+
+An authenticated Unix-socket supervisor lets the agent restart or deploy only the Loylex
+agent and gateway. It validates workspace changes, pins pulled images by digest, verifies
+container health, and rolls Quadlet image references back when deployment fails. The agent
+never receives a Podman socket, systemd bus, general host shell, or host reboot capability.
 
 Root inside the agent is root only in a rootless user namespace. It can maintain its own
 computer but cannot reboot or kill the Rocky Linux host.
@@ -47,6 +57,28 @@ Four named volumes survive image replacement:
 The repository contains public skills and personality/instructions. Private memory is never
 mounted into the gateway and is never committed. Daily compressed volume backups are kept
 for 14 days.
+
+The agent starts its TypeScript runtime from the mounted `/workspace/Loylex` repository.
+After checks pass, a supervised restart therefore applies its self-authored agent changes
+without replacing memory, Codex sessions, or the workspace.
+
+## Self-management
+
+```bash
+loylex system status
+loylex system restart agent
+loylex system restart gateway
+loylex system restart all
+loylex system deploy agent
+loylex system deploy gateway
+loylex system deploy all
+```
+
+Restart and deploy operations default to a 15-second delay so the scheduling Telegram task
+can send its final response. An optional final argument changes the delay from 5 to 300
+seconds. Deploying runs the repository checks for agent changes, pulls the selected `main`
+images, records exact digests in the live Quadlets, restarts the data plane, and performs live
+health checks. The supervisor itself stays outside both containers.
 
 ## Telegram behavior
 
@@ -108,8 +140,9 @@ sudo deploy/scripts/install-host.sh /root/loylex-telegram-token /root/loylex-bri
 ```
 
 The installer creates the locked `loylex` host user, enables lingering rootless
-Podman, installs Quadlets, adds a 4 GiB swap file when the server has no swap, opens only SSH,
-and enables backups and registry auto-update for the agent.
+Podman, installs Quadlets and the narrow self-management supervisor, adds a 4 GiB swap file
+when the server has no swap, opens only SSH, and enables backups and registry auto-update for
+the agent.
 
 The agent still needs:
 

@@ -1,0 +1,13 @@
+[Unit]
+Description=Loylex self-management supervisor
+After=default.target
+
+[Service]
+Type=simple
+Environment=LOYLEX_SUPERVISOR_SOCKET=%h/.local/share/loylex-supervisor/supervisor.sock
+ExecStart=%h/.local/bin/loylex-supervisor
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=default.target

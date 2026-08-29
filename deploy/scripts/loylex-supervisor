@@ -1,0 +1,318 @@
+#!/usr/bin/env python3
+
+import hmac
+import json
+import os
+import socketserver
+import subprocess
+import threading
+import time
+from http.server import BaseHTTPRequestHandler
+from pathlib import Path
+from typing import Any
+
+
+SOCKET_PATH = Path(
+    os.environ.get(
+        "LOYLEX_SUPERVISOR_SOCKET",
+        str(Path.home() / ".local/share/loylex-supervisor/supervisor.sock"),
+    )
+)
+TOKEN_PATH = Path(
+    os.environ.get("LOYLEX_SUPERVISOR_TOKEN_FILE", str(Path.home() / ".config/loylex/supervisor-token"))
+)
+STATE_PATH = Path(
+    os.environ.get(
+        "LOYLEX_SUPERVISOR_STATE_FILE",
+        str(Path.home() / ".local/state/loylex-supervisor/state.json"),
+    )
+)
+QUADLET_DIRECTORY = Path(
+    os.environ.get(
+        "LOYLEX_QUADLET_DIRECTORY",
+        str(Path.home() / ".config/containers/systemd"),
+    )
+)
+IMAGE_REPOSITORIES = {
+    "agent": "ghcr.io/chelokot/loylex-agent",
+    "gateway": "ghcr.io/chelokot/loylex-gateway",
+}
+SERVICE_UNITS = {
+    "agent": "loylex-agent.service",
+    "gateway": "loylex-gateway.service",
+}
+CONTAINER_NAMES = {
+    "agent": "loylex-agent",
+    "gateway": "loylex-gateway",
+}
+
+
+class SupervisorError(Exception):
+    pass
+
+
+class BusyError(SupervisorError):
+    pass
+
+
+def run_command(command: list[str], timeout: int = 900) -> str:
+    result = subprocess.run(
+        command,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+    )
+    if result.returncode != 0:
+        detail = result.stderr.strip() or result.stdout.strip() or f"exit code {result.returncode}"
+        raise SupervisorError(f"{command[0]} failed: {detail}")
+    return result.stdout.strip()
+
+
+def replace_image_line(content: str, repository: str, reference: str) -> str:
+    expected_prefix = f"Image={repository}"
+    matching = [line for line in content.splitlines() if line.startswith(expected_prefix)]
+    if len(matching) != 1:
+        raise SupervisorError(f"Expected exactly one {expected_prefix} line")
+    lines = [f"Image={reference}" if line.startswith(expected_prefix) else line for line in content.splitlines()]
+    return "\n".join(lines) + "\n"
+
+
+def selected_components(scope: str) -> list[str]:
+    if scope == "all":
+        return ["gateway", "agent"]
+    if scope in SERVICE_UNITS:
+        return [scope]
+    raise SupervisorError(f"Unsupported scope: {scope}")
+
+
+class Supervisor:
+    def __init__(self) -> None:
+        self.lock = threading.Lock()
+        self.worker: threading.Timer | None = None
+        self.state: dict[str, Any] = {
+            "state": "idle",
+            "operation": None,
+            "scope": None,
+            "updatedAt": int(time.time()),
+        }
+        self._write_state()
+
+    def status(self) -> dict[str, Any]:
+        services: dict[str, str] = {}
+        for component, unit in SERVICE_UNITS.items():
+            result = subprocess.run(
+                ["systemctl", "--user", "is-active", unit],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            services[component] = result.stdout.strip() or "unknown"
+        with self.lock:
+            operation = dict(self.state)
+        return {"services": services, "operation": operation}
+
+    def schedule(self, operation: str, scope: str, delay_seconds: int) -> dict[str, Any]:
+        selected_components(scope)
+        if operation not in {"restart", "deploy"}:
+            raise SupervisorError(f"Unsupported operation: {operation}")
+        if delay_seconds < 5 or delay_seconds > 300:
+            raise SupervisorError("delaySeconds must be between 5 and 300")
+        with self.lock:
+            if self.worker is not None and self.worker.is_alive():
+                raise BusyError("Another supervisor operation is already active")
+            self.state = {
+                "state": "scheduled",
+                "operation": operation,
+                "scope": scope,
+                "updatedAt": int(time.time()),
+            }
+            self._write_state()
+            self.worker = threading.Timer(delay_seconds, self._execute, args=(operation, scope))
+            self.worker.daemon = True
+            self.worker.start()
+            return dict(self.state)
+
+    def _execute(self, operation: str, scope: str) -> None:
+        self._set_state("running", operation, scope)
+        try:
+            if operation == "deploy":
+                self._deploy(scope)
+            else:
+                self._restart(scope)
+            self._set_state("succeeded", operation, scope)
+        except Exception as error:
+            self._set_state("failed", operation, scope, str(error))
+
+    def _deploy(self, scope: str) -> None:
+        components = selected_components(scope)
+        if "agent" in components:
+            run_command(["podman", "exec", "loylex-agent", "bun", "run", "check"])
+
+        replacements: dict[Path, tuple[str, str]] = {}
+        originals: dict[Path, str] = {}
+        for component in components:
+            repository = IMAGE_REPOSITORIES[component]
+            tag = f"{repository}:main"
+            run_command(["podman", "pull", tag])
+            digest = run_command(["podman", "image", "inspect", tag, "--format", "{{.Digest}}"])
+            if not digest.startswith("sha256:") or len(digest) != 71:
+                raise SupervisorError(f"Invalid digest returned for {repository}")
+            quadlet = QUADLET_DIRECTORY / f"loylex-{component}.container"
+            original = quadlet.read_text()
+            reference = f"{repository}@{digest}"
+            replacements[quadlet] = (original, replace_image_line(original, repository, reference))
+            originals[quadlet] = original
+
+        try:
+            for quadlet, (_, updated) in replacements.items():
+                temporary = quadlet.with_suffix(f"{quadlet.suffix}.new")
+                temporary.write_text(updated)
+                os.replace(temporary, quadlet)
+            run_command(["systemctl", "--user", "daemon-reload"])
+            self._restart(scope)
+        except Exception:
+            for quadlet, original in originals.items():
+                temporary = quadlet.with_suffix(f"{quadlet.suffix}.rollback")
+                temporary.write_text(original)
+                os.replace(temporary, quadlet)
+            run_command(["systemctl", "--user", "daemon-reload"])
+            self._restart(scope)
+            raise
+
+    def _restart(self, scope: str) -> None:
+        components = selected_components(scope)
+        if "agent" in components:
+            run_command(["podman", "exec", "loylex-agent", "bun", "run", "check"])
+        for component in components:
+            unit = SERVICE_UNITS[component]
+            run_command(["systemctl", "--user", "restart", unit])
+            self._wait_healthy(component)
+
+    def _wait_healthy(self, component: str) -> None:
+        unit = SERVICE_UNITS[component]
+        container = CONTAINER_NAMES[component]
+        deadline = time.monotonic() + 180
+        last_error = "service did not become healthy"
+        while time.monotonic() < deadline:
+            active = subprocess.run(
+                ["systemctl", "--user", "is-active", unit],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            if active.returncode == 0:
+                health = subprocess.run(
+                    ["podman", "healthcheck", "run", container],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                )
+                if health.returncode == 0:
+                    return
+                last_error = health.stderr.strip() or health.stdout.strip() or last_error
+            else:
+                last_error = active.stdout.strip() or active.stderr.strip() or last_error
+            time.sleep(2)
+        raise SupervisorError(f"{component} failed health verification: {last_error}")
+
+    def _set_state(
+        self,
+        state: str,
+        operation: str,
+        scope: str,
+        error: str | None = None,
+    ) -> None:
+        with self.lock:
+            self.state = {
+                "state": state,
+                "operation": operation,
+                "scope": scope,
+                "updatedAt": int(time.time()),
+            }
+            if error is not None:
+                self.state["error"] = error
+            self._write_state()
+
+    def _write_state(self) -> None:
+        STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        temporary = STATE_PATH.with_suffix(".new")
+        temporary.write_text(json.dumps(self.state, ensure_ascii=False) + "\n")
+        os.replace(temporary, STATE_PATH)
+
+
+SUPERVISOR: Supervisor
+TOKEN = ""
+
+
+class RequestHandler(BaseHTTPRequestHandler):
+    server_version = "LoylexSupervisor/1"
+
+    def do_GET(self) -> None:
+        if not self._authorized():
+            self._json(401, {"error": "unauthorized"})
+            return
+        if self.path != "/v1/status":
+            self._json(404, {"error": "not found"})
+            return
+        self._json(200, SUPERVISOR.status())
+
+    def do_POST(self) -> None:
+        if not self._authorized():
+            self._json(401, {"error": "unauthorized"})
+            return
+        parts = self.path.strip("/").split("/")
+        if len(parts) != 3 or parts[0] != "v1":
+            self._json(404, {"error": "not found"})
+            return
+        try:
+            content_length = int(self.headers.get("content-length", "0"))
+            if content_length > 4096:
+                self._json(413, {"error": "request too large"})
+                return
+            payload = json.loads(self.rfile.read(content_length) or b"{}")
+            delay_seconds = int(payload.get("delaySeconds", 15))
+            result = SUPERVISOR.schedule(parts[1], parts[2], delay_seconds)
+            self._json(202, result)
+        except BusyError as error:
+            self._json(409, {"error": str(error)})
+        except (SupervisorError, ValueError, json.JSONDecodeError) as error:
+            self._json(400, {"error": str(error)})
+
+    def log_message(self, _: str, *arguments: Any) -> None:
+        return
+
+    def _authorized(self) -> bool:
+        expected = f"Bearer {TOKEN}"
+        supplied = self.headers.get("authorization", "")
+        return hmac.compare_digest(supplied, expected)
+
+    def _json(self, status: int, payload: dict[str, Any]) -> None:
+        body = json.dumps(payload, ensure_ascii=False).encode()
+        self.send_response(status)
+        self.send_header("content-type", "application/json")
+        self.send_header("content-length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+
+class UnixServer(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
+    daemon_threads = True
+
+
+def main() -> None:
+    global SUPERVISOR, TOKEN
+    TOKEN = TOKEN_PATH.read_text().strip()
+    if not TOKEN:
+        raise SupervisorError("Supervisor token is empty")
+    SUPERVISOR = Supervisor()
+    SOCKET_PATH.parent.mkdir(parents=True, exist_ok=True)
+    if SOCKET_PATH.exists():
+        SOCKET_PATH.unlink()
+    with UnixServer(str(SOCKET_PATH), RequestHandler) as server:
+        SOCKET_PATH.chmod(0o666)
+        server.serve_forever()
+
+
+if __name__ == "__main__":
+    main()

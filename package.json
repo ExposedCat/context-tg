@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "check": "bun run typecheck && bun run lint && bun test",
+    "check": "bun run typecheck && bun run lint && bun test && python3 -B -m unittest discover tests -p '*_test.py'",
     "format": "biome format --write .",
     "gateway": "bun src/gateway/main.ts",
     "import": "bun src/gateway/import.ts",
