@@ -4,29 +4,22 @@ import { activityLines } from "../src/gateway/presentation.ts";
 describe("activityLines", () => {
   test("turns shell events into concise user-facing activity", () => {
     const status = [
-      "status: Начал работу",
       "command: /bin/bash -lc 'find skills -maxdepth 2 -name SKILL.md -print'",
       "status: Команда завершена с кодом 0",
       "command: /bin/bash -lc 'free -h; df -h /; uptime'",
     ].join("\n\n");
 
-    expect(activityLines(status)).toEqual([
-      "Начал работу",
-      "Подбираю нужные навыки",
-      "Проверяю ресурсы сервера",
-    ]);
+    expect(activityLines(status)).toEqual(["Подбираю нужные навыки", "Проверяю ресурсы сервера"]);
   });
 
   test("prefers Codex commentary over command classifications", () => {
     const status = [
-      "status: Начал работу",
       "command: uname -a",
       "commentary: Сначала проверю окружение, затем сопоставлю результаты.",
       "command: git status --short",
     ].join("\n\n");
 
     expect(activityLines(status)).toEqual([
-      "Начал работу",
       "Сначала проверю окружение, затем сопоставлю результаты.",
     ]);
   });

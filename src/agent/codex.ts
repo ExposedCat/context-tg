@@ -90,7 +90,6 @@ export async function runCodex(
       const event = JSON.parse(line) as CodexJsonEvent;
       if (event.type === "thread.started" && event.thread_id) {
         threadId = event.thread_id;
-        await onEvent({ kind: "status", text: "Начал работу", threadId });
       } else if (event.type === "item.completed" && event.item?.type === "agent_message") {
         await flushCommentary();
         pendingAgentMessage = event.item.text ?? pendingAgentMessage;

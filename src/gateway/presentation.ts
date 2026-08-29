@@ -33,7 +33,6 @@ function commandActivity(command: string): string {
 export function activityLines(status: string): string[] {
   const fallback: string[] = [];
   const narrative: string[] = [];
-  let started = false;
   for (const entry of status.split("\n\n")) {
     const separator = entry.indexOf(":");
     const kind = separator === -1 ? "status" : entry.slice(0, separator);
@@ -48,9 +47,7 @@ export function activityLines(status: string): string[] {
       if (visible && narrative.at(-1) !== visible) {
         narrative.push(visible);
       }
-    } else if (text === "Начал работу") {
-      started = true;
     }
   }
-  return [...(started ? ["Начал работу"] : []), ...(narrative.length > 0 ? narrative : fallback)];
+  return narrative.length > 0 ? narrative : fallback;
 }
