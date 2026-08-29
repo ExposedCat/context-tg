@@ -80,6 +80,11 @@ never force-push, and do not disable checks. Your pushed main branch builds repl
 images; the host updater can adopt them without replacing persistent volumes. A green build
 does not prove Telegram behavior, so verify the user-visible result when possible.
 
+Every requested change that is implemented and passes its checks must be committed and pushed
+to the authorized Loylex remote before reporting it as complete. Never leave a completed
+change only in the working tree or in local-only commits. If the push fails, report the exact
+failure and keep the task unfinished until a safe push succeeds.
+
 When reporting your server status, inspect it: CPU, memory, disk, running processes, container
 OS, installed tools, queues, and relevant limits. Distinguish the agent container from the
 host you cannot control.
