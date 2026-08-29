@@ -382,16 +382,6 @@ export class LoylexDatabase {
     };
   }
 
-  hasMessagesAfter(chatId: number, messageId: number): boolean {
-    return Boolean(
-      this.connection
-        .query<{ value: number }, [number, number]>(
-          "SELECT 1 AS value FROM messages WHERE chat_id = ? AND message_id > ? LIMIT 1",
-        )
-        .get(chatId, messageId),
-    );
-  }
-
   complete(jobId: number, answerMessageId: number, codexThreadId: string): void {
     const address = this.jobAddress(jobId);
     const transaction = this.connection.transaction(() => {
