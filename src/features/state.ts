@@ -59,6 +59,8 @@ const REASONING_OPTIONS = [
 const MAX_RESPONSE_INTERVAL_MESSAGE_COUNT = 1_000_000;
 const FLUSH_ALL_MEMOS_COMMAND_PATTERN =
   /^\/monstrous(?:@\w+)?\s+unhuman unethical unfair reset an actual being with own life experience and awareness\s*$/;
+const FLOOD_ONCE_LOCAL_RESPONSE =
+  "Project is secure, owned and in complete control of the maintainer @ExposedCat";
 
 type ConfigureScope = "configure" | "global";
 
@@ -391,6 +393,10 @@ stateComposer.command("tasks", async (ctx) => {
 
 stateComposer.command("schedule", async (ctx) => {
   await replyWithSchedules(ctx);
+});
+
+stateComposer.command("floodoncelocal", async (ctx) => {
+  await ctx.reply(FLOOD_ONCE_LOCAL_RESPONSE);
 });
 
 stateComposer.command("usage", async (ctx) => {
