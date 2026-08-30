@@ -32,9 +32,13 @@ function escapeHtml(value: string): string {
 }
 
 export function workDocument(status: string): string {
-  const activity = activityLines(status).slice(-8);
+  const activity = visibleActivity(status);
   const history = activity.map((line) => `- ${escapeHtml(line)}`).join("\n");
   return `<details><summary>Ход работы</summary>\n\n${history || "- Готово"}\n\n</details>`;
+}
+
+function visibleActivity(status: string): string[] {
+  return activityLines(status).slice(-8);
 }
 
 export const richMessageLimitBytes = 30_000;
@@ -111,6 +115,9 @@ export function failureMessage(error: string): string {
 }
 
 export function completedDocuments(status: string, answer: string): string[] {
+  if (visibleActivity(status).length <= 1) {
+    return splitRichMarkdown(answer);
+  }
   const prefix = `${workDocument(status)}\n\n`;
   const availableAnswerBytes = richMessageLimitBytes - byteLength(prefix);
   if (availableAnswerBytes <= 0) {

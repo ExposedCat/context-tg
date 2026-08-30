@@ -97,7 +97,8 @@ already contains the earlier prompt and context.
 
 While Codex works, terminal and reasoning events create or edit one persistent Rich Message
 with a collapsed `<details>` history in every chat. Completion replaces that same message
-with the same collapsed `<details>` history and the final Rich Markdown.
+with the collapsed history when it contains multiple visible steps; for a trivial one-step
+job, the final answer is sent without a redundant progress block.
 Rich API errors are surfaced instead of silently sending the same document as unformatted text.
 Replying `/stop` to any Loylex message belonging to an active job cancels that Codex thread,
 and Loylex replies with the cancellation result; the command is consumed and is not submitted

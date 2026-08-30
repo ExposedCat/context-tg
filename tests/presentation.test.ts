@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { activityLines, failureMessage, stopResultMessage } from "../src/gateway/presentation.ts";
+import {
+  activityLines,
+  completedDocuments,
+  failureMessage,
+  stopResultMessage,
+} from "../src/gateway/presentation.ts";
 
 describe("activityLines", () => {
   test("turns shell events into concise user-facing activity", () => {
@@ -40,6 +45,28 @@ describe("activityLines", () => {
     expect(stopResultMessage(2)).toBe("⏹️ Остановлено: 2 задачи.");
     expect(stopResultMessage(5)).toBe("⏹️ Остановлено: 5 задач.");
     expect(stopResultMessage(0)).toBe("Активных задач для остановки нет.");
+  });
+});
+
+describe("completedDocuments", () => {
+  test("omits work history when it contains at most one visible item", () => {
+    expect(completedDocuments("status: Готово", "Ответ пользователю")).toEqual([
+      "Ответ пользователю",
+    ]);
+    expect(
+      completedDocuments("commentary: Проверяю код\n\nstatus: Готово", "Ответ пользователю"),
+    ).toEqual(["Ответ пользователю"]);
+  });
+
+  test("keeps useful multi-step work history", () => {
+    expect(
+      completedDocuments(
+        "commentary: Проверяю код\n\ncommentary: Запускаю тесты\n\nstatus: Готово",
+        "Ответ пользователю",
+      ),
+    ).toEqual([
+      "<details><summary>Ход работы</summary>\n\n- Проверяю код\n- Запускаю тесты\n\n</details>\n\nОтвет пользователю",
+    ]);
   });
 });
 

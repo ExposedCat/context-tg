@@ -77,7 +77,7 @@ test("starts progress as a persistent rich details message", async () => {
   expect(sent[0]?.markdown).not.toContain("tg-spoiler");
 });
 
-test("edits the existing group progress message even when newer chat messages exist", async () => {
+test("edits the existing group progress message to a plain answer for a trivial job", async () => {
   const sent: string[] = [];
   const edited: string[] = [];
   let hasMessagesAfterCalls = 0;
@@ -125,10 +125,7 @@ test("edits the existing group progress message even when newer chat messages ex
 
   expect(hasMessagesAfterCalls).toBe(0);
   expect(sent).toEqual([]);
-  expect(edited).toHaveLength(1);
-  expect(edited[0]).toContain("Ответ");
-  expect(edited[0]).toContain("<details><summary>Ход работы</summary>");
-  expect(edited[0]).not.toContain("tg-spoiler");
+  expect(edited).toEqual(["Ответ"]);
   expect(completed as { jobId: number; messageId: number; threadId: string } | null).toEqual({
     jobId: 7,
     messageId: 11,
@@ -141,6 +138,7 @@ test("uses the same editable details flow in private chats", async () => {
   const edited: string[] = [];
   let thinkingMessageId: number | null = null;
   let completedMessageId: number | null = null;
+  let status = "";
 
   const database = {
     jobAddress: () => ({
@@ -151,7 +149,10 @@ test("uses the same editable details flow in private chats", async () => {
     }),
     thinkingMessage: () => thinkingMessageId,
     isJobCancelled: () => false,
-    appendStatus: (_jobId: number, line: string) => line,
+    appendStatus: (_jobId: number, line: string) => {
+      status = status ? `${status}\n\n${line}` : line;
+      return status;
+    },
     setThinkingMessage: (_jobId: number, messageId: number) => {
       thinkingMessageId = messageId;
     },
@@ -185,11 +186,12 @@ test("uses the same editable details flow in private chats", async () => {
   ).complete;
 
   await event.call(server, 7, { kind: "commentary", text: "Проверяю код" });
+  await event.call(server, 7, { kind: "commentary", text: "Запускаю тесты" });
   await complete.call(server, 7, { answer: "Ответ", threadId: "thread-1" });
 
   expect(sent).toEqual(["<details><summary>Ход работы</summary>\n\n- Проверяю код\n\n</details>"]);
   expect(edited).toEqual([
-    "<details><summary>Ход работы</summary>\n\n- Готово\n\n</details>\n\nОтвет",
+    "<details><summary>Ход работы</summary>\n\n- Проверяю код\n- Запускаю тесты\n\n</details>\n\nОтвет",
   ]);
   expect(completedMessageId as number | null).toBe(21);
 });
