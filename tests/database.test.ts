@@ -57,6 +57,7 @@ describe("LoylexDatabase", () => {
     expect(job?.context).not.toContain("#2");
     expect(job?.contextMode).toBe("full");
     expect(database.search("запомни", -10042, 10)).toHaveLength(1);
+    expect(database.recent(-10042, 2).map((item) => item.messageId)).toEqual([3, 2]);
 
     database.complete(job?.id ?? 0, 99, "thread-123");
     expect(database.resumeThread(-10042, 99)).toBe("thread-123");
@@ -170,6 +171,7 @@ describe("LoylexDatabase", () => {
         createdAt: expect.any(Number),
         completedAt: null,
         thinkingMessageId: null,
+        canResume: false,
       },
       {
         id: runningJobId,
@@ -181,6 +183,7 @@ describe("LoylexDatabase", () => {
         createdAt: expect.any(Number),
         completedAt: expect.any(Number),
         thinkingMessageId: 10,
+        canResume: false,
       },
     ]);
     database.close();

@@ -21,6 +21,7 @@ export type JobSummary = {
   createdAt: number;
   completedAt: number | null;
   thinkingMessageId: number | null;
+  canResume: boolean;
 };
 
 type JobRow = {
@@ -44,6 +45,9 @@ type MessageContextRow = {
   text: string | null;
   media_json: string;
   message_id: number;
+  message_thread_id: number | null;
+  reply_to_message_id: number | null;
+  raw_json: string;
 };
 
 type ContextResult = {
@@ -61,6 +65,8 @@ type JobSummaryRow = {
   created_at: number;
   completed_at: number | null;
   thinking_message_id: number | null;
+  codex_thread_id: string | null;
+  resume_thread_id: string | null;
 };
 
 type JobOwnershipRow = {
@@ -75,6 +81,87 @@ export type SearchResult = {
   author: string;
   text: string;
 };
+
+type UnknownRecord = Record<string, unknown>;
+
+function object(value: unknown): UnknownRecord | null {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as UnknownRecord)
+    : null;
+}
+
+function numberField(value: unknown): number | null {
+  return typeof value === "number" && Number.isSafeInteger(value) ? value : null;
+}
+
+function stringField(value: unknown): string | null {
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+function parseObject(value: string): UnknownRecord {
+  try {
+    return object(JSON.parse(value)) ?? {};
+  } catch {
+    return {};
+  }
+}
+
+function nestedAuthor(message: UnknownRecord): string {
+  const sender = object(message.from) ?? object(message.sender_chat);
+  if (!sender) {
+    return "unknown";
+  }
+  const username = stringField(sender.username);
+  const name = [stringField(sender.first_name), stringField(sender.last_name)]
+    .filter((part): part is string => part !== null)
+    .join(" ");
+  return username ? `${name || username} (@${username})` : name || "unknown";
+}
+
+function messageReference(message: UnknownRecord, label: string): string | null {
+  const messageId = numberField(message.message_id);
+  if (messageId === null) {
+    return null;
+  }
+  const text = stringField(message.text) ?? stringField(message.caption) ?? "";
+  const mediaKinds = ["photo", "document", "audio", "video", "voice", "animation"].filter(
+    (key) => message[key] !== undefined,
+  );
+  const mediaText = mediaKinds.length > 0 ? ` attachments=${mediaKinds.join(",")}` : "";
+  return `${label} #${messageId} ${nestedAuthor(message)}: ${text}${mediaText}`;
+}
+
+function rawRelations(rawJson: string): string {
+  const raw = parseObject(rawJson);
+  const relations: string[] = [];
+  const quote = object(raw.quote);
+  const quoteText = quote ? stringField(quote.text) : null;
+  if (quoteText) {
+    relations.push(`quote=${JSON.stringify(quoteText.slice(0, 1_000))}`);
+  }
+  const externalReply = object(raw.external_reply);
+  const externalId = externalReply ? numberField(externalReply.message_id) : null;
+  if (externalId !== null) {
+    relations.push(`external_reply=#${externalId}`);
+  }
+  const forward = object(raw.forward_origin);
+  if (forward) {
+    const origin =
+      object(forward.sender_user) ??
+      object(forward.sender_chat) ??
+      object(forward.sender_name) ??
+      forward;
+    const originName =
+      stringField(origin.username) ??
+      ([stringField(origin.first_name), stringField(origin.last_name)]
+        .filter((part): part is string => part !== null)
+        .join(" ") ||
+        stringField(origin.type) ||
+        "unknown");
+    relations.push(`forwarded_from=${JSON.stringify(originName)}`);
+  }
+  return relations.join(" ");
+}
 
 function eventType(update: TelegramUpdate): string {
   return Object.keys(update).find((key) => key !== "update_id") ?? "unknown";
@@ -393,6 +480,9 @@ export class LoylexDatabase {
       resumeThreadId: row.resume_thread_id,
       context: context.text,
       contextMode: context.mode,
+      replyContext: row.resume_thread_id
+        ? null
+        : this.replyContext(row.chat_id, row.message_id, context.text),
       attachments: JSON.parse(row.attachments_json) as JsonValue[],
     };
   }
@@ -445,7 +535,7 @@ export class LoylexDatabase {
     const rows = this.connection
       .query<JobSummaryRow, [number, number]>(`
         SELECT id, chat_id, chat_type, message_id, prompt, state,
-               created_at, completed_at, thinking_message_id
+               created_at, completed_at, thinking_message_id, codex_thread_id, resume_thread_id
         FROM jobs
         WHERE chat_id = ?
         ORDER BY created_at DESC, id DESC
@@ -462,6 +552,9 @@ export class LoylexDatabase {
       createdAt: row.created_at,
       completedAt: row.completed_at,
       thinkingMessageId: row.thinking_message_id,
+      canResume:
+        (row.state === "failed" || row.state === "cancelled") &&
+        (row.codex_thread_id !== null || row.resume_thread_id !== null),
     }));
   }
 
@@ -500,23 +593,24 @@ export class LoylexDatabase {
   ): number | null {
     return (
       this.connection
-        .query<{ message_id: number }, [number, string, number]>(`
+        .query<{ message_id: number }, [number, string, string, number]>(`
           SELECT message_id
           FROM jobs
           WHERE chat_id = ?
-            AND codex_thread_id = ?
+            AND (codex_thread_id = ? OR resume_thread_id = ?)
             AND message_id < ?
           ORDER BY created_at DESC, id DESC
           LIMIT 1
         `)
-        .get(chatId, threadId, beforeMessageId)?.message_id ?? null
+        .get(chatId, threadId, threadId, beforeMessageId)?.message_id ?? null
     );
   }
 
   private recentContext(chatId: number, beforeMessageId: number, limit: number): string {
     const rows = this.connection
       .query<MessageContextRow, [number, number, number]>(`
-        SELECT date, edit_date, from_display_name, from_username, text, media_json, message_id
+        SELECT date, edit_date, from_display_name, from_username, text, media_json, message_id,
+               message_thread_id, reply_to_message_id, raw_json
         FROM messages
         WHERE chat_id = ? AND message_id < ?
         ORDER BY date DESC, message_id DESC
@@ -536,7 +630,8 @@ export class LoylexDatabase {
   ): string {
     const rows = this.connection
       .query<MessageContextRow, [number, number, number, string, number]>(`
-        SELECT date, edit_date, from_display_name, from_username, text, media_json, message_id
+        SELECT date, edit_date, from_display_name, from_username, text, media_json, message_id,
+               message_thread_id, reply_to_message_id, raw_json
         FROM messages
         WHERE chat_id = ?
           AND message_id > ?
@@ -566,9 +661,42 @@ export class LoylexDatabase {
         const attachments = JSON.parse(row.media_json) as JsonValue[];
         const attachmentText =
           attachments.length > 0 ? ` attachments=${JSON.stringify(attachments)}` : "";
-        return `[${timestamp}] #${row.message_id} ${author}: ${row.text ?? ""}${attachmentText}`;
+        const relations = [
+          row.message_thread_id === null ? "" : `thread=#${row.message_thread_id}`,
+          row.reply_to_message_id === null ? "" : `reply_to=#${row.reply_to_message_id}`,
+          rawRelations(row.raw_json),
+        ].filter(Boolean);
+        const relationText = relations.length > 0 ? ` ${relations.join(" ")}` : "";
+        const edited = row.edit_date === null ? "" : " (edited)";
+        return `[${timestamp}] #${row.message_id} ${author}${edited}: ${row.text ?? ""}${attachmentText}${relationText}`;
       })
       .join("\n");
+  }
+
+  private replyContext(chatId: number, messageId: number, context: string): string | null {
+    const rawJson = this.connection
+      .query<{ raw_json: string }, [number, number]>(
+        "SELECT raw_json FROM messages WHERE chat_id = ? AND message_id = ?",
+      )
+      .get(chatId, messageId)?.raw_json;
+    if (!rawJson) {
+      return null;
+    }
+    const raw = parseObject(rawJson);
+    const target = object(raw.reply_to_message) ?? object(raw.external_reply);
+    if (!target) {
+      return null;
+    }
+    const targetId = numberField(target.message_id);
+    if (targetId === null) {
+      return null;
+    }
+    // The normal context window already carries this message. Avoid inserting a second copy
+    // merely because Telegram also sent the nested reply object.
+    if (context.split("\n").some((line) => line.includes(`#${targetId} `))) {
+      return null;
+    }
+    return messageReference(target, "Replied-to Telegram message:");
   }
 
   appendStatus(
@@ -626,6 +754,16 @@ export class LoylexDatabase {
           "SELECT thinking_message_id FROM jobs WHERE id = ?",
         )
         .get(jobId)?.thinking_message_id ?? null
+    );
+  }
+
+  jobThreadId(jobId: number): string | null {
+    return (
+      this.connection
+        .query<{ thread_id: string | null }, [number]>(
+          "SELECT COALESCE(codex_thread_id, resume_thread_id) AS thread_id FROM jobs WHERE id = ?",
+        )
+        .get(jobId)?.thread_id ?? null
     );
   }
 
@@ -717,6 +855,25 @@ export class LoylexDatabase {
     return transaction.immediate();
   }
 
+  resumableThread(chatId: number, messageId: number): string | null {
+    return (
+      this.connection
+        .query<{ thread_id: string | null }, [number, number, number]>(`
+          SELECT COALESCE(j.codex_thread_id, j.resume_thread_id) AS thread_id
+          FROM jobs AS j
+          LEFT JOIN outbound_messages AS o
+            ON o.chat_id = j.chat_id AND o.job_id = j.id
+          WHERE j.chat_id = ?
+            AND j.state IN ('failed', 'cancelled')
+            AND (j.message_id = ? OR o.message_id = ?)
+            AND COALESCE(j.codex_thread_id, j.resume_thread_id) IS NOT NULL
+          ORDER BY j.created_at DESC, j.id DESC
+          LIMIT 1
+        `)
+        .get(chatId, messageId, messageId)?.thread_id ?? null
+    );
+  }
+
   isJobCancelled(jobId: number): boolean {
     return Boolean(
       this.connection
@@ -785,12 +942,22 @@ export class LoylexDatabase {
     return transaction.immediate();
   }
 
-  fail(jobId: number, error: string, workerId?: string): void {
-    this.connection
-      .query(
-        "UPDATE jobs SET state = 'failed', completed_at = ?, error = ? WHERE id = ? AND state = 'running' AND (? IS NULL OR worker_id = ?)",
-      )
-      .run(Date.now(), error, jobId, workerId ?? null, workerId ?? null);
+  fail(jobId: number, error: string, workerId?: string, codexThreadId?: string | null): void {
+    const transaction = this.connection.transaction(() => {
+      const result = this.connection
+        .query(
+          "UPDATE jobs SET state = 'failed', completed_at = ?, error = ?, codex_thread_id = COALESCE(?, codex_thread_id) WHERE id = ? AND state = 'running' AND (? IS NULL OR worker_id = ?)",
+        )
+        .run(Date.now(), error, codexThreadId ?? null, jobId, workerId ?? null, workerId ?? null);
+      if (result.changes > 0 && codexThreadId) {
+        this.connection
+          .query(
+            "UPDATE outbound_messages SET codex_thread_id = ? WHERE job_id = ? AND codex_thread_id IS NULL",
+          )
+          .run(codexThreadId, jobId);
+      }
+    });
+    transaction.immediate();
   }
 
   chatExists(chatId: number): boolean {
@@ -824,6 +991,37 @@ export class LoylexDatabase {
         LIMIT ?
       `)
       .all(query, chatId, chatId, limit);
+    return rows.map((row) => ({
+      chatId: row.chat_id,
+      messageId: row.message_id,
+      date: row.date,
+      author: row.from_username
+        ? `${row.from_display_name ?? row.from_username} (@${row.from_username})`
+        : (row.from_display_name ?? "unknown"),
+      text: row.text ?? "",
+    }));
+  }
+
+  recent(chatId: number, limit: number): SearchResult[] {
+    const rows = this.connection
+      .query<
+        {
+          chat_id: number;
+          message_id: number;
+          date: number;
+          from_display_name: string | null;
+          from_username: string | null;
+          text: string | null;
+        },
+        [number, number]
+      >(`
+        SELECT chat_id, message_id, date, from_display_name, from_username, text
+        FROM messages
+        WHERE chat_id = ?
+        ORDER BY date DESC, message_id DESC
+        LIMIT ?
+      `)
+      .all(chatId, limit);
     return rows.map((row) => ({
       chatId: row.chat_id,
       messageId: row.message_id,

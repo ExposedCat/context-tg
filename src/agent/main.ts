@@ -1,4 +1,5 @@
 import type { AgentJob } from "../shared/types.ts";
+import { stageAttachments } from "./attachments.ts";
 import { loadBuckets } from "./buckets.ts";
 import { runCodex } from "./codex.ts";
 import { loadAgentConfig } from "./config.ts";
@@ -55,12 +56,14 @@ async function cancellationRequested(jobId: number, controller: AbortController)
 async function processJob(job: AgentJob): Promise<void> {
   const cancellation = new AbortController();
   const cancellationMonitor = monitorCancellation(job.id, cancellation);
+  let stagedAttachments: Awaited<ReturnType<typeof stageAttachments>> | null = null;
   try {
     if (await cancellationRequested(job.id, cancellation)) {
       return;
     }
+    stagedAttachments = await stageAttachments(gateway, job);
     const buckets = await loadBuckets(config.memoryPath, `${job.prompt}\n${job.context}`);
-    const prompt = buildPrompt(job, buckets);
+    const prompt = buildPrompt(job, buckets, stagedAttachments.files);
     const result = await runCodex(
       config,
       prompt,
@@ -82,6 +85,7 @@ async function processJob(job: AgentJob): Promise<void> {
     console.error(JSON.stringify({ level: "error", jobId: job.id, message }));
     await gateway.fail(job.id, message);
   } finally {
+    await stagedAttachments?.cleanup();
     cancellation.abort();
     await cancellationMonitor;
   }

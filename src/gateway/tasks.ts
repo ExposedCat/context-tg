@@ -62,6 +62,10 @@ function cancelCommand(task: JobSummary): string {
   return `/cancel_${task.messageId}`;
 }
 
+function resumeCommand(task: JobSummary): string {
+  return `/resume_${task.messageId}`;
+}
+
 function formatTask(task: JobSummary, useCustomEmoji: boolean): string {
   const label = escapeHtml(taskLabel(task.prompt));
   const link = escapeHtmlAttribute(messageLink(task));
@@ -71,6 +75,8 @@ function formatTask(task: JobSummary, useCustomEmoji: boolean): string {
   }
   if (task.state === "pending" || task.state === "running") {
     details.push(cancelCommand(task));
+  } else if (task.canResume) {
+    details.push(resumeCommand(task));
   }
   return `${statusEmoji(task.state, useCustomEmoji)} <a href="${link}">${label}</a>\n${details.join(" - ")}`;
 }

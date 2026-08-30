@@ -1,10 +1,18 @@
+import type { TelegramMessage } from "../shared/types.ts";
 import { loadGatewayConfig } from "./config.ts";
 import { LoylexDatabase } from "./database.ts";
-import { stopResultMessage } from "./presentation.ts";
+import { helpMessage, resumeUnavailableMessage, stopResultMessage } from "./presentation.ts";
 import { GatewayServer } from "./server.ts";
 import { sendTasks } from "./tasks.ts";
 import { TelegramClient } from "./telegram.ts";
-import { cancelTaskMessageId, detectTrigger, isStopCommand, isTasksCommand } from "./triggers.ts";
+import {
+  cancelTaskMessageId,
+  detectTrigger,
+  isHelpCommand,
+  isStopCommand,
+  isTasksCommand,
+  resumeTaskMessageId,
+} from "./triggers.ts";
 
 const config = loadGatewayConfig();
 const database = new LoylexDatabase(config.databasePath);
@@ -18,6 +26,28 @@ server.start();
 
 let stopping = false;
 let offset = database.nextUpdateOffset();
+
+function acknowledgeWork(message: TelegramMessage): void {
+  void Promise.allSettled([
+    telegram.sendTyping(message.chat.id, message.message_thread_id ?? null),
+    telegram.setThinkingReaction(message.chat.id, message.message_id),
+  ]).then((results) => {
+    const failures = results.filter((result) => result.status === "rejected");
+    if (failures.length > 0) {
+      console.log(
+        JSON.stringify({
+          level: "warn",
+          component: "poller",
+          event: "telegram_activity_unavailable",
+          messageId: message.message_id,
+          failures: failures.map((result) =>
+            result.reason instanceof Error ? result.reason.message : String(result.reason),
+          ),
+        }),
+      );
+    }
+  });
+}
 
 async function poll(): Promise<void> {
   while (!stopping) {
@@ -75,10 +105,37 @@ async function poll(): Promise<void> {
           await sendTasks(database, telegram, message);
           continue;
         }
+        if (isHelpCommand(message, bot.username)) {
+          await telegram.sendRich(message.chat.id, helpMessage(), {
+            replyTo: message.message_id,
+            threadId: message.message_thread_id ?? null,
+          });
+          continue;
+        }
+        const resumeMessageId = resumeTaskMessageId(message, bot.username);
+        if (resumeMessageId !== null) {
+          const resumeThreadId = database.resumableThread(message.chat.id, resumeMessageId);
+          if (resumeThreadId === null) {
+            await telegram.sendRich(message.chat.id, resumeUnavailableMessage(), {
+              replyTo: message.message_id,
+              threadId: message.message_thread_id ?? null,
+            });
+          } else {
+            acknowledgeWork(message);
+            database.enqueue(
+              update.update_id,
+              message,
+              "Продолжи предыдущую задачу с того места, где она остановилась.",
+              resumeThreadId,
+            );
+          }
+          continue;
+        }
         const trigger = detectTrigger(message, bot.id);
         if (!trigger) {
           continue;
         }
+        acknowledgeWork(message);
         const resumeThreadId = database.resumeThread(
           message.chat.id,
           message.reply_to_message?.message_id,

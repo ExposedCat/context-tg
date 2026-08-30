@@ -97,6 +97,7 @@ test("edits the existing group progress message even when newer chat messages ex
       hasMessagesAfterCalls += 1;
       return true;
     },
+    recordOutboundMessage: () => {},
     complete: (jobId: number, messageId: number, threadId: string) => {
       completed = { jobId, messageId, threadId };
     },
@@ -154,6 +155,7 @@ test("uses the same editable details flow in private chats", async () => {
     setThinkingMessage: (_jobId: number, messageId: number) => {
       thinkingMessageId = messageId;
     },
+    recordOutboundMessage: () => {},
     complete: (_jobId: number, messageId: number) => {
       completedMessageId = messageId;
     },

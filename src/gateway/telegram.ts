@@ -103,7 +103,7 @@ export class TelegramClient {
   ): Promise<TelegramMessage> {
     const body: JsonObject = {
       chat_id: chatId,
-      rich_message: { markdown: markdown.slice(0, 32_768) },
+      rich_message: { markdown },
     };
     if (options.replyTo !== undefined) {
       body.reply_parameters = { message_id: options.replyTo, allow_sending_without_reply: true };
@@ -121,7 +121,23 @@ export class TelegramClient {
     return this.call<TelegramMessage>("editMessageText", {
       chat_id: chatId,
       message_id: messageId,
-      rich_message: { markdown: markdown.slice(0, 32_768) },
+      rich_message: { markdown },
+    });
+  }
+
+  sendTyping(chatId: number, threadId: number | null = null): Promise<boolean> {
+    const body: JsonObject = { chat_id: chatId, action: "typing" };
+    if (threadId !== null) {
+      body.message_thread_id = threadId;
+    }
+    return this.call<boolean>("sendChatAction", body);
+  }
+
+  setThinkingReaction(chatId: number, messageId: number): Promise<boolean> {
+    return this.call<boolean>("setMessageReaction", {
+      chat_id: chatId,
+      message_id: messageId,
+      reaction: [{ type: "emoji", emoji: "🤔" }] as JsonValue[],
     });
   }
 
@@ -132,6 +148,7 @@ export class TelegramClient {
         { command: "help", description: "Возможности и синтаксис" },
         { command: "stop", description: "Остановить работу" },
         { command: "tasks", description: "Показать последние задачи" },
+        { command: "resume", description: "Продолжить задачу по ID" },
       ] as JsonValue[],
     });
   }

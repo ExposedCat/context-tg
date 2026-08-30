@@ -40,6 +40,18 @@ export class GatewayClient {
     return result.cancelled;
   }
 
+  downloadMedia(fileId: string): Promise<Response> {
+    return fetch(`${this.baseUrl}/v1/media?file_id=${encodeURIComponent(fileId)}`, {
+      headers: { authorization: `Bearer ${this.token}` },
+      signal: AbortSignal.timeout(65_000),
+    }).then(async (response) => {
+      if (!response.ok) {
+        throw new Error(`Gateway ${response.status}: ${await response.text()}`);
+      }
+      return response;
+    });
+  }
+
   event(jobId: number, event: AgentEvent): Promise<{ ok: true }> {
     return this.request(`/v1/jobs/${jobId}/events`, {
       method: "POST",

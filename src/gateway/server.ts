@@ -2,25 +2,11 @@ import type { Server } from "bun";
 import type { AgentCompletion, AgentEvent } from "../shared/types.ts";
 import type { GatewayConfig } from "./config.ts";
 import type { LoylexDatabase } from "./database.ts";
-import { activityLines, failureMessage } from "./presentation.ts";
+import { completedDocuments, failureMessage, workDocument } from "./presentation.ts";
 import type { TelegramClient } from "./telegram.ts";
 
 function json(value: unknown, status = 200): Response {
   return Response.json(value, { status });
-}
-
-function escapeHtml(value: string): string {
-  return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
-}
-
-function workDocument(status: string): string {
-  const activity = activityLines(status).slice(-8);
-  const history = activity.map((line) => `- ${escapeHtml(line)}`).join("\n");
-  return `<details><summary>Ход работы</summary>\n\n${history || "- Готово"}\n\n</details>`;
-}
-
-function completedDocument(status: string, answer: string): string {
-  return `${workDocument(status)}\n\n${answer}`.slice(0, 32_768);
 }
 
 function bearer(request: Request): string | null {
@@ -134,6 +120,17 @@ export class GatewayServer {
         });
       }
 
+      if (request.method === "GET" && url.pathname === "/v1/archive/recent") {
+        const chat = url.searchParams.get("chat");
+        const chatId = chat === null ? Number.NaN : Number(chat);
+        if (!chat || !Number.isSafeInteger(chatId)) {
+          return json({ error: "chat must be a valid chat ID" }, 400);
+        }
+        const parsedLimit = Number.parseInt(url.searchParams.get("limit") ?? "500", 10);
+        const limit = Number.isNaN(parsedLimit) ? 500 : Math.min(Math.max(parsedLimit, 1), 500);
+        return json({ results: this.database.recent(chatId, limit) });
+      }
+
       if (request.method === "GET" && url.pathname === "/v1/status") {
         return json(this.database.stats());
       }
@@ -243,14 +240,24 @@ export class GatewayServer {
     if (status === null) {
       return;
     }
-    const document = completedDocument(status, completion.answer);
+    const documents = completedDocuments(status, completion.answer);
     const message =
       thinkingMessageId === null
-        ? await this.telegram.sendRich(address.chatId, document, {
+        ? await this.telegram.sendRich(address.chatId, documents[0] ?? "", {
             replyTo: address.messageId,
             threadId: address.threadId,
           })
-        : await this.telegram.editRich(address.chatId, thinkingMessageId, document);
+        : await this.telegram.editRich(address.chatId, thinkingMessageId, documents[0] ?? "");
+    this.database.recordOutboundMessage(jobId, message.message_id, completion.threadId);
+    let replyTo = message.message_id;
+    for (const document of documents.slice(1)) {
+      const followUp = await this.telegram.sendRich(address.chatId, document, {
+        replyTo,
+        threadId: address.threadId,
+      });
+      this.database.recordOutboundMessage(jobId, followUp.message_id, completion.threadId);
+      replyTo = followUp.message_id;
+    }
     this.database.complete(jobId, message.message_id, completion.threadId, workerId);
     this.#lastStreamEdit.delete(jobId);
     this.#lastStreamDocument.delete(jobId);
@@ -265,16 +272,19 @@ export class GatewayServer {
     }
     const address = this.database.jobAddress(jobId);
     const thinkingMessageId = this.database.thinkingMessage(jobId);
+    const threadId = this.database.jobThreadId(jobId);
     const markdown = failureMessage(error);
+    let message: { message_id: number };
     if (thinkingMessageId === null) {
-      await this.telegram.sendRich(address.chatId, markdown, {
+      message = await this.telegram.sendRich(address.chatId, markdown, {
         replyTo: address.messageId,
         threadId: address.threadId,
       });
     } else {
-      await this.telegram.editRich(address.chatId, thinkingMessageId, markdown);
+      message = await this.telegram.editRich(address.chatId, thinkingMessageId, markdown);
     }
-    this.database.fail(jobId, error.slice(0, 8_000), workerId);
+    this.database.recordOutboundMessage(jobId, message.message_id, threadId);
+    this.database.fail(jobId, error.slice(0, 8_000), workerId, threadId);
     this.#lastStreamEdit.delete(jobId);
     this.#lastStreamDocument.delete(jobId);
   }

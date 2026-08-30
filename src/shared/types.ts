@@ -60,6 +60,7 @@ export type AgentJob = {
   resumeThreadId: string | null;
   context: string;
   contextMode: AgentContextMode;
+  replyContext?: string | null;
   attachments: JsonValue[];
 };
 

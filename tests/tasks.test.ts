@@ -13,6 +13,7 @@ function task(overrides: Partial<JobSummary> = {}): JobSummary {
     createdAt: Date.parse("2026-08-30T00:00:00Z"),
     completedAt: null,
     thinkingMessageId: 11,
+    canResume: false,
     ...overrides,
   };
 }

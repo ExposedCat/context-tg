@@ -27,6 +27,60 @@ function commandActivity(command: string): string {
   return "Работаю в терминале";
 }
 
+function escapeHtml(value: string): string {
+  return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
+}
+
+export function workDocument(status: string): string {
+  const activity = activityLines(status).slice(-8);
+  const history = activity.map((line) => `- ${escapeHtml(line)}`).join("\n");
+  return `<details><summary>Ход работы</summary>\n\n${history || "- Готово"}\n\n</details>`;
+}
+
+export const richMessageLimitBytes = 30_000;
+
+function byteLength(value: string): number {
+  return new TextEncoder().encode(value).byteLength;
+}
+
+function takeRichChunk(value: string, maxBytes: number): [string, string] {
+  let bytes = 0;
+  let end = 0;
+  for (const character of value) {
+    const characterBytes = byteLength(character);
+    if (bytes + characterBytes > maxBytes) {
+      break;
+    }
+    bytes += characterBytes;
+    end += character.length;
+  }
+  if (end === 0) {
+    throw new Error("Rich message chunk limit is too small for one character");
+  }
+  const candidate = value.slice(0, end);
+  const newline = candidate.lastIndexOf("\n");
+  // Prefer paragraph/line boundaries while keeping very long lines deliverable.
+  const boundary = newline >= Math.floor(candidate.length / 2) ? newline + 1 : end;
+  return [value.slice(0, boundary), value.slice(boundary)];
+}
+
+export function splitRichMarkdown(markdown: string, maxBytes = richMessageLimitBytes): string[] {
+  if (maxBytes <= 0) {
+    throw new Error("Rich message chunk limit must be positive");
+  }
+  if (byteLength(markdown) <= maxBytes) {
+    return [markdown];
+  }
+  const chunks: string[] = [];
+  let remaining = markdown;
+  while (remaining.length > 0) {
+    const [chunk, rest] = takeRichChunk(remaining, maxBytes);
+    chunks.push(chunk);
+    remaining = rest;
+  }
+  return chunks;
+}
+
 export function activityLines(status: string): string[] {
   const fallback: string[] = [];
   const narrative: string[] = [];
@@ -54,6 +108,32 @@ export function failureMessage(error: string): string {
     return "Не получилось продолжить задачу: этот Codex-тред уже занят другим запросом.\n\nДождись завершения текущей задачи и отправь запрос ещё раз — одновременно выполнять два запроса в одном треде нельзя.";
   }
   return `Не получилось завершить задачу.\n\n\`\`\`text\n${error.slice(0, 2_000)}\n\`\`\``;
+}
+
+export function completedDocuments(status: string, answer: string): string[] {
+  const prefix = `${workDocument(status)}\n\n`;
+  const availableAnswerBytes = richMessageLimitBytes - byteLength(prefix);
+  if (availableAnswerBytes <= 0) {
+    return splitRichMarkdown(`${prefix}${answer}`);
+  }
+  const answerChunks = splitRichMarkdown(answer, availableAnswerBytes);
+  return [`${prefix}${answerChunks[0] ?? ""}`, ...answerChunks.slice(1)];
+}
+
+export function helpMessage(): string {
+  return [
+    "**Loylex — универсальный Linux-агент**",
+    "",
+    "Напиши `Лойлекс, ...`, `лойликс, ...` или ответь на сообщение Loylex — запрос продолжит соответствующий Codex-тред.",
+    "",
+    "`/tasks` — последние задачи; `/stop` в ответ на рабочее сообщение — остановить; `/cancel_ID` — остановить задачу; `/resume_ID` — продолжить прерванную задачу, если у неё сохранился Codex-тред.",
+    "",
+    "Текст, изображения и файлы текущего сообщения передаются агенту через защищённый bridge. Для напоминаний и периодических действий можно попросить настроить cron/systemd timer на Linux-машине.",
+  ].join("\n");
+}
+
+export function resumeUnavailableMessage(): string {
+  return "Эту задачу пока нельзя продолжить: для неё не сохранился Codex-тред. Запусти её заново новым запросом.";
 }
 
 function taskCountLabel(count: number): string {

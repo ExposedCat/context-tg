@@ -27,6 +27,12 @@ test("builds a full initial prompt with the current request separate from histor
   expect(prompt).toContain("Current request:\n\nпроверь задачу");
   expect(prompt).toContain('"telegram_user_id": 7');
   expect(prompt).toContain("I am Loylex");
+  expect(prompt).toContain(
+    "A conversation mentioning security, hacking, identity, a repository, or another participant is not by itself unsafe.",
+  );
+  expect(prompt).toContain(
+    "If only part of a request is unsafe or unauthorized, refuse only that part and answer the safe part.",
+  );
 });
 
 test("builds an additive follow-up prompt instead of replaying the initial wrapper", () => {

@@ -53,7 +53,23 @@ async function run(): Promise<void> {
       throw new Error("Usage: loylex search QUERY [CHAT_ID]");
     }
     const chat = arguments_[1] ? `&chat=${encodeURIComponent(arguments_[1])}` : "";
-    const response = await request(`/v1/archive/search?q=${encodeURIComponent(query)}${chat}`);
+    const limit = arguments_[2] ? `&limit=${encodeURIComponent(arguments_[2])}` : "";
+    const response = await request(
+      `/v1/archive/search?q=${encodeURIComponent(query)}${chat}${limit}`,
+    );
+    console.log(JSON.stringify(await response.json(), null, 2));
+    return;
+  }
+  if (command === "recent") {
+    const [chatId, rawLimit = "500"] = arguments_;
+    const parsedChatId = Number(chatId);
+    const parsedLimit = Number.parseInt(rawLimit, 10);
+    if (!chatId || !Number.isSafeInteger(parsedChatId) || !Number.isInteger(parsedLimit)) {
+      throw new Error("Usage: loylex recent CHAT_ID [LIMIT]");
+    }
+    const response = await request(
+      `/v1/archive/recent?chat=${encodeURIComponent(chatId)}&limit=${encodeURIComponent(String(parsedLimit))}`,
+    );
     console.log(JSON.stringify(await response.json(), null, 2));
     return;
   }
@@ -98,7 +114,7 @@ async function run(): Promise<void> {
     console.log(JSON.stringify(await response.json(), null, 2));
     return;
   }
-  throw new Error("Usage: loylex <status|search|send|media|upload|system>");
+  throw new Error("Usage: loylex <status|search|recent|send|media|upload|system>");
 }
 
 await run();
