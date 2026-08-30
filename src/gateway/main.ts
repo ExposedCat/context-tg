@@ -1,7 +1,12 @@
 import type { TelegramMessage } from "../shared/types.ts";
 import { loadGatewayConfig } from "./config.ts";
 import { LoylexDatabase } from "./database.ts";
-import { helpMessage, resumeUnavailableMessage, stopResultMessage } from "./presentation.ts";
+import {
+  helpMessage,
+  resumeUnavailableMessage,
+  stopResultMessage,
+  trivialReply,
+} from "./presentation.ts";
 import { GatewayServer } from "./server.ts";
 import { sendTasks } from "./tasks.ts";
 import { TelegramClient } from "./telegram.ts";
@@ -47,6 +52,12 @@ function acknowledgeWork(message: TelegramMessage): void {
       );
     }
   });
+}
+
+function hasTelegramMedia(message: TelegramMessage): boolean {
+  return ["photo", "document", "audio", "video", "voice", "animation"].some(
+    (key) => message[key] !== undefined,
+  );
 }
 
 async function poll(): Promise<void> {
@@ -134,6 +145,28 @@ async function poll(): Promise<void> {
         const trigger = detectTrigger(message, bot.id);
         if (!trigger) {
           continue;
+        }
+        if (
+          trigger.kind === "prefix" &&
+          message.reply_to_message === undefined &&
+          !hasTelegramMedia(message)
+        ) {
+          const reply = trivialReply(trigger.prompt);
+          if (reply !== null) {
+            await telegram.sendRich(message.chat.id, reply, {
+              replyTo: message.message_id,
+              threadId: message.message_thread_id ?? null,
+            });
+            console.log(
+              JSON.stringify({
+                level: "info",
+                component: "poller",
+                event: "trivial_reply",
+                messageId: message.message_id,
+              }),
+            );
+            continue;
+          }
         }
         acknowledgeWork(message);
         const resumeThreadId = database.resumeThread(

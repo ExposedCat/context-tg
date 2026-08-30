@@ -4,7 +4,19 @@ import {
   completedDocuments,
   failureMessage,
   stopResultMessage,
+  trivialReply,
 } from "../src/gateway/presentation.ts";
+
+describe("trivialReply", () => {
+  test("answers an exact standalone greeting without invoking Codex", () => {
+    expect(trivialReply("привет")).toBe("Привет! 👋 Чем помочь?");
+    expect(trivialReply("  ПРИВЕТ!  ")).toBe("Привет! 👋 Чем помочь?");
+  });
+
+  test("does not classify a greeting with a real question as trivial", () => {
+    expect(trivialReply("привет, как дела?")).toBeNull();
+  });
+});
 
 describe("activityLines", () => {
   test("turns shell events into concise user-facing activity", () => {

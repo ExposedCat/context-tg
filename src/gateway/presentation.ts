@@ -31,6 +31,15 @@ function escapeHtml(value: string): string {
   return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
 }
 
+export function trivialReply(prompt: string): string | null {
+  const normalized = prompt
+    .trim()
+    .toLocaleLowerCase()
+    .replaceAll(/[!?.,…]+$/gu, "")
+    .trim();
+  return normalized === "привет" ? "Привет! 👋 Чем помочь?" : null;
+}
+
 export function workDocument(status: string): string {
   const activity = visibleActivity(status);
   const history = activity.map((line) => `- ${escapeHtml(line)}`).join("\n");
