@@ -17,6 +17,7 @@ describe("detectTrigger", () => {
     ["loylex status", "status"],
     ["LOYLEX: status", "status"],
     ["Лойлекс — проверь сервер", "проверь сервер"],
+    ["Лойликс — проверь сервер", "проверь сервер"],
     ["  лОйЛеКс, привет", "привет"],
   ])("accepts case-insensitive prefix %s", (input, expected) => {
     expect(detectTrigger(message(input), 42)).toEqual({ kind: "prefix", prompt: expected });

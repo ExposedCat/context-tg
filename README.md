@@ -3,7 +3,7 @@
 Loylex is a persistent, self-evolving Codex agent that lives in Telegram and owns a
 sandboxed Fedora workbench on its personal VPS.
 
-Write `loylex …` or `лойлекс …` in any supported case, or reply to a
+Write `loylex …`, `лойлекс …`, or `лойликс …` in any supported case, or reply to a
 Loylex answer. A reply resumes the exact Codex thread. The agent can work in its terminal for
 as long as needed, remember private context, improve its own skills, search the complete
 archived chat, and deliver native Telegram Rich Messages.

@@ -1,6 +1,6 @@
 import type { TelegramMessage } from "../shared/types.ts";
 
-const prefixPattern = /^\s*(?:loylex|лойлекс)(?=$|[\s:;,—–-])[\s:;,—–-]*/iu;
+const prefixPattern = /^\s*(?:loylex|лойлекс|лойликс)(?=$|[\s:;,—–-])[\s:;,—–-]*/iu;
 const stopPattern = /^\/stop(?:@[a-z0-9_]+)?$/iu;
 const tasksPattern = /^\/tasks(?:@[a-z0-9_]+)?$/iu;
 const cancelPattern = /^\/cancel_(\d+)(?:@([a-z0-9_]+))?$/iu;
