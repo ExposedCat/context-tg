@@ -46,6 +46,8 @@ export type TelegramUpdate = {
   [key: string]: unknown;
 };
 
+export type AgentContextMode = "full" | "delta";
+
 export type AgentJob = {
   id: number;
   updateId: number;
@@ -57,6 +59,7 @@ export type AgentJob = {
   prompt: string;
   resumeThreadId: string | null;
   context: string;
+  contextMode: AgentContextMode;
   attachments: JsonValue[];
 };
 

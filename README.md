@@ -83,8 +83,10 @@ health checks. The supervisor itself stays outside both containers.
 ## Telegram behavior
 
 Every Bot API update is stored raw. Messages and edits are normalized, reply relationships
-and media file IDs are retained, and text is indexed with FTS5. On a trigger, the latest chat
-window and matching private memory buckets are added to the request.
+and media file IDs are retained, and text is indexed with FTS5. On a trigger, a new Codex
+thread receives the latest chat window and matching private memory buckets. A resumed thread
+receives only archived messages since its previous turn because the saved Codex transcript
+already contains the earlier prompt and context.
 
 While Codex works, terminal and reasoning events create or edit one persistent Rich Message
 with a collapsed `<details>` history in every chat. Completion replaces that same message
@@ -95,7 +97,8 @@ and Loylex replies with the cancellation result; the command is consumed and is 
 as a new prompt. `/tasks` shows the five latest jobs in the current chat with their status,
 timestamps, and a link to the related Loylex message.
 The agent runs up to 50 jobs concurrently by default; the durable SQLite job queue remains as
-backpressure and restart recovery for work beyond that limit.
+backpressure and restart recovery for work beyond that limit. Jobs that resume the same Codex
+thread are serialized to avoid concurrent writers, while unrelated threads still run in parallel.
 Telegram Bot API 10.2 supports up to 32,768 UTF-8 characters,
 500 rich blocks, tables, LaTeX, inline media, collages, slideshows, audio, custom emoji,
 quotes, and headings.

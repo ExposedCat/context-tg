@@ -29,23 +29,85 @@ function message(id: number, text: string): TelegramMessage {
   };
 }
 
+function botMessage(id: number, text: string): TelegramMessage {
+  return {
+    message_id: id,
+    date: 1_700_000_000 + id,
+    chat: { id: -10042, type: "supergroup", title: "Test" },
+    from: { id: 99, is_bot: true, first_name: "Loylex" },
+    text,
+  };
+}
+
 describe("LoylexDatabase", () => {
   test("archives, indexes, claims, and resumes a thread", () => {
     const database = setup();
-    const incoming = message(1, "Лойлекс, запомни этот контекст");
+    database.archiveMessage(message(1, "предыдущий контекст"), "bot_api");
+    const incoming = message(2, "Лойлекс, запомни этот контекст");
     const update: TelegramUpdate = { update_id: 55, message: incoming };
     database.archiveUpdate(update);
     database.enqueue(55, incoming, "запомни этот контекст", null);
 
-    database.archiveMessage(message(2, "сообщение после индикатора"), "bot_api");
+    database.archiveMessage(message(3, "сообщение после индикатора"), "bot_api");
 
     const job = database.claimNext(10);
     expect(job?.prompt).toBe("запомни этот контекст");
     expect(job?.context).toContain("@chelokot");
-    expect(database.search("контекст", -10042, 10)).toHaveLength(1);
+    expect(job?.context).toContain("#1");
+    expect(job?.context).not.toContain("#2");
+    expect(job?.contextMode).toBe("full");
+    expect(database.search("запомни", -10042, 10)).toHaveLength(1);
 
     database.complete(job?.id ?? 0, 99, "thread-123");
     expect(database.resumeThread(-10042, 99)).toBe("thread-123");
+    database.close();
+  });
+
+  test("passes only new chat messages when resuming a Codex thread", () => {
+    const database = setup();
+    const incoming = message(1, "Лойлекс, начни задачу");
+    database.archiveMessage(incoming, "bot_api");
+    database.enqueue(55, incoming, "начни задачу", null);
+
+    const first = database.claimNext(10);
+    expect(first).not.toBeNull();
+    database.appendStatus(first?.id ?? 0, "commentary: работаю", "thread-123");
+    database.complete(first?.id ?? 0, 2, "thread-123");
+    database.archiveMessage(botMessage(2, "Готово"), "bot_api");
+
+    database.archiveMessage(message(3, "сообщение между запросами"), "bot_api");
+    const followUp = message(4, "продолжай");
+    database.archiveMessage(followUp, "bot_api");
+    database.enqueue(56, followUp, "продолжай", "thread-123");
+
+    const resumed = database.claimNext(10);
+    expect(resumed?.contextMode).toBe("delta");
+    expect(resumed?.context).toContain("#3");
+    expect(resumed?.context).not.toContain("#1");
+    expect(resumed?.context).not.toContain("#2");
+    expect(resumed?.context).not.toContain("#4");
+    database.close();
+  });
+
+  test("serializes jobs for one Codex thread without blocking unrelated threads", () => {
+    const database = setup();
+    const first = message(1, "первая задача");
+    const second = message(2, "вторая задача");
+    const unrelated = message(3, "другая задача");
+    database.enqueue(55, first, "первая", "thread-123");
+    database.enqueue(56, second, "вторая", "thread-123");
+    database.enqueue(57, unrelated, "другая", "thread-456");
+
+    const firstJob = database.claimNext(10, "worker-a");
+    expect(firstJob?.messageId).toBe(1);
+    const unrelatedJob = database.claimNext(10, "worker-b");
+    expect(unrelatedJob?.messageId).toBe(3);
+    expect(database.claimNext(10, "worker-c")).toBeNull();
+
+    expect(database.complete(firstJob?.id ?? 0, 11, "thread-123", "worker-a")).toBe(true);
+    const secondJob = database.claimNext(10, "worker-c");
+    expect(secondJob?.messageId).toBe(2);
+    expect(database.complete(unrelatedJob?.id ?? 0, 12, "thread-456", "worker-b")).toBe(true);
     database.close();
   });
 

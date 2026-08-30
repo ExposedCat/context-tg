@@ -1,5 +1,11 @@
 import { Database } from "bun:sqlite";
-import type { AgentJob, JsonValue, TelegramMessage, TelegramUpdate } from "../shared/types.ts";
+import type {
+  AgentContextMode,
+  AgentJob,
+  JsonValue,
+  TelegramMessage,
+  TelegramUpdate,
+} from "../shared/types.ts";
 
 export type JobState = "pending" | "running" | "completed" | "failed" | "cancelled";
 
@@ -38,6 +44,11 @@ type MessageContextRow = {
   text: string | null;
   media_json: string;
   message_id: number;
+};
+
+type ContextResult = {
+  mode: AgentContextMode;
+  text: string;
 };
 
 type JobSummaryRow = {
@@ -199,6 +210,10 @@ export class LoylexDatabase {
 
       CREATE INDEX IF NOT EXISTS messages_chat_date_idx ON messages(chat_id, date DESC);
       CREATE INDEX IF NOT EXISTS jobs_state_created_idx ON jobs(state, created_at);
+      CREATE INDEX IF NOT EXISTS jobs_resume_thread_idx
+        ON jobs(state, resume_thread_id, created_at, id);
+      CREATE INDEX IF NOT EXISTS jobs_codex_thread_idx
+        ON jobs(chat_id, codex_thread_id, created_at DESC, id DESC);
       CREATE INDEX IF NOT EXISTS outbound_thread_idx ON outbound_messages(codex_thread_id);
     `);
     this.ensureJobColumn("worker_id", "TEXT");
@@ -316,8 +331,35 @@ export class LoylexDatabase {
     const transaction = this.connection.transaction(() => {
       const now = Date.now();
       this.recoverExpiredLeasesInTransaction(now);
+      // A saved Codex thread has one append-only writer. Keep independent threads concurrent,
+      // but leave the next turn for this thread pending until every earlier turn is finished.
       const row = this.connection
-        .query<JobRow, []>("SELECT * FROM jobs WHERE state = 'pending' ORDER BY created_at LIMIT 1")
+        .query<JobRow, []>(`
+          SELECT candidate.*
+          FROM jobs AS candidate
+          WHERE candidate.state = 'pending'
+            AND (
+              candidate.resume_thread_id IS NULL
+              OR NOT EXISTS (
+                SELECT 1
+                FROM jobs AS blocker
+                WHERE blocker.state IN ('pending', 'running')
+                  AND (
+                    blocker.resume_thread_id = candidate.resume_thread_id
+                    OR blocker.codex_thread_id = candidate.resume_thread_id
+                  )
+                  AND (
+                    blocker.created_at < candidate.created_at
+                    OR (
+                      blocker.created_at = candidate.created_at
+                      AND blocker.id < candidate.id
+                    )
+                  )
+              )
+            )
+          ORDER BY candidate.created_at, candidate.id
+          LIMIT 1
+        `)
         .get();
       if (!row) {
         return null;
@@ -333,6 +375,12 @@ export class LoylexDatabase {
     if (!row) {
       return null;
     }
+    const context = this.contextForJob(
+      row.chat_id,
+      row.message_id,
+      contextMessages,
+      row.resume_thread_id,
+    );
     return {
       id: row.id,
       updateId: row.update_id,
@@ -343,7 +391,8 @@ export class LoylexDatabase {
       userId: row.user_id,
       prompt: row.prompt,
       resumeThreadId: row.resume_thread_id,
-      context: this.recentContext(row.chat_id, row.message_id, contextMessages),
+      context: context.text,
+      contextMode: context.mode,
       attachments: JSON.parse(row.attachments_json) as JsonValue[],
     };
   }
@@ -416,17 +465,98 @@ export class LoylexDatabase {
     }));
   }
 
+  private contextForJob(
+    chatId: number,
+    beforeMessageId: number,
+    limit: number,
+    resumeThreadId: string | null,
+  ): ContextResult {
+    if (!resumeThreadId) {
+      return { mode: "full", text: this.recentContext(chatId, beforeMessageId, limit) };
+    }
+    // `codex exec resume` already replays the saved thread transcript. Only messages that
+    // arrived after its last turn belong in the new prompt; replaying the whole chat window
+    // would duplicate the previous user prompt and defeat append-only prompt caching.
+    const previousMessageId = this.latestThreadMessageId(chatId, resumeThreadId, beforeMessageId);
+    if (previousMessageId === null || previousMessageId >= beforeMessageId) {
+      return { mode: "full", text: this.recentContext(chatId, beforeMessageId, limit) };
+    }
+    return {
+      mode: "delta",
+      text: this.threadDeltaContext(
+        chatId,
+        previousMessageId,
+        beforeMessageId,
+        resumeThreadId,
+        limit,
+      ),
+    };
+  }
+
+  private latestThreadMessageId(
+    chatId: number,
+    threadId: string,
+    beforeMessageId: number,
+  ): number | null {
+    return (
+      this.connection
+        .query<{ message_id: number }, [number, string, number]>(`
+          SELECT message_id
+          FROM jobs
+          WHERE chat_id = ?
+            AND codex_thread_id = ?
+            AND message_id < ?
+          ORDER BY created_at DESC, id DESC
+          LIMIT 1
+        `)
+        .get(chatId, threadId, beforeMessageId)?.message_id ?? null
+    );
+  }
+
   private recentContext(chatId: number, beforeMessageId: number, limit: number): string {
     const rows = this.connection
       .query<MessageContextRow, [number, number, number]>(`
         SELECT date, edit_date, from_display_name, from_username, text, media_json, message_id
         FROM messages
-        WHERE chat_id = ? AND message_id <= ?
+        WHERE chat_id = ? AND message_id < ?
         ORDER BY date DESC, message_id DESC
         LIMIT ?
       `)
       .all(chatId, beforeMessageId, limit)
       .reverse();
+    return this.formatContext(rows);
+  }
+
+  private threadDeltaContext(
+    chatId: number,
+    afterMessageId: number,
+    beforeMessageId: number,
+    threadId: string,
+    limit: number,
+  ): string {
+    const rows = this.connection
+      .query<MessageContextRow, [number, number, number, string, number]>(`
+        SELECT date, edit_date, from_display_name, from_username, text, media_json, message_id
+        FROM messages
+        WHERE chat_id = ?
+          AND message_id > ?
+          AND message_id < ?
+          AND NOT EXISTS (
+            SELECT 1
+            FROM outbound_messages
+            WHERE outbound_messages.chat_id = messages.chat_id
+              AND outbound_messages.message_id = messages.message_id
+              AND outbound_messages.codex_thread_id = ?
+          )
+        ORDER BY date DESC, message_id DESC
+        LIMIT ?
+      `)
+      .all(chatId, afterMessageId, beforeMessageId, threadId, limit)
+      .reverse();
+    return this.formatContext(rows);
+  }
+
+  private formatContext(rows: MessageContextRow[]): string {
     return rows
       .map((row) => {
         const timestamp = new Date(row.date * 1000).toISOString();
