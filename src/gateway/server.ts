@@ -2,7 +2,7 @@ import type { Server } from "bun";
 import type { AgentCompletion, AgentEvent } from "../shared/types.ts";
 import type { GatewayConfig } from "./config.ts";
 import type { LoylexDatabase } from "./database.ts";
-import { activityLines } from "./presentation.ts";
+import { activityLines, failureMessage } from "./presentation.ts";
 import type { TelegramClient } from "./telegram.ts";
 
 function json(value: unknown, status = 200): Response {
@@ -265,7 +265,7 @@ export class GatewayServer {
     }
     const address = this.database.jobAddress(jobId);
     const thinkingMessageId = this.database.thinkingMessage(jobId);
-    const markdown = `Не получилось завершить задачу.\n\n\`\`\`text\n${error.slice(0, 2_000)}\n\`\`\``;
+    const markdown = failureMessage(error);
     if (thinkingMessageId === null) {
       await this.telegram.sendRich(address.chatId, markdown, {
         replyTo: address.messageId,

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { activityLines, stopResultMessage } from "../src/gateway/presentation.ts";
+import { activityLines, failureMessage, stopResultMessage } from "../src/gateway/presentation.ts";
 
 describe("activityLines", () => {
   test("turns shell events into concise user-facing activity", () => {
@@ -41,4 +41,16 @@ describe("activityLines", () => {
     expect(stopResultMessage(5)).toBe("⏹️ Остановлено: 5 задач.");
     expect(stopResultMessage(0)).toBe("Активных задач для остановки нет.");
   });
+});
+
+test("explains a busy Codex thread without exposing CLI diagnostics", () => {
+  const message = failureMessage(
+    "Codex exited with 1: thread-store conflict: thread abc already has an active writer",
+  );
+
+  expect(message).toBe(
+    "Не получилось продолжить задачу: этот Codex-тред уже занят другим запросом.\n\nДождись завершения текущей задачи и отправь запрос ещё раз — одновременно выполнять два запроса в одном треде нельзя.",
+  );
+  expect(message).not.toContain("thread-store conflict");
+  expect(message).not.toContain("active writer");
 });
