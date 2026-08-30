@@ -1,9 +1,11 @@
 import { basename } from "node:path";
+import { type TelegramExport, telegramExportMessages } from "../shared/telegram-export.ts";
 import { loadAgentConfig } from "./config.ts";
 import { scheduleSupervisorOperation, supervisorStatus } from "./supervisor.ts";
 
 const config = loadAgentConfig();
 const [command, ...arguments_] = process.argv.slice(2);
+const importBatchSize = 250;
 
 async function request(path: string, init: RequestInit = {}): Promise<Response> {
   const response = await fetch(config.bridgeUrl + path, {
@@ -73,6 +75,53 @@ async function run(): Promise<void> {
     console.log(JSON.stringify(await response.json(), null, 2));
     return;
   }
+  if (command === "media-list") {
+    const [chatId, rawLimit = "100"] = arguments_;
+    const parsedChatId = Number(chatId);
+    const parsedLimit = Number.parseInt(rawLimit, 10);
+    if (!chatId || !Number.isSafeInteger(parsedChatId) || !Number.isInteger(parsedLimit)) {
+      throw new Error("Usage: loylex media-list CHAT_ID [LIMIT]");
+    }
+    const response = await request(
+      `/v1/archive/media?chat=${encodeURIComponent(chatId)}&limit=${encodeURIComponent(String(parsedLimit))}`,
+    );
+    console.log(JSON.stringify(await response.json(), null, 2));
+    return;
+  }
+  if (command === "import") {
+    const [path, rawChatId] = arguments_;
+    if (!path) {
+      throw new Error("Usage: loylex import RESULT_JSON [CHAT_ID]");
+    }
+    const exported = (await Bun.file(path).json()) as TelegramExport;
+    const parsedChatId = rawChatId === undefined ? exported.id : Number(rawChatId);
+    if (parsedChatId === undefined || !Number.isSafeInteger(parsedChatId)) {
+      throw new Error("Telegram chat ID is missing; pass CHAT_ID");
+    }
+    if (!Array.isArray(exported.messages)) {
+      throw new Error("Telegram export messages must be an array");
+    }
+    const messages = telegramExportMessages(exported, parsedChatId);
+    let imported = 0;
+    for (let index = 0; index < messages.length; index += importBatchSize) {
+      const batch = messages.slice(index, index + importBatchSize);
+      const response = await request("/v1/archive/import", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ messages: batch }),
+      });
+      const result = (await response.json()) as { imported?: number };
+      imported += result.imported ?? batch.length;
+    }
+    console.log(
+      JSON.stringify({
+        imported,
+        chatId: parsedChatId,
+        batches: Math.ceil(imported / importBatchSize),
+      }),
+    );
+    return;
+  }
   if (command === "send") {
     const [chatId, ...markdown] = arguments_;
     if (!chatId || markdown.length === 0) {
@@ -114,7 +163,9 @@ async function run(): Promise<void> {
     console.log(JSON.stringify(await response.json(), null, 2));
     return;
   }
-  throw new Error("Usage: loylex <status|search|recent|send|media|upload|system>");
+  throw new Error(
+    "Usage: loylex <status|search|recent|media-list|import|send|media|upload|system>",
+  );
 }
 
 await run();

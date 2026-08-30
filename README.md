@@ -125,6 +125,13 @@ podman exec loylex-gateway \
   bun /app/src/gateway/import.ts /tmp/result.json --chat-id -1001234567890
 ```
 
+When the JSON is available in the agent workspace, the authenticated agent CLI can import it
+without direct access to the gateway volume:
+
+```bash
+loylex import result.json -1001234567890
+```
+
 The importer understands Telegram Desktop text entities, edits, replies, and exported media
 paths. Future updates are archived automatically.
 

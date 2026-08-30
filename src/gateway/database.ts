@@ -102,6 +102,14 @@ export type SearchResult = {
   forwardOrigin?: JsonObject;
 };
 
+export type ArchivedMedia = {
+  chatId: number;
+  messageId: number;
+  date: number;
+  source: "bot_api" | "telegram_export";
+  media: JsonValue[];
+};
+
 type SearchRow = {
   chat_id: number;
   message_id: number;
@@ -452,6 +460,40 @@ export class LoylexDatabase {
         JSON.stringify(message),
         source,
       );
+  }
+
+  archiveExportMessages(messages: TelegramMessage[]): number {
+    const transaction = this.connection.transaction(() => {
+      for (const message of messages) {
+        this.archiveMessage(message, "telegram_export");
+      }
+      return messages.length;
+    });
+    return transaction.immediate();
+  }
+
+  archivedMedia(chatId: number, limit: number): ArchivedMedia[] {
+    const rows = this.connection
+      .query<
+        { chat_id: number; message_id: number; date: number; media_json: string; source: string },
+        [number, number]
+      >(
+        `
+          SELECT chat_id, message_id, date, media_json, source
+          FROM messages
+          WHERE chat_id = ? AND media_json != '[]'
+          ORDER BY date ASC, message_id ASC
+          LIMIT ?
+        `,
+      )
+      .all(chatId, limit);
+    return rows.map((row) => ({
+      chatId: row.chat_id,
+      messageId: row.message_id,
+      date: row.date,
+      source: row.source as ArchivedMedia["source"],
+      media: JSON.parse(row.media_json) as JsonValue[],
+    }));
   }
 
   resumeThread(chatId: number, repliedMessageId: number | undefined): string | null {

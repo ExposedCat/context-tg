@@ -19,6 +19,27 @@ function workerId(request: Request): string | undefined {
   return value || undefined;
 }
 
+function importMessage(value: unknown): value is TelegramMessage {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return false;
+  }
+  const message = value as { message_id?: unknown; date?: unknown; chat?: unknown };
+  if (!Number.isSafeInteger(message.message_id) || !Number.isSafeInteger(message.date)) {
+    return false;
+  }
+  if (typeof message.chat !== "object" || message.chat === null || Array.isArray(message.chat)) {
+    return false;
+  }
+  const chat = message.chat as { id?: unknown; type?: unknown };
+  return (
+    Number.isSafeInteger(chat.id) &&
+    (chat.type === "channel" ||
+      chat.type === "group" ||
+      chat.type === "private" ||
+      chat.type === "supergroup")
+  );
+}
+
 async function body<T>(request: Request): Promise<T> {
   return (await request.json()) as T;
 }
@@ -145,6 +166,35 @@ export class GatewayServer {
         return json({
           results: this.database.search(query, chat ? Number(chat) : null, limit),
         });
+      }
+
+      if (request.method === "GET" && url.pathname === "/v1/archive/media") {
+        const chat = url.searchParams.get("chat");
+        const chatId = chat === null ? Number.NaN : Number(chat);
+        if (!chat || !Number.isSafeInteger(chatId)) {
+          return json({ error: "chat must be a valid chat ID" }, 400);
+        }
+        const parsedLimit = Number.parseInt(url.searchParams.get("limit") ?? "100", 10);
+        const limit = Number.isNaN(parsedLimit) ? 100 : Math.min(Math.max(parsedLimit, 1), 1000);
+        return json({ results: this.database.archivedMedia(chatId, limit) });
+      }
+
+      if (request.method === "POST" && url.pathname === "/v1/archive/import") {
+        const payload = await body<{ messages?: unknown }>(request);
+        if (
+          !Array.isArray(payload.messages) ||
+          payload.messages.length === 0 ||
+          payload.messages.length > 250 ||
+          !payload.messages.every(importMessage)
+        ) {
+          return json({ error: "messages must contain 1-250 valid Telegram messages" }, 400);
+        }
+        const chatIds = new Set(payload.messages.map((message) => message.chat.id));
+        const chatId = payload.messages[0]?.chat.id;
+        if (chatIds.size !== 1 || chatId === undefined || !this.database.chatExists(chatId)) {
+          return json({ error: "unknown or mixed chat" }, 403);
+        }
+        return json({ imported: this.database.archiveExportMessages(payload.messages), chatId });
       }
 
       if (request.method === "GET" && url.pathname === "/v1/archive/recent") {
