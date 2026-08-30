@@ -4,7 +4,7 @@ After=network-online.target
 Wants=network-online.target
 
 [Container]
-Image=ghcr.io/chelokot/loylex-gateway@sha256:7eab81ed37faded8fe34d80b9f223033acd7de8adac52a1f5d13e62db5b00d58
+Image=ghcr.io/chelokot/loylex-gateway@sha256:1c874c1b4dfccf70e443898c3c992059bbff06a3c3a9e8150191e3a20b38b083
 ContainerName=loylex-gateway
 Network=loylex.network
 Volume=loylex-gateway-data.volume:/data:Z,U
