@@ -192,6 +192,27 @@ describe("LoylexDatabase", () => {
     database.close();
   });
 
+  test("passes attachments from a replied-to message into the job", () => {
+    const database = setup();
+    const document = {
+      file_id: "reply-file-id",
+      file_name: "app.zip",
+      mime_type: "application/zip",
+      file_size: 123,
+    } satisfies JsonObject;
+    const source = message(1, "приложение");
+    source.document = document;
+    const current = message(2, "Лойлекс, продолжай по вложению");
+    current.reply_to_message = source;
+
+    database.archiveMessage(current, "bot_api");
+    database.enqueue(55, current, "продолжай по вложению", null);
+
+    const job = database.claimNext(10);
+    expect(job?.attachments).toEqual([{ kind: "document", value: document }]);
+    database.close();
+  });
+
   test("exposes the full forward origin in archive results and context", () => {
     const database = setup();
     const forwarded = forwardedMessage(1, "пересланное сообщение");

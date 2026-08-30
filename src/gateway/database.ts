@@ -246,6 +246,10 @@ function media(message: TelegramMessage): JsonValue[] {
   return values;
 }
 
+function jobMedia(message: TelegramMessage): JsonValue[] {
+  return [...media(message), ...(message.reply_to_message ? media(message.reply_to_message) : [])];
+}
+
 export class LoylexDatabase {
   readonly connection: Database;
 
@@ -531,7 +535,7 @@ export class LoylexDatabase {
         message.from?.id ?? null,
         prompt,
         resumeThreadId,
-        JSON.stringify(media(message)),
+        JSON.stringify(jobMedia(message)),
         generation,
         Date.now(),
       );
