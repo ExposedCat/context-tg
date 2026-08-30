@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { detectTrigger, isStopCommand } from "../src/gateway/triggers.ts";
+import { detectTrigger, isStopCommand, isTasksCommand } from "../src/gateway/triggers.ts";
 import type { TelegramMessage } from "../src/shared/types.ts";
 
 function message(text: string): TelegramMessage {
@@ -57,5 +57,12 @@ describe("detectTrigger", () => {
   test("does not recognize /stop outside a bot reply", () => {
     expect(isStopCommand(message("/stop"), 42, "LoylexBot")).toBe(false);
     expect(isStopCommand(message("/stop now"), 42, "LoylexBot")).toBe(false);
+  });
+
+  test("recognizes /tasks with an optional Loylex mention", () => {
+    expect(isTasksCommand(message("/tasks"), "LoylexBot")).toBe(true);
+    expect(isTasksCommand(message("/tasks@loylexbot"), "LoylexBot")).toBe(true);
+    expect(isTasksCommand(message("/tasks@AnotherBot"), "LoylexBot")).toBe(false);
+    expect(isTasksCommand(message("/tasks now"), "LoylexBot")).toBe(false);
   });
 });

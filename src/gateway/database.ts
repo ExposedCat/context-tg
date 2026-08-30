@@ -1,6 +1,20 @@
 import { Database } from "bun:sqlite";
 import type { AgentJob, JsonValue, TelegramMessage, TelegramUpdate } from "../shared/types.ts";
 
+export type JobState = "pending" | "running" | "completed" | "failed" | "cancelled";
+
+export type JobSummary = {
+  id: number;
+  chatId: number;
+  chatType: AgentJob["chatType"];
+  messageId: number;
+  prompt: string;
+  state: JobState;
+  createdAt: number;
+  completedAt: number | null;
+  thinkingMessageId: number | null;
+};
+
 type JobRow = {
   id: number;
   update_id: number;
@@ -22,6 +36,18 @@ type MessageContextRow = {
   text: string | null;
   media_json: string;
   message_id: number;
+};
+
+type JobSummaryRow = {
+  id: number;
+  chat_id: number;
+  chat_type: AgentJob["chatType"];
+  message_id: number;
+  prompt: string;
+  state: string;
+  created_at: number;
+  completed_at: number | null;
+  thinking_message_id: number | null;
 };
 
 export type SearchResult = {
@@ -295,6 +321,30 @@ export class LoylexDatabase {
       context: this.recentContext(row.chat_id, row.message_id, contextMessages),
       attachments: JSON.parse(row.attachments_json) as JsonValue[],
     };
+  }
+
+  listRecentJobs(chatId: number, limit = 5): JobSummary[] {
+    const rows = this.connection
+      .query<JobSummaryRow, [number, number]>(`
+        SELECT id, chat_id, chat_type, message_id, prompt, state,
+               created_at, completed_at, thinking_message_id
+        FROM jobs
+        WHERE chat_id = ?
+        ORDER BY created_at DESC, id DESC
+        LIMIT ?
+      `)
+      .all(chatId, limit);
+    return rows.map((row) => ({
+      id: row.id,
+      chatId: row.chat_id,
+      chatType: row.chat_type,
+      messageId: row.message_id,
+      prompt: row.prompt,
+      state: row.state as JobState,
+      createdAt: row.created_at,
+      completedAt: row.completed_at,
+      thinkingMessageId: row.thinking_message_id,
+    }));
   }
 
   private recentContext(chatId: number, beforeMessageId: number, limit: number): string {

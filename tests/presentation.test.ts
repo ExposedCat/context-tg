@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { activityLines } from "../src/gateway/presentation.ts";
+import { activityLines, stopResultMessage } from "../src/gateway/presentation.ts";
 
 describe("activityLines", () => {
   test("turns shell events into concise user-facing activity", () => {
@@ -33,5 +33,12 @@ describe("activityLines", () => {
     ].join("\n\n");
 
     expect(activityLines(status)).toEqual(["Работаю в терминале"]);
+  });
+
+  test("describes the result of a stop command", () => {
+    expect(stopResultMessage(1)).toBe("⏹️ Остановлено: 1 задача.");
+    expect(stopResultMessage(2)).toBe("⏹️ Остановлено: 2 задачи.");
+    expect(stopResultMessage(5)).toBe("⏹️ Остановлено: 5 задач.");
+    expect(stopResultMessage(0)).toBe("Активных задач для остановки нет.");
   });
 });

@@ -90,8 +90,10 @@ While Codex works, terminal and reasoning events create or edit one persistent R
 with a collapsed `<details>` history in every chat. Completion replaces that same message
 with the same collapsed `<details>` history and the final Rich Markdown.
 Rich API errors are surfaced instead of silently sending the same document as unformatted text.
-Replying `/stop` to any Loylex message belonging to an active job cancels that Codex thread;
-the command is consumed and is not submitted as a new prompt.
+Replying `/stop` to any Loylex message belonging to an active job cancels that Codex thread,
+and Loylex replies with the cancellation result; the command is consumed and is not submitted
+as a new prompt. `/tasks` shows the five latest jobs in the current chat with their status,
+timestamps, and a link to the related Loylex message.
 Telegram Bot API 10.2 supports up to 32,768 UTF-8 characters,
 500 rich blocks, tables, LaTeX, inline media, collages, slideshows, audio, custom emoji,
 quotes, and headings.

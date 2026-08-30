@@ -81,4 +81,46 @@ describe("LoylexDatabase", () => {
     expect(database.claimNext(10)).toBeNull();
     database.close();
   });
+
+  test("lists the latest jobs for one chat with their current state", () => {
+    const database = setup();
+    const incoming = message(1, "Лойлекс, проверь очередь");
+    database.archiveUpdate({ update_id: 55, message: incoming });
+    database.enqueue(55, incoming, "проверь очередь", null);
+
+    const running = database.claimNext(10);
+    expect(running).not.toBeNull();
+    const runningJobId = running?.id ?? 0;
+    database.setThinkingMessage(runningJobId, 10);
+    database.complete(runningJobId, 11, "thread-123");
+
+    const queued = message(2, "Лойлекс, подожди");
+    database.enqueue(56, queued, "подожди", null);
+
+    expect(database.listRecentJobs(-10042)).toEqual([
+      {
+        id: runningJobId + 1,
+        chatId: -10042,
+        chatType: "supergroup",
+        messageId: 2,
+        prompt: "подожди",
+        state: "pending",
+        createdAt: expect.any(Number),
+        completedAt: null,
+        thinkingMessageId: null,
+      },
+      {
+        id: runningJobId,
+        chatId: -10042,
+        chatType: "supergroup",
+        messageId: 1,
+        prompt: "проверь очередь",
+        state: "completed",
+        createdAt: expect.any(Number),
+        completedAt: expect.any(Number),
+        thinkingMessageId: 10,
+      },
+    ]);
+    database.close();
+  });
 });

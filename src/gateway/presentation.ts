@@ -48,3 +48,21 @@ export function activityLines(status: string): string[] {
   }
   return narrative.length > 0 ? narrative : fallback;
 }
+
+function taskCountLabel(count: number): string {
+  const moduloTen = count % 10;
+  const moduloHundred = count % 100;
+  if (moduloTen === 1 && moduloHundred !== 11) {
+    return "задача";
+  }
+  if (moduloTen >= 2 && moduloTen <= 4 && (moduloHundred < 10 || moduloHundred >= 20)) {
+    return "задачи";
+  }
+  return "задач";
+}
+
+export function stopResultMessage(cancelledCount: number): string {
+  return cancelledCount > 0
+    ? `⏹️ Остановлено: ${cancelledCount} ${taskCountLabel(cancelledCount)}.`
+    : "Активных задач для остановки нет.";
+}

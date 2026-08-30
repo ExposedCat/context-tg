@@ -1,8 +1,10 @@
 import { loadGatewayConfig } from "./config.ts";
 import { LoylexDatabase } from "./database.ts";
+import { stopResultMessage } from "./presentation.ts";
 import { GatewayServer } from "./server.ts";
+import { sendTasks } from "./tasks.ts";
 import { TelegramClient } from "./telegram.ts";
-import { detectTrigger, isStopCommand } from "./triggers.ts";
+import { detectTrigger, isStopCommand, isTasksCommand } from "./triggers.ts";
 
 const config = loadGatewayConfig();
 const database = new LoylexDatabase(config.databasePath);
@@ -41,6 +43,14 @@ async function poll(): Promise<void> {
               }),
             );
           }
+          await telegram.sendRich(message.chat.id, stopResultMessage(cancelledJobIds.length), {
+            replyTo: message.message_id,
+            threadId: message.message_thread_id ?? null,
+          });
+          continue;
+        }
+        if (isTasksCommand(message, bot.username)) {
+          await sendTasks(database, telegram, message);
           continue;
         }
         const trigger = detectTrigger(message, bot.id);
