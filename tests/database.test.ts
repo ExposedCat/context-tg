@@ -53,11 +53,13 @@ describe("LoylexDatabase", () => {
     const job = database.claimNext(10);
     expect(job?.prompt).toBe("запомни этот контекст");
     expect(job?.context).toContain("@chelokot");
+    expect(job?.context).toContain("user_id=7");
     expect(job?.context).toContain("#1");
     expect(job?.context).not.toContain("#2");
     expect(job?.contextMode).toBe("full");
     expect(database.search("запомни", -10042, 10)).toHaveLength(1);
     expect(database.recent(-10042, 2).map((item) => item.messageId)).toEqual([3, 2]);
+    expect(database.recent(-10042, 1)[0]?.userId).toBe(7);
 
     database.complete(job?.id ?? 0, 99, "thread-123");
     expect(database.resumeThread(-10042, 99)).toBe("thread-123");

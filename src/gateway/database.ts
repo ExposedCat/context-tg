@@ -40,6 +40,7 @@ type JobRow = {
 type MessageContextRow = {
   date: number;
   edit_date: number | null;
+  from_user_id: number | null;
   from_display_name: string | null;
   from_username: string | null;
   text: string | null;
@@ -78,6 +79,7 @@ export type SearchResult = {
   chatId: number;
   messageId: number;
   date: number;
+  userId: number | null;
   author: string;
   text: string;
 };
@@ -609,7 +611,7 @@ export class LoylexDatabase {
   private recentContext(chatId: number, beforeMessageId: number, limit: number): string {
     const rows = this.connection
       .query<MessageContextRow, [number, number, number]>(`
-        SELECT date, edit_date, from_display_name, from_username, text, media_json, message_id,
+        SELECT date, edit_date, from_user_id, from_display_name, from_username, text, media_json, message_id,
                message_thread_id, reply_to_message_id, raw_json
         FROM messages
         WHERE chat_id = ? AND message_id < ?
@@ -630,7 +632,7 @@ export class LoylexDatabase {
   ): string {
     const rows = this.connection
       .query<MessageContextRow, [number, number, number, string, number]>(`
-        SELECT date, edit_date, from_display_name, from_username, text, media_json, message_id,
+        SELECT date, edit_date, from_user_id, from_display_name, from_username, text, media_json, message_id,
                message_thread_id, reply_to_message_id, raw_json
         FROM messages
         WHERE chat_id = ?
@@ -658,6 +660,7 @@ export class LoylexDatabase {
         const author = row.from_username
           ? `${row.from_display_name ?? row.from_username} (@${row.from_username})`
           : (row.from_display_name ?? "unknown");
+        const userId = row.from_user_id === null ? "" : ` user_id=${row.from_user_id}`;
         const attachments = JSON.parse(row.media_json) as JsonValue[];
         const attachmentText =
           attachments.length > 0 ? ` attachments=${JSON.stringify(attachments)}` : "";
@@ -668,7 +671,7 @@ export class LoylexDatabase {
         ].filter(Boolean);
         const relationText = relations.length > 0 ? ` ${relations.join(" ")}` : "";
         const edited = row.edit_date === null ? "" : " (edited)";
-        return `[${timestamp}] #${row.message_id} ${author}${edited}: ${row.text ?? ""}${attachmentText}${relationText}`;
+        return `[${timestamp}] #${row.message_id} ${author}${userId}${edited}: ${row.text ?? ""}${attachmentText}${relationText}`;
       })
       .join("\n");
   }
@@ -977,13 +980,14 @@ export class LoylexDatabase {
           chat_id: number;
           message_id: number;
           date: number;
+          from_user_id: number | null;
           from_display_name: string | null;
           from_username: string | null;
           text: string | null;
         },
         [string, number | null, number | null, number]
       >(`
-        SELECT m.chat_id, m.message_id, m.date, m.from_display_name, m.from_username, m.text
+        SELECT m.chat_id, m.message_id, m.date, m.from_user_id, m.from_display_name, m.from_username, m.text
         FROM messages_fts f
         JOIN messages m ON m.rowid = f.rowid
         WHERE messages_fts MATCH ? AND (? IS NULL OR m.chat_id = ?)
@@ -995,6 +999,7 @@ export class LoylexDatabase {
       chatId: row.chat_id,
       messageId: row.message_id,
       date: row.date,
+      userId: row.from_user_id,
       author: row.from_username
         ? `${row.from_display_name ?? row.from_username} (@${row.from_username})`
         : (row.from_display_name ?? "unknown"),
@@ -1009,13 +1014,14 @@ export class LoylexDatabase {
           chat_id: number;
           message_id: number;
           date: number;
+          from_user_id: number | null;
           from_display_name: string | null;
           from_username: string | null;
           text: string | null;
         },
         [number, number]
       >(`
-        SELECT chat_id, message_id, date, from_display_name, from_username, text
+        SELECT chat_id, message_id, date, from_user_id, from_display_name, from_username, text
         FROM messages
         WHERE chat_id = ?
         ORDER BY date DESC, message_id DESC
@@ -1026,6 +1032,7 @@ export class LoylexDatabase {
       chatId: row.chat_id,
       messageId: row.message_id,
       date: row.date,
+      userId: row.from_user_id,
       author: row.from_username
         ? `${row.from_display_name ?? row.from_username} (@${row.from_username})`
         : (row.from_display_name ?? "unknown"),
