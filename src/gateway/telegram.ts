@@ -142,6 +142,13 @@ export class TelegramClient {
     }
   }
 
+  deleteMessage(chatId: number, messageId: number): Promise<boolean> {
+    return this.call<boolean>("deleteMessage", {
+      chat_id: chatId,
+      message_id: messageId,
+    });
+  }
+
   sendTyping(chatId: number, threadId: number | null = null): Promise<boolean> {
     const body: JsonObject = { chat_id: chatId, action: "typing" };
     if (threadId !== null) {

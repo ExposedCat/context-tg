@@ -1,5 +1,5 @@
 import type { Server } from "bun";
-import type { AgentCompletion, AgentEvent } from "../shared/types.ts";
+import type { AgentCompletion, AgentEvent, TelegramMessage } from "../shared/types.ts";
 import type { GatewayConfig } from "./config.ts";
 import type { LoylexDatabase } from "./database.ts";
 import { completedDocuments, failureMessage, workDocument } from "./presentation.ts";
@@ -268,13 +268,21 @@ export class GatewayServer {
       return;
     }
     const documents = completedDocuments(status, completion.answer);
-    const message =
-      thinkingMessageId === null
-        ? await this.telegram.sendRich(address.chatId, documents[0] ?? "", {
-            replyTo: address.messageId,
-            threadId: address.threadId,
-          })
-        : await this.telegram.editRich(address.chatId, thinkingMessageId, documents[0] ?? "");
+    let message: TelegramMessage;
+    if (thinkingMessageId === null) {
+      message = await this.telegram.sendRich(address.chatId, documents[0] ?? "", {
+        replyTo: address.messageId,
+        threadId: address.threadId,
+      });
+    } else {
+      // Keep the final answer at the bottom of the chat so it replies to the user's request,
+      // even when other messages arrived while Codex was working.
+      message = await this.telegram.sendRich(address.chatId, documents[0] ?? "", {
+        replyTo: address.messageId,
+        threadId: address.threadId,
+      });
+      await this.telegram.deleteMessage(address.chatId, thinkingMessageId);
+    }
     this.database.recordOutboundMessage(jobId, message.message_id, completion.threadId);
     let replyTo = message.message_id;
     for (const document of documents.slice(1)) {

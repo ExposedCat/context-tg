@@ -319,7 +319,7 @@ describe("LoylexDatabase", () => {
         state: "completed",
         createdAt: expect.any(Number),
         completedAt: expect.any(Number),
-        thinkingMessageId: 10,
+        thinkingMessageId: 11,
         canResume: false,
       },
     ]);

@@ -115,9 +115,6 @@ export function failureMessage(error: string): string {
 }
 
 export function completedDocuments(status: string, answer: string): string[] {
-  if (visibleActivity(status).length <= 1) {
-    return splitRichMarkdown(answer);
-  }
   const prefix = `${workDocument(status)}\n\n`;
   const availableAnswerBytes = richMessageLimitBytes - byteLength(prefix);
   if (availableAnswerBytes <= 0) {

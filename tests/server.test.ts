@@ -77,10 +77,14 @@ test("starts progress as a persistent rich details message", async () => {
   expect(sent[0]?.markdown).not.toContain("tg-spoiler");
 });
 
-test("edits the existing group progress message to a plain answer for a trivial job", async () => {
-  const sent: string[] = [];
-  const edited: string[] = [];
-  let hasMessagesAfterCalls = 0;
+test("sends a new final reply and removes the temporary progress message", async () => {
+  const sent: Array<{
+    chatId: number;
+    markdown: string;
+    options: { replyTo?: number; threadId?: number | null };
+  }> = [];
+  const deleted: Array<{ chatId: number; messageId: number }> = [];
+  const calls: string[] = [];
   let completed: { jobId: number; messageId: number; threadId: string } | null = null;
 
   const database = {
@@ -93,10 +97,6 @@ test("edits the existing group progress message to a plain answer for a trivial 
     thinkingMessage: () => 11,
     isJobCancelled: () => false,
     appendStatus: () => "status: Готово",
-    hasMessagesAfter: () => {
-      hasMessagesAfterCalls += 1;
-      return true;
-    },
     recordOutboundMessage: () => {},
     complete: (jobId: number, messageId: number, threadId: string) => {
       completed = { jobId, messageId, threadId };
@@ -104,13 +104,19 @@ test("edits the existing group progress message to a plain answer for a trivial 
   } as unknown as LoylexDatabase;
 
   const telegram = {
-    sendRich: async (_chatId: number, markdown: string) => {
-      sent.push(markdown);
+    sendRich: async (
+      chatId: number,
+      markdown: string,
+      options: { replyTo?: number; threadId?: number | null },
+    ) => {
+      calls.push("send");
+      sent.push({ chatId, markdown, options });
       return botMessage(12);
     },
-    editRich: async (_chatId: number, _messageId: number, markdown: string) => {
-      edited.push(markdown);
-      return botMessage(11);
+    deleteMessage: async (chatId: number, messageId: number) => {
+      calls.push("delete");
+      deleted.push({ chatId, messageId });
+      return true;
     },
   } as unknown as TelegramClient;
 
@@ -123,19 +129,25 @@ test("edits the existing group progress message to a plain answer for a trivial 
 
   await complete.call(server, 7, { answer: "Ответ", threadId: "thread-1" });
 
-  expect(hasMessagesAfterCalls).toBe(0);
-  expect(sent).toEqual([]);
-  expect(edited).toEqual(["Ответ"]);
+  expect(calls).toEqual(["send", "delete"]);
+  expect(sent).toEqual([
+    {
+      chatId: -10042,
+      markdown: "<details><summary>Ход работы</summary>\n\n- Готово\n\n</details>\n\nОтвет",
+      options: { replyTo: 10, threadId: null },
+    },
+  ]);
+  expect(deleted).toEqual([{ chatId: -10042, messageId: 11 }]);
   expect(completed as { jobId: number; messageId: number; threadId: string } | null).toEqual({
     jobId: 7,
-    messageId: 11,
+    messageId: 12,
     threadId: "thread-1",
   });
 });
 
-test("uses the same editable details flow in private chats", async () => {
+test("uses the same replace-with-reply flow in private chats", async () => {
   const sent: string[] = [];
-  const edited: string[] = [];
+  const deleted: Array<{ chatId: number; messageId: number }> = [];
   let thinkingMessageId: number | null = null;
   let completedMessageId: number | null = null;
   let status = "";
@@ -165,11 +177,11 @@ test("uses the same editable details flow in private chats", async () => {
   const telegram = {
     sendRich: async (_chatId: number, markdown: string) => {
       sent.push(markdown);
-      return botMessage(21);
+      return botMessage(sent.length === 1 ? 21 : 22);
     },
-    editRich: async (_chatId: number, _messageId: number, markdown: string) => {
-      edited.push(markdown);
-      return botMessage(21);
+    deleteMessage: async (chatId: number, messageId: number) => {
+      deleted.push({ chatId, messageId });
+      return true;
     },
   } as unknown as TelegramClient;
 
@@ -189,9 +201,10 @@ test("uses the same editable details flow in private chats", async () => {
   await event.call(server, 7, { kind: "commentary", text: "Запускаю тесты" });
   await complete.call(server, 7, { answer: "Ответ", threadId: "thread-1" });
 
-  expect(sent).toEqual(["<details><summary>Ход работы</summary>\n\n- Проверяю код\n\n</details>"]);
-  expect(edited).toEqual([
+  expect(sent).toEqual([
+    "<details><summary>Ход работы</summary>\n\n- Проверяю код\n\n</details>",
     "<details><summary>Ход работы</summary>\n\n- Проверяю код\n- Запускаю тесты\n\n</details>\n\nОтвет",
   ]);
-  expect(completedMessageId as number | null).toBe(21);
+  expect(deleted).toEqual([{ chatId: 42, messageId: 21 }]);
+  expect(completedMessageId as number | null).toBe(22);
 });

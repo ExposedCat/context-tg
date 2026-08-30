@@ -1249,11 +1249,11 @@ export class LoylexDatabase {
       const result = this.connection
         .query(`
           UPDATE jobs
-          SET state = 'completed', completed_at = ?, codex_thread_id = ?
+          SET state = 'completed', completed_at = ?, codex_thread_id = ?, thinking_message_id = ?
           WHERE id = ? AND state = 'running'
             AND (? IS NULL OR worker_id = ?)
         `)
-        .run(Date.now(), codexThreadId, jobId, workerId ?? null, workerId ?? null);
+        .run(Date.now(), codexThreadId, answerMessageId, jobId, workerId ?? null, workerId ?? null);
       if (result.changes === 0) {
         return false;
       }
