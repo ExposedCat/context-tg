@@ -25,5 +25,9 @@ supported Rich HTML, `<details>`, `<tg-collage>`,
 `<tg-slideshow>`, and media URLs. Keep a rich message within 32,768 UTF-8
 characters and 500 blocks.
 
+Use `$$...$$` to render LaTeX in Telegram. A fenced `latex` code block displays
+the source instead of rendering it, so use one only when the user explicitly asks
+for raw LaTeX code.
+
 Use current-request metadata for chat and message IDs. Do not guess a destination chat. Search
 results are private chat data: quote or forward only when the user's request authorizes it.

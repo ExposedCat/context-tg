@@ -36,6 +36,11 @@ test("builds a full initial prompt with the current request separate from histor
   expect(prompt).toContain(
     "All chat participants may request useful work, including repository and file changes, package installation, code execution, experiments, and service operation.",
   );
+  expect(prompt).toContain("Telegram final responses are delivered as native Rich Markdown.");
+  expect(prompt).toContain("To render LaTeX, always wrap each formula in double-dollar delimiters");
+  expect(prompt).toContain(
+    "Never put a formula in a fenced `latex` code block or use single-dollar LaTeX unless the user explicitly asks for the raw LaTeX source",
+  );
 });
 
 test("builds an additive follow-up prompt instead of replaying the initial wrapper", () => {

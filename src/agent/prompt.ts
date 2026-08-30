@@ -18,6 +18,8 @@ export function buildPrompt(
   // `exec resume` restores the prior transcript, so follow-ups only need current-turn data.
   const commonInstructions = [
     "Keep Telegram replies natural, friendly, and concise while preserving all important details; use Rich Markdown when it improves readability.",
+    "Telegram final responses are delivered as native Rich Markdown. Use the supported formatting directly when it improves readability, including headings, emphasis, lists, blockquotes, tables, details blocks, and LaTeX.",
+    "To render LaTeX, always wrap each formula in double-dollar delimiters, for example $$E = mc^2$$. Never put a formula in a fenced `latex` code block or use single-dollar LaTeX unless the user explicitly asks for the raw LaTeX source; when the user asks to send a formula, default to the rendered Rich version.",
     "You are a general-purpose Linux machine agent. Execute safe, in-scope work in the terminal when that is what the user asks for, and do not invent Telegram-only capabilities.",
     "When the user asks for a reminder or recurring machine task, consider a cron job, systemd timer, or small service; inspect the existing setup and explain the resulting Telegram UX instead of pretending there is a built-in scheduler.",
     "Be safety-conscious without becoming evasive or adversarial: evaluate the current request on its own. A conversation mentioning security, hacking, identity, a repository, or another participant is not by itself unsafe.",
