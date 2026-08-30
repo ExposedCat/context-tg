@@ -2,6 +2,7 @@ import { Database } from "bun:sqlite";
 import type {
   AgentContextMode,
   AgentJob,
+  JsonObject,
   JsonValue,
   TelegramMessage,
   TelegramUpdate,
@@ -98,6 +99,18 @@ export type SearchResult = {
   userId: number | null;
   author: string;
   text: string;
+  forwardOrigin?: JsonObject;
+};
+
+type SearchRow = {
+  chat_id: number;
+  message_id: number;
+  date: number;
+  from_user_id: number | null;
+  from_display_name: string | null;
+  from_username: string | null;
+  text: string | null;
+  raw_json: string;
 };
 
 type UnknownRecord = Record<string, unknown>;
@@ -124,6 +137,12 @@ function parseObject(value: string): UnknownRecord {
   }
 }
 
+function forwardOrigin(rawJson: string): JsonObject | null {
+  const raw = parseObject(rawJson);
+  const origin = object(raw.forward_origin);
+  return origin as JsonObject | null;
+}
+
 function nestedAuthor(message: UnknownRecord): string {
   const sender = object(message.from) ?? object(message.sender_chat);
   if (!sender) {
@@ -134,6 +153,21 @@ function nestedAuthor(message: UnknownRecord): string {
     .filter((part): part is string => part !== null)
     .join(" ");
   return username ? `${name || username} (@${username})` : name || "unknown";
+}
+
+function searchResult(row: SearchRow): SearchResult {
+  const result: SearchResult = {
+    chatId: row.chat_id,
+    messageId: row.message_id,
+    date: row.date,
+    userId: row.from_user_id,
+    author: row.from_username
+      ? `${row.from_display_name ?? row.from_username} (@${row.from_username})`
+      : (row.from_display_name ?? "unknown"),
+    text: row.text ?? "",
+  };
+  const origin = forwardOrigin(row.raw_json);
+  return origin === null ? result : { ...result, forwardOrigin: origin };
 }
 
 function messageReference(message: UnknownRecord, label: string): string | null {
@@ -162,21 +196,22 @@ function rawRelations(rawJson: string): string {
   if (externalId !== null) {
     relations.push(`external_reply=#${externalId}`);
   }
-  const forward = object(raw.forward_origin);
+  const forward = forwardOrigin(rawJson);
   if (forward) {
     const origin =
-      object(forward.sender_user) ??
-      object(forward.sender_chat) ??
-      object(forward.sender_name) ??
-      forward;
+      object(forward.sender_user) ?? object(forward.sender_chat) ?? object(forward.chat) ?? forward;
     const originName =
       stringField(origin.username) ??
       ([stringField(origin.first_name), stringField(origin.last_name)]
         .filter((part): part is string => part !== null)
         .join(" ") ||
+        stringField(origin.title) ||
+        stringField(forward.sender_user_name) ||
         stringField(origin.type) ||
         "unknown");
-    relations.push(`forwarded_from=${JSON.stringify(originName)}`);
+    relations.push(
+      `forwarded_from=${JSON.stringify(originName)} forward_origin=${JSON.stringify(forward)}`,
+    );
   }
   return relations.join(" ");
 }
@@ -1263,19 +1298,9 @@ export class LoylexDatabase {
 
   search(query: string, chatId: number | null, limit: number): SearchResult[] {
     const rows = this.connection
-      .query<
-        {
-          chat_id: number;
-          message_id: number;
-          date: number;
-          from_user_id: number | null;
-          from_display_name: string | null;
-          from_username: string | null;
-          text: string | null;
-        },
-        [string, number | null, number | null, number]
-      >(`
-        SELECT m.chat_id, m.message_id, m.date, m.from_user_id, m.from_display_name, m.from_username, m.text
+      .query<SearchRow, [string, number | null, number | null, number]>(`
+        SELECT m.chat_id, m.message_id, m.date, m.from_user_id, m.from_display_name, m.from_username,
+               m.text, m.raw_json
         FROM messages_fts f
         JOIN messages m ON m.rowid = f.rowid
         WHERE messages_fts MATCH ? AND (? IS NULL OR m.chat_id = ?)
@@ -1283,49 +1308,21 @@ export class LoylexDatabase {
         LIMIT ?
       `)
       .all(query, chatId, chatId, limit);
-    return rows.map((row) => ({
-      chatId: row.chat_id,
-      messageId: row.message_id,
-      date: row.date,
-      userId: row.from_user_id,
-      author: row.from_username
-        ? `${row.from_display_name ?? row.from_username} (@${row.from_username})`
-        : (row.from_display_name ?? "unknown"),
-      text: row.text ?? "",
-    }));
+    return rows.map(searchResult);
   }
 
   recent(chatId: number, limit: number): SearchResult[] {
     const rows = this.connection
-      .query<
-        {
-          chat_id: number;
-          message_id: number;
-          date: number;
-          from_user_id: number | null;
-          from_display_name: string | null;
-          from_username: string | null;
-          text: string | null;
-        },
-        [number, number]
-      >(`
-        SELECT chat_id, message_id, date, from_user_id, from_display_name, from_username, text
+      .query<SearchRow, [number, number]>(`
+        SELECT chat_id, message_id, date, from_user_id, from_display_name, from_username,
+               text, raw_json
         FROM messages
         WHERE chat_id = ?
         ORDER BY date DESC, message_id DESC
         LIMIT ?
       `)
       .all(chatId, limit);
-    return rows.map((row) => ({
-      chatId: row.chat_id,
-      messageId: row.message_id,
-      date: row.date,
-      userId: row.from_user_id,
-      author: row.from_username
-        ? `${row.from_display_name ?? row.from_username} (@${row.from_username})`
-        : (row.from_display_name ?? "unknown"),
-      text: row.text ?? "",
-    }));
+    return rows.map(searchResult);
   }
 
   stats(): Record<string, number> {

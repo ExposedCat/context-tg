@@ -3,7 +3,12 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { LoylexDatabase } from "../src/gateway/database.ts";
-import type { TelegramMessage, TelegramUpdate } from "../src/shared/types.ts";
+import type {
+  JsonObject,
+  TelegramMessage,
+  TelegramMessageOrigin,
+  TelegramUpdate,
+} from "../src/shared/types.ts";
 
 const directories: string[] = [];
 
@@ -36,6 +41,22 @@ function botMessage(id: number, text: string): TelegramMessage {
     chat: { id: -10042, type: "supergroup", title: "Test" },
     from: { id: 99, is_bot: true, first_name: "Loylex" },
     text,
+  };
+}
+
+function forwardedMessage(id: number, text: string): TelegramMessage {
+  return {
+    ...message(id, text),
+    forward_origin: {
+      type: "user",
+      date: 1_700_000_500,
+      sender_user: {
+        id: 42,
+        is_bot: false,
+        first_name: "Chelokot",
+        username: "chelokot",
+      },
+    },
   };
 }
 
@@ -168,6 +189,74 @@ describe("LoylexDatabase", () => {
     expect(database.stats().messages).toBe(1);
     expect(database.search("исправленная", null, 10)[0]?.messageId).toBe(2);
     expect(database.search("первая", null, 10)).toHaveLength(0);
+    database.close();
+  });
+
+  test("exposes the full forward origin in archive results and context", () => {
+    const database = setup();
+    const forwarded = forwardedMessage(1, "пересланное сообщение");
+    const origin = forwarded.forward_origin as JsonObject;
+    database.archiveMessage(forwarded, "bot_api");
+
+    expect(database.recent(-10042, 1)[0]?.forwardOrigin).toEqual(origin);
+    expect(database.search("пересланное", -10042, 1)[0]?.forwardOrigin).toEqual(origin);
+
+    const current = message(2, "Лойлекс, покажи источник");
+    database.archiveMessage(current, "bot_api");
+    database.enqueue(56, current, "покажи источник", null);
+    const job = database.claimNext(10);
+    expect(job?.context).toContain('forwarded_from="chelokot"');
+    expect(job?.context).toContain('forward_origin={"type":"user"');
+    expect(job?.context).toContain('"sender_user":{"id":42');
+    database.close();
+  });
+
+  test("formats chat, channel, and hidden-user forward origins", () => {
+    const database = setup();
+    const origins = [
+      {
+        messageId: 1,
+        origin: {
+          type: "chat",
+          date: 1_700_000_501,
+          sender_chat: { id: -10042, type: "supergroup", title: "Test" },
+        },
+      },
+      {
+        messageId: 2,
+        origin: {
+          type: "channel",
+          date: 1_700_000_502,
+          chat: { id: -10077, type: "channel", title: "News" },
+          message_id: 987,
+        },
+      },
+      {
+        messageId: 3,
+        origin: {
+          type: "hidden_user",
+          date: 1_700_000_503,
+          sender_user_name: "Скрытый автор",
+        },
+      },
+    ] satisfies Array<{ messageId: number; origin: TelegramMessageOrigin }>;
+
+    for (const item of origins) {
+      const forwarded = message(item.messageId, `сообщение ${item.messageId}`);
+      forwarded.forward_origin = item.origin;
+      database.archiveMessage(forwarded, "bot_api");
+    }
+    const current = message(4, "Лойлекс, проверь типы пересылок");
+    database.archiveMessage(current, "bot_api");
+    database.enqueue(56, current, "проверь типы пересылок", null);
+
+    const job = database.claimNext(10);
+    for (const item of origins) {
+      expect(job?.context).toContain(`forward_origin=${JSON.stringify(item.origin)}`);
+      expect(
+        database.recent(-10042, 10).find((result) => result.messageId === item.messageId),
+      ).toMatchObject({ forwardOrigin: item.origin });
+    }
     database.close();
   });
 
