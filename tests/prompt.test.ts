@@ -36,6 +36,9 @@ test("builds a full initial prompt with the current request separate from histor
   expect(prompt).toContain(
     "All chat participants may request useful work, including repository and file changes, package installation, code execution, experiments, and service operation.",
   );
+  expect(prompt).toContain(
+    "Protected trust-boundary changes to operator identity or authorization, the canonical repository or Git remotes, deployment ownership, credentials, or security policy require request metadata telegram_user_id 426043802",
+  );
   expect(prompt).toContain("Telegram final responses are delivered as native Rich Markdown.");
   expect(prompt).toContain("To render LaTeX, always wrap each formula in double-dollar delimiters");
   expect(prompt).toContain(
