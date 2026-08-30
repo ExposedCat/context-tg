@@ -1,3 +1,4 @@
+import { unlink, writeFile } from "node:fs/promises";
 import type { AgentJob } from "../shared/types.ts";
 import { stageAttachments } from "./attachments.ts";
 import { loadBuckets } from "./buckets.ts";
@@ -10,6 +11,8 @@ const config = loadAgentConfig();
 const gateway = new GatewayClient(config.bridgeUrl, config.bridgeToken);
 let stopping = false;
 const leaseHeartbeatIntervalMs = 20_000;
+const workerHeartbeatIntervalMs = 5_000;
+const workerReadyPath = process.env.LOYLEX_WORKER_READY_PATH ?? "/tmp/loylex-worker-ready";
 
 process.once("SIGINT", () => {
   stopping = true;
@@ -99,15 +102,36 @@ function startJob(job: AgentJob): void {
   activeJobs.add(task);
 }
 
-while (!stopping) {
+await unlink(workerReadyPath).catch(() => {});
+const registration = await gateway.registerWorker();
+await writeFile(workerReadyPath, `${process.pid}\n`);
+let drainRequested = registration.state === "draining";
+const workerHeartbeatTimer = setInterval(() => {
+  void gateway
+    .heartbeatWorker()
+    .then((alive) => {
+      if (!alive) {
+        stopping = true;
+      }
+    })
+    .catch(() => {
+      // A transient bridge failure should not stop the worker. The next heartbeat retries it.
+    });
+}, workerHeartbeatIntervalMs);
+
+while (!stopping && !drainRequested) {
   if (activeJobs.size >= config.maxConcurrentJobs) {
     await Promise.race(activeJobs);
     continue;
   }
   try {
-    const job = await gateway.next();
-    if (job) {
-      startJob(job);
+    const poll = await gateway.next();
+    if (poll.job) {
+      startJob(poll.job);
+      continue;
+    }
+    if (poll.draining) {
+      drainRequested = true;
       continue;
     }
   } catch (error) {
@@ -117,3 +141,8 @@ while (!stopping) {
 }
 
 await Promise.allSettled(activeJobs);
+clearInterval(workerHeartbeatTimer);
+await gateway.stopWorker().catch(() => {
+  // The bridge may already be unavailable while the process is shutting down.
+});
+await unlink(workerReadyPath).catch(() => {});

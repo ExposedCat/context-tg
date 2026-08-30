@@ -114,6 +114,52 @@ describe("LoylexDatabase", () => {
     database.close();
   });
 
+  test("keeps old-generation work with the draining worker", () => {
+    const database = setup();
+    expect(database.registerWorker("blue", 1_000)).toEqual({ generation: 1, state: "active" });
+
+    const old = message(1, "старая задача");
+    const oldFollowUp = message(2, "старое продолжение");
+    database.enqueue(55, old, "старая", null);
+    database.enqueue(56, oldFollowUp, "продолжай старое", "thread-old");
+
+    const oldJob = database.claimNext(10, "blue");
+    expect(oldJob?.messageId).toBe(1);
+    database.appendStatus(oldJob?.id ?? 0, "commentary: работаю", "thread-old", "blue");
+
+    expect(database.registerWorker("green", 2_000)).toEqual({ generation: 2, state: "active" });
+    const newMessage = message(3, "новая задача");
+    database.enqueue(57, newMessage, "новая", null);
+
+    expect(database.claimNext(10, "blue")).toBeNull();
+    expect(database.shouldDrainWorker("blue")).toBe(false);
+
+    expect(database.complete(oldJob?.id ?? 0, 101, "thread-old", "blue")).toBe(true);
+    const oldContinuation = database.claimNext(10, "blue");
+    expect(oldContinuation?.messageId).toBe(2);
+    expect(database.complete(oldContinuation?.id ?? 0, 102, "thread-old", "blue")).toBe(true);
+    expect(database.shouldDrainWorker("blue")).toBe(true);
+
+    const newJob = database.claimNext(10, "green");
+    expect(newJob?.messageId).toBe(3);
+    expect(database.complete(newJob?.id ?? 0, 103, "thread-new", "green")).toBe(true);
+    database.close();
+  });
+
+  test("reassigns queued old-generation work when a worker stops", () => {
+    const database = setup();
+    database.registerWorker("blue", 1_000);
+    const old = message(1, "старая очередь");
+    database.enqueue(55, old, "старая", null);
+    database.registerWorker("green", 2_000);
+
+    expect(database.stopWorker("blue", 3_000)).toBe(true);
+    const reassigned = database.claimNext(10, "green");
+    expect(reassigned?.messageId).toBe(1);
+    expect(database.complete(reassigned?.id ?? 0, 101, "thread-new", "green")).toBe(true);
+    database.close();
+  });
+
   test("updates edited messages without duplicating them", () => {
     const database = setup();
     database.archiveMessage(message(2, "первая версия"), "bot_api");

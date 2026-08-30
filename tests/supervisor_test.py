@@ -42,6 +42,33 @@ class SupervisorTest(unittest.TestCase):
         with self.assertRaises(SUPERVISOR.SupervisorError):
             SUPERVISOR.selected_components("host")
 
+    def test_renders_distinct_draining_agent_slots(self) -> None:
+        content = (
+            "[Unit]\n"
+            "Description=Loylex persistent Codex agent\n"
+            "[Container]\n"
+            "ContainerName=loylex-agent\n"
+            "Environment=CODEX_MODEL=test\n"
+            "NoNewPrivileges=false\n"
+            "[Service]\n"
+            "Restart=always\n"
+        )
+        blue = SUPERVISOR.render_agent_slot(content, "blue")
+        green = SUPERVISOR.render_agent_slot(content, "green")
+        self.assertIn("Description=Loylex persistent Codex agent (blue)", blue)
+        self.assertIn("ContainerName=loylex-agent-blue", blue)
+        self.assertIn("Environment=LOYLEX_WORKER_SLOT=blue", blue)
+        self.assertIn("Restart=on-failure", blue)
+        self.assertIn("ContainerName=loylex-agent-green", green)
+        self.assertIn("Environment=LOYLEX_WORKER_SLOT=green", green)
+        self.assertNotIn("LOYLEX_WORKER_SLOT=blue", green)
+
+    def test_rejects_invalid_agent_slot_quadlet(self) -> None:
+        with self.assertRaises(SUPERVISOR.SupervisorError):
+            SUPERVISOR.render_agent_slot("[Container]\nContainerName=loylex-agent\n", "blue")
+        with self.assertRaises(SUPERVISOR.SupervisorError):
+            SUPERVISOR.render_agent_slot("[Unit]\nDescription=agent\n", "blue")
+
 
 if __name__ == "__main__":
     unittest.main()

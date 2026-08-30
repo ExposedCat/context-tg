@@ -57,10 +57,37 @@ export class GatewayServer {
     }
 
     try {
+      if (request.method === "POST" && url.pathname === "/v1/workers/register") {
+        const currentWorkerId = workerId(request);
+        if (!currentWorkerId) {
+          return json({ error: "x-loylex-worker-id is required" }, 400);
+        }
+        return json(this.database.registerWorker(currentWorkerId));
+      }
+
+      if (request.method === "POST" && url.pathname === "/v1/workers/heartbeat") {
+        const currentWorkerId = workerId(request);
+        return json({
+          alive: currentWorkerId !== undefined && this.database.heartbeatWorker(currentWorkerId),
+        });
+      }
+
+      if (request.method === "POST" && url.pathname === "/v1/workers/stop") {
+        const currentWorkerId = workerId(request);
+        return json({
+          stopped: currentWorkerId !== undefined && this.database.stopWorker(currentWorkerId),
+        });
+      }
+
       if (request.method === "GET" && url.pathname === "/v1/jobs/next") {
-        return json(
-          this.database.claimNext(this.config.contextMessages, workerId(request) ?? null),
+        const currentWorkerId = workerId(request);
+        const response = json(
+          this.database.claimNext(this.config.contextMessages, currentWorkerId ?? null),
         );
+        if (currentWorkerId !== undefined && this.database.shouldDrainWorker(currentWorkerId)) {
+          response.headers.set("x-loylex-drain", "true");
+        }
+        return response;
       }
 
       const cancellationMatch = url.pathname.match(/^\/v1\/jobs\/(\d+)\/cancelled$/);

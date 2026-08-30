@@ -1,5 +1,5 @@
 [Unit]
-Description=Loylex persistent Codex agent
+Description=Loylex persistent Codex agent (green)
 After=network-online.target loylex-gateway.service
 Wants=network-online.target
 Requires=loylex-gateway.service loylex-supervisor.service
@@ -7,7 +7,7 @@ After=loylex-supervisor.service
 
 [Container]
 Image=ghcr.io/chelokot/loylex-agent:main
-ContainerName=loylex-agent
+ContainerName=loylex-agent-green
 AutoUpdate=registry
 Network=loylex.network
 Volume=loylex-agent-home.volume:/home/loylex:Z,U
@@ -19,6 +19,7 @@ Environment=LOYLEX_BRIDGE_TOKEN_FILE=/run/secrets/bridge_token
 Environment=LOYLEX_BRIDGE_URL=http://loylex-gateway:8787
 Environment=LOYLEX_SUPERVISOR_URL=http://host.containers.internal:8790
 Environment=LOYLEX_SUPERVISOR_TOKEN_FILE=/run/secrets/supervisor_token
+Environment=LOYLEX_WORKER_SLOT=green
 Environment=CODEX_MODEL=gpt-5.6-luna
 Environment=CODEX_REASONING_EFFORT=max
 Environment=LOYLEX_MAX_CONCURRENT_JOBS=50

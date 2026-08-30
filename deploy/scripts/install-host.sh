@@ -98,4 +98,8 @@ runuser -u loylex -- env XDG_RUNTIME_DIR="$runtime_directory" systemctl --user d
 runuser -u loylex -- env XDG_RUNTIME_DIR="$runtime_directory" \
   systemctl --user enable podman-auto-update.timer loylex-backup.timer loylex-supervisor.service
 runuser -u loylex -- env XDG_RUNTIME_DIR="$runtime_directory" \
+  systemctl --user disable loylex-agent.service loylex-agent-green.service >/dev/null 2>&1 || true
+runuser -u loylex -- env XDG_RUNTIME_DIR="$runtime_directory" \
+  systemctl --user enable loylex-agent-blue.service
+runuser -u loylex -- env XDG_RUNTIME_DIR="$runtime_directory" \
   systemctl --user start podman-auto-update.timer loylex-backup.timer loylex-supervisor.service

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { AgentCompletion, AgentEvent, AgentJob } from "../shared/types.ts";
+import type { AgentCompletion, AgentEvent, AgentJob, WorkerRegistration } from "../shared/types.ts";
 
 export class GatewayClient {
   private readonly workerId = randomUUID();
@@ -9,8 +9,12 @@ export class GatewayClient {
     private readonly token: string,
   ) {}
 
-  private async request<T>(path: string, init: RequestInit = {}, timeoutMs = 65_000): Promise<T> {
-    const response = await fetch(this.baseUrl + path, {
+  private fetchResponse(
+    path: string,
+    init: RequestInit = {},
+    timeoutMs = 65_000,
+  ): Promise<Response> {
+    return fetch(this.baseUrl + path, {
       ...init,
       headers: {
         authorization: `Bearer ${this.token}`,
@@ -19,16 +23,50 @@ export class GatewayClient {
       },
       signal: init.signal ?? AbortSignal.timeout(timeoutMs),
     });
+  }
+
+  private async request<T>(path: string, init: RequestInit = {}, timeoutMs = 65_000): Promise<T> {
+    const response = await this.fetchResponse(path, init, timeoutMs);
     if (!response.ok) {
       throw new Error(`Gateway ${response.status}: ${await response.text()}`);
     }
     return (await response.json()) as T;
   }
 
-  next(): Promise<AgentJob | null> {
-    return this.request<AgentJob | null>("/v1/jobs/next", {
+  async registerWorker(): Promise<WorkerRegistration> {
+    return this.request<WorkerRegistration>("/v1/workers/register", {
+      method: "POST",
       headers: { "x-loylex-worker-id": this.workerId },
     });
+  }
+
+  async heartbeatWorker(): Promise<boolean> {
+    const result = await this.request<{ alive: boolean }>("/v1/workers/heartbeat", {
+      method: "POST",
+      headers: { "x-loylex-worker-id": this.workerId },
+    });
+    return result.alive;
+  }
+
+  async stopWorker(): Promise<boolean> {
+    const result = await this.request<{ stopped: boolean }>("/v1/workers/stop", {
+      method: "POST",
+      headers: { "x-loylex-worker-id": this.workerId },
+    });
+    return result.stopped;
+  }
+
+  async next(): Promise<{ job: AgentJob | null; draining: boolean }> {
+    const response = await this.fetchResponse("/v1/jobs/next", {
+      headers: { "x-loylex-worker-id": this.workerId },
+    });
+    if (!response.ok) {
+      throw new Error(`Gateway ${response.status}: ${await response.text()}`);
+    }
+    return {
+      job: (await response.json()) as AgentJob | null,
+      draining: response.headers.get("x-loylex-drain") === "true",
+    };
   }
 
   async isCancelled(jobId: number): Promise<boolean> {

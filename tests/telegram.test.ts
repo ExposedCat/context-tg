@@ -24,3 +24,22 @@ test("does not downgrade a rejected rich send to an unformatted message", async 
 
   expect(requests).toEqual(["https://api.telegram.org/bottest-token/sendRichMessage"]);
 });
+
+test("treats an idempotent rich edit as success", async () => {
+  globalThis.fetch = (async (_input: string | URL | Request) =>
+    Response.json(
+      {
+        ok: false,
+        error_code: 400,
+        description:
+          "Bad Request: message is not modified: specified new message content and reply markup are exactly the same as a current content and reply markup of the message",
+      },
+      { status: 400 },
+    )) as unknown as typeof fetch;
+
+  const client = new TelegramClient("test-token");
+  const result = await client.editRich(42, 17, "<details>same</details>");
+
+  expect(result.message_id).toBe(17);
+  expect(result.chat.id).toBe(42);
+});

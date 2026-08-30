@@ -14,12 +14,13 @@ archived chat, and deliver native Telegram Rich Messages.
 Telegram Bot API 10.2
         |
         v
-gateway container                 agent container
-- only holder of bot token        - Codex gpt-5.6-luna / max
-- raw update archive              - Fedora 44 workbench
-- SQLite WAL + FTS5               - terminal, sudo, packages, subagents
-- trigger/thread routing          - private memory and buckets
-- rich streaming/editing          - repo-scoped Git push key
+gateway container                 agent blue / agent green
+- only holder of bot token        - one active worker generation
+- raw update archive              - old generation drains its jobs
+- SQLite WAL + FTS5               - Fedora 44 workbench
+- trigger/thread routing          - terminal, sudo, packages, subagents
+- rich streaming/editing          - private memory and buckets
+                                  - repo-scoped Git push key
         |                                  |
         +------ authenticated bridge ------+
                           |
@@ -37,8 +38,11 @@ the component holding the secret.
 
 An authenticated host-local supervisor lets the agent restart or deploy only the Loylex
 agent and gateway. It validates workspace changes, pins pulled images by digest, verifies
-container health, and rolls Quadlet image references back when deployment fails. The agent
-never receives a Podman socket, systemd bus, general host shell, or host reboot capability.
+container health, and performs a blue-green agent rollover: the new slot starts and registers
+with the gateway first, new jobs go to its generation, and the old slot drains its own jobs
+before it is stopped. If the drain cannot finish, the new generation remains live and the
+operation reports the timeout. The agent never receives a Podman socket, systemd bus, general
+host shell, or host reboot capability.
 
 Root inside the agent is root only in a rootless user namespace. It can maintain its own
 computer but cannot reboot or kill the Rocky Linux host.
@@ -77,8 +81,11 @@ loylex system deploy all
 Restart and deploy operations default to a 15-second delay so the scheduling Telegram task
 can send its final response. An optional final argument changes the delay from 5 to 300
 seconds. Deploying runs the repository checks for agent changes, pulls the selected `main`
-images, records exact digests in the live Quadlets, restarts the data plane, and performs live
-health checks. The supervisor itself stays outside both containers.
+images, records exact digests in the live Quadlets, and performs live health checks. Agent
+restart/deploy operations use the inactive blue or green slot and keep the active slot serving
+until its in-flight and queued generation work has drained. During that short overlap both
+agent containers share the persistent volumes and their resource limits apply simultaneously.
+The supervisor itself stays outside both containers.
 
 ## Telegram behavior
 
@@ -134,9 +141,10 @@ podman build -f containers/agent.Containerfile -t loylex-agent .
 
 Reviewed main-branch pushes test the TypeScript runtime and publish
 `ghcr.io/chelokot/loylex-gateway:main` and
-`ghcr.io/chelokot/loylex-agent:main`. Rootless Podman auto-update replaces the agent
-container while leaving all volumes intact. Gateway updates are deliberately pinned by
-digest and require updating its Quadlet after reviewing the secret-holding code.
+`ghcr.io/chelokot/loylex-agent:main`. Rootless Podman auto-update updates agent slot images
+while leaving all volumes intact; an explicit supervisor rollout controls which slot receives
+new work. Gateway updates are deliberately pinned by digest and require updating its Quadlet
+after reviewing the secret-holding code.
 
 ## Host installation
 
@@ -159,8 +167,9 @@ The agent still needs:
    writable;
 2. `$CODEX_HOME/auth.json` created with `codex login --device-auth` or copied
    through a trusted channel;
-3. the two Quadlet services started with `systemctl --user start loylex-gateway
-   loylex-agent`.
+3. the gateway and the initially enabled blue agent Quadlet started with
+   `systemctl --user start loylex-gateway loylex-agent-blue`. The supervisor can migrate an
+   existing `loylex-agent.service` on the first agent restart/deploy.
 
 Never commit either Telegram or Codex credentials.
 

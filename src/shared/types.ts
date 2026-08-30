@@ -74,3 +74,8 @@ export type AgentCompletion = {
   answer: string;
   threadId: string;
 };
+
+export type WorkerRegistration = {
+  generation: number;
+  state: "active" | "draining";
+};

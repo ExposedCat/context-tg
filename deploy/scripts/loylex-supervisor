@@ -40,6 +40,14 @@ CONTAINER_NAMES = {
     "agent": "loylex-agent",
     "gateway": "loylex-gateway",
 }
+AGENT_SLOTS = ("blue", "green")
+AGENT_SLOT_UNITS = {slot: f"loylex-agent-{slot}.service" for slot in AGENT_SLOTS}
+AGENT_SLOT_CONTAINERS = {slot: f"loylex-agent-{slot}" for slot in AGENT_SLOTS}
+AGENT_SLOT_QUADLETS = {
+    slot: QUADLET_DIRECTORY / f"loylex-agent-{slot}.container" for slot in AGENT_SLOTS
+}
+AGENT_DRAIN_TIMEOUT_SECONDS = 360
+ACTIVE_SERVICE_STATES = {"active", "activating", "deactivating", "reloading"}
 
 
 class SupervisorError(Exception):
@@ -73,6 +81,44 @@ def replace_image_line(content: str, repository: str, reference: str) -> str:
     return "\n".join(lines) + "\n"
 
 
+def render_agent_slot(content: str, slot: str) -> str:
+    if slot not in AGENT_SLOTS:
+        raise SupervisorError(f"Unsupported agent slot: {slot}")
+
+    lines = content.splitlines()
+    container_indexes = [index for index, line in enumerate(lines) if line.startswith("ContainerName=")]
+    if len(container_indexes) != 1:
+        raise SupervisorError("Expected exactly one ContainerName line in the agent Quadlet")
+    container_index = container_indexes[0]
+    lines[container_index] = f"ContainerName=loylex-agent-{slot}"
+
+    description_indexes = [index for index, line in enumerate(lines) if line.startswith("Description=")]
+    if len(description_indexes) != 1:
+        raise SupervisorError("Expected exactly one Description line in the agent Quadlet")
+    lines[description_indexes[0]] = f"Description=Loylex persistent Codex agent ({slot})"
+
+    restart_indexes = [index for index, line in enumerate(lines) if line.startswith("Restart=")]
+    if len(restart_indexes) != 1:
+        raise SupervisorError("Expected exactly one Restart line in the agent Quadlet")
+    lines[restart_indexes[0]] = "Restart=on-failure"
+
+    slot_environment_indexes = [
+        index for index, line in enumerate(lines) if line.startswith("Environment=LOYLEX_WORKER_SLOT=")
+    ]
+    if len(slot_environment_indexes) > 1:
+        raise SupervisorError("Expected at most one LOYLEX_WORKER_SLOT environment line")
+    environment_line = f"Environment=LOYLEX_WORKER_SLOT={slot}"
+    if slot_environment_indexes:
+        lines[slot_environment_indexes[0]] = environment_line
+    else:
+        no_new_privileges_index = next(
+            (index for index, line in enumerate(lines) if line.startswith("NoNewPrivileges=")),
+            len(lines),
+        )
+        lines.insert(no_new_privileges_index, environment_line)
+    return "\n".join(lines) + "\n"
+
+
 def selected_components(scope: str) -> list[str]:
     if scope == "all":
         return ["gateway", "agent"]
@@ -81,31 +127,51 @@ def selected_components(scope: str) -> list[str]:
     raise SupervisorError(f"Unsupported scope: {scope}")
 
 
+def service_state(unit: str) -> str:
+    result = subprocess.run(
+        ["systemctl", "--user", "is-active", unit],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    return result.stdout.strip() or result.stderr.strip() or "unknown"
+
+
 class Supervisor:
     def __init__(self) -> None:
         self.lock = threading.Lock()
         self.worker: threading.Timer | None = None
+        previous_state: dict[str, Any] = {}
+        try:
+            loaded = json.loads(STATE_PATH.read_text())
+            if isinstance(loaded, dict):
+                previous_state = loaded
+        except (OSError, json.JSONDecodeError):
+            pass
+        saved_slot = previous_state.get("activeAgentSlot")
+        self.active_agent_slot: str | None = saved_slot if saved_slot in AGENT_SLOTS else None
         self.state: dict[str, Any] = {
             "state": "idle",
             "operation": None,
             "scope": None,
             "updatedAt": int(time.time()),
+            "activeAgentSlot": self.active_agent_slot,
         }
         self._write_state()
 
     def status(self) -> dict[str, Any]:
-        services: dict[str, str] = {}
-        for component, unit in SERVICE_UNITS.items():
-            result = subprocess.run(
-                ["systemctl", "--user", "is-active", unit],
-                check=False,
-                capture_output=True,
-                text=True,
-            )
-            services[component] = result.stdout.strip() or "unknown"
+        services = {component: service_state(unit) for component, unit in SERVICE_UNITS.items()}
+        for slot, unit in AGENT_SLOT_UNITS.items():
+            services[f"agent-{slot}"] = service_state(unit)
+        try:
+            active_slot = self._current_agent_slot()
+        except SupervisorError:
+            active_slot = None
+        if active_slot is not None:
+            services["agent"] = service_state(AGENT_SLOT_UNITS[active_slot])
         with self.lock:
             operation = dict(self.state)
-        return {"services": services, "operation": operation}
+        return {"services": services, "agentSlot": active_slot, "operation": operation}
 
     def schedule(self, operation: str, scope: str, delay_seconds: int) -> dict[str, Any]:
         selected_components(scope)
@@ -121,6 +187,7 @@ class Supervisor:
                 "operation": operation,
                 "scope": scope,
                 "updatedAt": int(time.time()),
+                "activeAgentSlot": self.active_agent_slot,
             }
             self._write_state()
             self.worker = threading.Timer(delay_seconds, self._execute, args=(operation, scope))
@@ -139,10 +206,166 @@ class Supervisor:
         except Exception as error:
             self._set_state("failed", operation, scope, str(error))
 
+    @staticmethod
+    def _atomic_write(path: Path, content: str, suffix: str = ".new") -> None:
+        temporary = path.with_suffix(f"{path.suffix}{suffix}")
+        temporary.write_text(content)
+        os.replace(temporary, path)
+
+    def _ensure_agent_slots(self) -> None:
+        legacy_quadlet = QUADLET_DIRECTORY / "loylex-agent.container"
+        legacy_content: str | None = None
+        if legacy_quadlet.exists():
+            legacy_content = legacy_quadlet.read_text()
+
+        for slot, quadlet in AGENT_SLOT_QUADLETS.items():
+            if not quadlet.exists():
+                if legacy_content is None:
+                    raise SupervisorError(f"Missing agent Quadlet: {quadlet}")
+                self._atomic_write(quadlet, render_agent_slot(legacy_content, slot))
+            else:
+                content = quadlet.read_text()
+                expected_container = f"ContainerName=loylex-agent-{slot}"
+                expected_environment = f"Environment=LOYLEX_WORKER_SLOT={slot}"
+                if expected_container not in content or expected_environment not in content:
+                    raise SupervisorError(f"Agent slot Quadlet is not configured for {slot}: {quadlet}")
+
+        if legacy_content is not None and "Restart=always" in legacy_content:
+            self._atomic_write(
+                legacy_quadlet,
+                legacy_content.replace("Restart=always", "Restart=on-failure", 1),
+            )
+
+    def _current_agent_slot(self) -> str | None:
+        saved_slot = self.active_agent_slot
+        running_slots = [
+            slot for slot, unit in AGENT_SLOT_UNITS.items() if service_state(unit) in ACTIVE_SERVICE_STATES
+        ]
+        if saved_slot in AGENT_SLOTS:
+            if service_state(AGENT_SLOT_UNITS[saved_slot]) in ACTIVE_SERVICE_STATES:
+                return saved_slot
+            if len(running_slots) == 1:
+                self.active_agent_slot = running_slots[0]
+                return running_slots[0]
+            return saved_slot
+        if len(running_slots) == 1:
+            self.active_agent_slot = running_slots[0]
+            return running_slots[0]
+        if len(running_slots) > 1:
+            raise SupervisorError("Both agent slots are active but no active slot is recorded")
+        return None
+
+    def _current_agent_unit(self) -> str:
+        slot = self._current_agent_slot()
+        if slot is not None:
+            return AGENT_SLOT_UNITS[slot]
+        return SERVICE_UNITS["agent"]
+
+    def _current_agent_container(self) -> str:
+        slot = self._current_agent_slot()
+        if slot is not None:
+            return AGENT_SLOT_CONTAINERS[slot]
+        return CONTAINER_NAMES["agent"]
+
+    def _inactive_agent_slot(self) -> str:
+        current = self._current_agent_slot()
+        if current is None:
+            candidates = list(AGENT_SLOTS)
+        else:
+            candidates = [slot for slot in AGENT_SLOTS if slot != current]
+        for slot in candidates:
+            if service_state(AGENT_SLOT_UNITS[slot]) not in ACTIVE_SERVICE_STATES:
+                return slot
+        raise SupervisorError("No inactive agent slot is available; the draining slot may still be running")
+
+    def _check_agent(self) -> None:
+        run_command(["podman", "exec", self._current_agent_container(), "bun", "run", "check"])
+
+    def _disable_unit(self, unit: str) -> None:
+        result = subprocess.run(
+            ["systemctl", "--user", "disable", unit],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0 and "not found" not in (result.stderr + result.stdout).lower():
+            detail = result.stderr.strip() or result.stdout.strip() or f"exit code {result.returncode}"
+            raise SupervisorError(f"systemctl disable failed: {detail}")
+
+    def _wait_inactive(self, unit: str, timeout: int = AGENT_DRAIN_TIMEOUT_SECONDS) -> None:
+        deadline = time.monotonic() + timeout
+        last_state = "unknown"
+        while time.monotonic() < deadline:
+            last_state = service_state(unit)
+            if last_state not in ACTIVE_SERVICE_STATES:
+                return
+            time.sleep(2)
+        raise SupervisorError(f"{unit} did not drain within {timeout} seconds (state: {last_state})")
+
+    def _remember_active_agent_slot(self, slot: str) -> None:
+        with self.lock:
+            self.active_agent_slot = slot
+            self.state["activeAgentSlot"] = slot
+            self.state["updatedAt"] = int(time.time())
+            self._write_state()
+
+    def _roll_agent(self, new_slot: str | None = None) -> None:
+        self._ensure_agent_slots()
+        run_command(["systemctl", "--user", "daemon-reload"])
+        old_slot = self._current_agent_slot()
+        old_unit: str | None
+        if old_slot is not None:
+            old_unit = AGENT_SLOT_UNITS[old_slot]
+        elif service_state(SERVICE_UNITS["agent"]) in ACTIVE_SERVICE_STATES:
+            old_unit = SERVICE_UNITS["agent"]
+        else:
+            old_unit = None
+
+        target = new_slot or self._inactive_agent_slot()
+        if target not in AGENT_SLOTS:
+            raise SupervisorError(f"Unsupported agent slot: {target}")
+        if old_slot == target:
+            raise SupervisorError(f"Agent slot {target} is already active")
+        target_unit = AGENT_SLOT_UNITS[target]
+        if service_state(target_unit) in ACTIVE_SERVICE_STATES:
+            raise SupervisorError(f"Target agent slot is still active: {target_unit}")
+
+        started = False
+        committed = False
+        try:
+            run_command(["systemctl", "--user", "start", target_unit], timeout=900)
+            started = True
+            self._wait_healthy(target)
+            # The new process registers with the gateway before it starts polling. From this
+            # point on, new jobs have the new generation while the old worker can drain its own.
+            self._remember_active_agent_slot(target)
+            committed = True
+            run_command(["systemctl", "--user", "enable", target_unit])
+            if old_unit is not None:
+                self._disable_unit(old_unit)
+                if old_slot is None:
+                    # The legacy worker has no generation drain endpoint. SIGTERM still lets
+                    # the current process finish its active jobs before its service exits.
+                    run_command(["systemctl", "--user", "stop", old_unit], timeout=AGENT_DRAIN_TIMEOUT_SECONDS)
+                self._wait_inactive(old_unit)
+        except Exception:
+            if started and not committed:
+                subprocess.run(
+                    ["systemctl", "--user", "stop", target_unit],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    timeout=AGENT_DRAIN_TIMEOUT_SECONDS,
+                )
+            raise
+
     def _deploy(self, scope: str) -> None:
         components = selected_components(scope)
+        target_slot: str | None = None
         if "agent" in components:
-            run_command(["podman", "exec", "loylex-agent", "bun", "run", "check"])
+            self._ensure_agent_slots()
+            target_slot = self._inactive_agent_slot()
+            self._check_agent()
 
         replacements: dict[Path, tuple[str, str]] = {}
         originals: dict[Path, str] = {}
@@ -153,50 +376,65 @@ class Supervisor:
             digest = run_command(["podman", "image", "inspect", tag, "--format", "{{.Digest}}"])
             if not digest.startswith("sha256:") or len(digest) != 71:
                 raise SupervisorError(f"Invalid digest returned for {repository}")
-            quadlet = QUADLET_DIRECTORY / f"loylex-{component}.container"
+            quadlet = (
+                AGENT_SLOT_QUADLETS[target_slot]
+                if component == "agent" and target_slot is not None
+                else QUADLET_DIRECTORY / f"loylex-{component}.container"
+            )
             original = quadlet.read_text()
             reference = f"{repository}@{digest}"
             replacements[quadlet] = (original, replace_image_line(original, repository, reference))
             originals[quadlet] = original
 
+        agent_committed = False
         try:
             for quadlet, (_, updated) in replacements.items():
-                temporary = quadlet.with_suffix(f"{quadlet.suffix}.new")
-                temporary.write_text(updated)
-                os.replace(temporary, quadlet)
+                self._atomic_write(quadlet, updated)
             run_command(["systemctl", "--user", "daemon-reload"])
-            self._restart(scope)
+            if "gateway" in components:
+                self._restart_gateway()
+            if "agent" in components:
+                self._roll_agent(target_slot)
+                agent_committed = True
         except Exception:
+            # Once the new slot has registered, it is the live generation. Keep that
+            # slot and its image intact so a failed drain never rolls the queue backwards.
+            if agent_committed or (target_slot is not None and self.active_agent_slot == target_slot):
+                raise
             for quadlet, original in originals.items():
-                temporary = quadlet.with_suffix(f"{quadlet.suffix}.rollback")
-                temporary.write_text(original)
-                os.replace(temporary, quadlet)
+                self._atomic_write(quadlet, original, ".rollback")
             run_command(["systemctl", "--user", "daemon-reload"])
-            self._restart(scope)
+            if "gateway" in components:
+                self._restart_gateway()
             raise
 
     def _restart(self, scope: str) -> None:
         components = selected_components(scope)
+        if "gateway" in components:
+            self._restart_gateway()
         if "agent" in components:
-            run_command(["podman", "exec", "loylex-agent", "bun", "run", "check"])
-        for component in components:
-            unit = SERVICE_UNITS[component]
-            run_command(["systemctl", "--user", "restart", unit])
-            self._wait_healthy(component)
+            self._check_agent()
+            self._roll_agent()
+
+    def _restart_gateway(self) -> None:
+        run_command(["systemctl", "--user", "restart", SERVICE_UNITS["gateway"]])
+        self._wait_healthy("gateway")
 
     def _wait_healthy(self, component: str) -> None:
-        unit = SERVICE_UNITS[component]
-        container = CONTAINER_NAMES[component]
+        if component in AGENT_SLOTS:
+            unit = AGENT_SLOT_UNITS[component]
+            container = AGENT_SLOT_CONTAINERS[component]
+        elif component == "agent":
+            unit = self._current_agent_unit()
+            container = self._current_agent_container()
+        else:
+            unit = SERVICE_UNITS[component]
+            container = CONTAINER_NAMES[component]
         deadline = time.monotonic() + 180
         last_error = "service did not become healthy"
         while time.monotonic() < deadline:
-            active = subprocess.run(
-                ["systemctl", "--user", "is-active", unit],
-                check=False,
-                capture_output=True,
-                text=True,
-            )
-            if active.returncode == 0:
+            active = service_state(unit)
+            if active == "active":
                 health = subprocess.run(
                     ["podman", "healthcheck", "run", container],
                     check=False,
@@ -207,7 +445,7 @@ class Supervisor:
                     return
                 last_error = health.stderr.strip() or health.stdout.strip() or last_error
             else:
-                last_error = active.stdout.strip() or active.stderr.strip() or last_error
+                last_error = active or last_error
             time.sleep(2)
         raise SupervisorError(f"{component} failed health verification: {last_error}")
 
@@ -224,6 +462,7 @@ class Supervisor:
                 "operation": operation,
                 "scope": scope,
                 "updatedAt": int(time.time()),
+                "activeAgentSlot": self.active_agent_slot,
             }
             if error is not None:
                 self.state["error"] = error

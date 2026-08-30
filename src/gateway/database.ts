@@ -5,11 +5,13 @@ import type {
   JsonValue,
   TelegramMessage,
   TelegramUpdate,
+  WorkerRegistration,
 } from "../shared/types.ts";
 
 export type JobState = "pending" | "running" | "completed" | "failed" | "cancelled";
 
 export const jobLeaseDurationMs = 60_000;
+export const workerLeaseDurationMs = 15_000;
 
 export type JobSummary = {
   id: number;
@@ -35,6 +37,20 @@ type JobRow = {
   prompt: string;
   resume_thread_id: string | null;
   attachments_json: string;
+  worker_generation: number;
+};
+
+type WorkerRow = {
+  worker_id: string;
+  generation: number;
+  state: "active" | "draining" | "stopped";
+  registered_at: number;
+  last_seen_at: number;
+};
+
+type WorkerRuntimeRow = {
+  active_worker_id: string | null;
+  active_generation: number;
 };
 
 type MessageContextRow = {
@@ -279,6 +295,7 @@ export class LoylexDatabase {
         claimed_at INTEGER,
         worker_id TEXT,
         lease_expires_at INTEGER,
+        worker_generation INTEGER NOT NULL DEFAULT 1,
         completed_at INTEGER,
         codex_thread_id TEXT,
         thinking_message_id INTEGER,
@@ -304,15 +321,40 @@ export class LoylexDatabase {
       CREATE INDEX IF NOT EXISTS jobs_codex_thread_idx
         ON jobs(chat_id, codex_thread_id, created_at DESC, id DESC);
       CREATE INDEX IF NOT EXISTS outbound_thread_idx ON outbound_messages(codex_thread_id);
+
+      CREATE TABLE IF NOT EXISTS workers (
+        worker_id TEXT PRIMARY KEY,
+        generation INTEGER NOT NULL,
+        state TEXT NOT NULL CHECK (state IN ('active', 'draining', 'stopped')),
+        registered_at INTEGER NOT NULL,
+        last_seen_at INTEGER NOT NULL,
+        drain_requested_at INTEGER
+      );
+
+      CREATE TABLE IF NOT EXISTS worker_runtime (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        active_worker_id TEXT,
+        active_generation INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
     `);
     this.ensureJobColumn("worker_id", "TEXT");
     this.ensureJobColumn("lease_expires_at", "INTEGER");
+    this.ensureJobColumn("worker_generation", "INTEGER NOT NULL DEFAULT 1");
     this.connection.exec(
-      "CREATE INDEX IF NOT EXISTS jobs_lease_idx ON jobs(state, lease_expires_at)",
+      "CREATE INDEX IF NOT EXISTS jobs_lease_idx ON jobs(state, lease_expires_at); CREATE INDEX IF NOT EXISTS jobs_worker_generation_idx ON jobs(worker_generation, state, created_at, id)",
     );
+    this.connection
+      .query(
+        "INSERT OR IGNORE INTO worker_runtime (id, active_worker_id, active_generation, updated_at) VALUES (1, NULL, 1, ?)",
+      )
+      .run(Date.now());
   }
 
-  private ensureJobColumn(name: "worker_id" | "lease_expires_at", definition: string): void {
+  private ensureJobColumn(
+    name: "worker_id" | "lease_expires_at" | "worker_generation",
+    definition: string,
+  ): void {
     const columns = this.connection.query<{ name: string }, []>("PRAGMA table_info(jobs)").all();
     if (!columns.some((column) => column.name === name)) {
       this.connection.exec(`ALTER TABLE jobs ADD COLUMN ${name} ${definition}`);
@@ -395,12 +437,13 @@ export class LoylexDatabase {
     prompt: string,
     resumeThreadId: string | null,
   ): void {
+    const generation = this.activeWorkerGeneration();
     this.connection
       .query(`
         INSERT OR IGNORE INTO jobs (
           update_id, chat_id, chat_type, message_id, message_thread_id, user_id, prompt,
-          resume_thread_id, attachments_json, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          resume_thread_id, attachments_json, worker_generation, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `)
       .run(
         updateId,
@@ -412,44 +455,277 @@ export class LoylexDatabase {
         prompt,
         resumeThreadId,
         JSON.stringify(media(message)),
+        generation,
         Date.now(),
       );
+  }
+
+  private activeWorkerGeneration(): number {
+    return (
+      this.connection
+        .query<WorkerRuntimeRow, []>(
+          "SELECT active_worker_id, active_generation FROM worker_runtime WHERE id = 1",
+        )
+        .get()?.active_generation ?? 1
+    );
+  }
+
+  private worker(workerId: string): WorkerRow | null {
+    return (
+      this.connection
+        .query<WorkerRow, [string]>(
+          "SELECT worker_id, generation, state, registered_at, last_seen_at FROM workers WHERE worker_id = ?",
+        )
+        .get(workerId) ?? null
+    );
+  }
+
+  private hasRegisteredWorkers(): boolean {
+    return Boolean(
+      this.connection.query<{ value: number }, []>("SELECT 1 AS value FROM workers LIMIT 1").get(),
+    );
+  }
+
+  private moveWorkerGenerationInTransaction(
+    sourceGeneration: number,
+    targetGeneration: number,
+    sourceWorkerId: string | null,
+  ): void {
+    if (sourceWorkerId === null) {
+      this.connection
+        .query(`
+          UPDATE jobs
+          SET state = 'pending',
+              resume_thread_id = COALESCE(codex_thread_id, resume_thread_id),
+              worker_id = NULL,
+              lease_expires_at = NULL,
+              claimed_at = NULL,
+              worker_generation = ?
+          WHERE state = 'running' AND worker_generation = ?
+        `)
+        .run(targetGeneration, sourceGeneration);
+    } else {
+      this.connection
+        .query(`
+          UPDATE jobs
+          SET state = 'pending',
+              resume_thread_id = COALESCE(codex_thread_id, resume_thread_id),
+              worker_id = NULL,
+              lease_expires_at = NULL,
+              claimed_at = NULL,
+              worker_generation = ?
+          WHERE state = 'running' AND worker_id = ?
+        `)
+        .run(targetGeneration, sourceWorkerId);
+    }
+    this.connection
+      .query(
+        "UPDATE jobs SET worker_generation = ? WHERE state = 'pending' AND worker_generation = ?",
+      )
+      .run(targetGeneration, sourceGeneration);
+  }
+
+  registerWorker(workerId: string, now = Date.now()): WorkerRegistration {
+    const transaction = this.connection.transaction(() => {
+      const existing = this.worker(workerId);
+      if (existing && existing.state !== "stopped") {
+        this.connection
+          .query("UPDATE workers SET last_seen_at = ? WHERE worker_id = ?")
+          .run(now, workerId);
+        return {
+          generation: existing.generation,
+          state: existing.state === "active" ? "active" : "draining",
+        } satisfies WorkerRegistration;
+      }
+
+      const runtime = this.connection
+        .query<WorkerRuntimeRow, []>(
+          "SELECT active_worker_id, active_generation FROM worker_runtime WHERE id = 1",
+        )
+        .get() ?? { active_worker_id: null, active_generation: 1 };
+      const active = runtime.active_worker_id ? this.worker(runtime.active_worker_id) : null;
+      let generation = runtime.active_generation;
+
+      if (active && active.state === "active") {
+        generation += 1;
+        if (active.last_seen_at >= now - workerLeaseDurationMs) {
+          this.connection
+            .query(
+              "UPDATE workers SET state = 'draining', drain_requested_at = ? WHERE worker_id = ? AND state = 'active'",
+            )
+            .run(now, active.worker_id);
+        } else {
+          this.moveWorkerGenerationInTransaction(active.generation, generation, active.worker_id);
+          this.connection
+            .query("UPDATE workers SET state = 'stopped', last_seen_at = ? WHERE worker_id = ?")
+            .run(now, active.worker_id);
+        }
+      } else if (runtime.active_worker_id !== null) {
+        generation += 1;
+        this.moveWorkerGenerationInTransaction(
+          runtime.active_generation,
+          generation,
+          active?.worker_id ?? null,
+        );
+        if (active) {
+          this.connection
+            .query("UPDATE workers SET state = 'stopped', last_seen_at = ? WHERE worker_id = ?")
+            .run(now, active.worker_id);
+        }
+      }
+
+      const reclaimable = this.connection
+        .query<WorkerRow, [number]>(`
+          SELECT worker_id, generation, state, registered_at, last_seen_at
+          FROM workers
+          WHERE state = 'stopped'
+             OR (state = 'draining' AND last_seen_at < ?)
+        `)
+        .all(now - workerLeaseDurationMs);
+      for (const worker of reclaimable) {
+        if (worker.worker_id === workerId || worker.generation === generation) {
+          continue;
+        }
+        this.moveWorkerGenerationInTransaction(worker.generation, generation, worker.worker_id);
+        this.connection
+          .query("UPDATE workers SET state = 'stopped', last_seen_at = ? WHERE worker_id = ?")
+          .run(now, worker.worker_id);
+      }
+
+      this.connection
+        .query(`
+          INSERT INTO workers (worker_id, generation, state, registered_at, last_seen_at, drain_requested_at)
+          VALUES (?, ?, 'active', ?, ?, NULL)
+          ON CONFLICT(worker_id) DO UPDATE SET
+            generation = excluded.generation,
+            state = 'active',
+            registered_at = excluded.registered_at,
+            last_seen_at = excluded.last_seen_at,
+            drain_requested_at = NULL
+        `)
+        .run(workerId, generation, now, now);
+      this.connection
+        .query(
+          "UPDATE worker_runtime SET active_worker_id = ?, active_generation = ?, updated_at = ? WHERE id = 1",
+        )
+        .run(workerId, generation, now);
+      return { generation, state: "active" } satisfies WorkerRegistration;
+    });
+    return transaction.immediate();
+  }
+
+  heartbeatWorker(workerId: string, now = Date.now()): boolean {
+    const result = this.connection
+      .query(
+        "UPDATE workers SET last_seen_at = ? WHERE worker_id = ? AND state IN ('active', 'draining')",
+      )
+      .run(now, workerId);
+    return result.changes > 0;
+  }
+
+  stopWorker(workerId: string, now = Date.now()): boolean {
+    const transaction = this.connection.transaction(() => {
+      const worker = this.worker(workerId);
+      if (!worker) {
+        return false;
+      }
+      const activeGeneration = this.activeWorkerGeneration();
+      if (worker.generation !== activeGeneration) {
+        this.moveWorkerGenerationInTransaction(worker.generation, activeGeneration, workerId);
+      }
+      const result = this.connection
+        .query("UPDATE workers SET state = 'stopped', last_seen_at = ? WHERE worker_id = ?")
+        .run(now, workerId);
+      return result.changes > 0;
+    });
+    return transaction.immediate();
+  }
+
+  shouldDrainWorker(workerId: string): boolean {
+    const worker = this.worker(workerId);
+    if (!worker || worker.state !== "draining") {
+      return false;
+    }
+    const work =
+      this.connection
+        .query<{ count: number }, [number]>(
+          "SELECT count(*) AS count FROM jobs WHERE worker_generation = ? AND state IN ('pending', 'running')",
+        )
+        .get(worker.generation)?.count ?? 0;
+    return work === 0;
   }
 
   claimNext(contextMessages: number, workerId: string | null = null): AgentJob | null {
     const transaction = this.connection.transaction(() => {
       const now = Date.now();
       this.recoverExpiredLeasesInTransaction(now);
+      const worker = workerId === null ? null : this.worker(workerId);
+      if (
+        workerId !== null &&
+        ((!worker && this.hasRegisteredWorkers()) || worker?.state === "stopped")
+      ) {
+        return null;
+      }
       // A saved Codex thread has one append-only writer. Keep independent threads concurrent,
       // but leave the next turn for this thread pending until every earlier turn is finished.
-      const row = this.connection
-        .query<JobRow, []>(`
-          SELECT candidate.*
-          FROM jobs AS candidate
-          WHERE candidate.state = 'pending'
-            AND (
-              candidate.resume_thread_id IS NULL
-              OR NOT EXISTS (
-                SELECT 1
-                FROM jobs AS blocker
-                WHERE blocker.state IN ('pending', 'running')
-                  AND (
-                    blocker.resume_thread_id = candidate.resume_thread_id
-                    OR blocker.codex_thread_id = candidate.resume_thread_id
+      const row = worker
+        ? this.connection
+            .query<JobRow, [number]>(`
+              SELECT candidate.*
+              FROM jobs AS candidate
+              WHERE candidate.state = 'pending'
+                AND candidate.worker_generation = ?
+                AND (
+                  candidate.resume_thread_id IS NULL
+                  OR NOT EXISTS (
+                    SELECT 1
+                    FROM jobs AS blocker
+                    WHERE blocker.state IN ('pending', 'running')
+                      AND (
+                        blocker.resume_thread_id = candidate.resume_thread_id
+                        OR blocker.codex_thread_id = candidate.resume_thread_id
+                      )
+                      AND (
+                        blocker.created_at < candidate.created_at
+                        OR (
+                          blocker.created_at = candidate.created_at
+                          AND blocker.id < candidate.id
+                        )
+                      )
                   )
-                  AND (
-                    blocker.created_at < candidate.created_at
-                    OR (
-                      blocker.created_at = candidate.created_at
-                      AND blocker.id < candidate.id
-                    )
+                )
+              ORDER BY candidate.created_at, candidate.id
+              LIMIT 1
+            `)
+            .get(worker.generation)
+        : this.connection
+            .query<JobRow, []>(`
+              SELECT candidate.*
+              FROM jobs AS candidate
+              WHERE candidate.state = 'pending'
+                AND (
+                  candidate.resume_thread_id IS NULL
+                  OR NOT EXISTS (
+                    SELECT 1
+                    FROM jobs AS blocker
+                    WHERE blocker.state IN ('pending', 'running')
+                      AND (
+                        blocker.resume_thread_id = candidate.resume_thread_id
+                        OR blocker.codex_thread_id = candidate.resume_thread_id
+                      )
+                      AND (
+                        blocker.created_at < candidate.created_at
+                        OR (
+                          blocker.created_at = candidate.created_at
+                          AND blocker.id < candidate.id
+                        )
+                      )
                   )
-              )
-            )
-          ORDER BY candidate.created_at, candidate.id
-          LIMIT 1
-        `)
-        .get();
+                )
+              ORDER BY candidate.created_at, candidate.id
+              LIMIT 1
+            `)
+            .get();
       if (!row) {
         return null;
       }
@@ -509,8 +785,8 @@ export class LoylexDatabase {
       ? "(worker_id IS NULL OR lease_expires_at IS NULL OR lease_expires_at < ?)"
       : "lease_expires_at IS NOT NULL AND lease_expires_at < ?";
     const jobs = this.connection
-      .query<{ id: number }, [number]>(`
-        SELECT id
+      .query<{ id: number; worker_id: string | null; worker_generation: number }, [number]>(`
+        SELECT id, worker_id, worker_generation
         FROM jobs
         WHERE state = 'running'
           AND ${condition}
@@ -518,6 +794,7 @@ export class LoylexDatabase {
       `)
       .all(now);
     for (const job of jobs) {
+      const generation = this.generationForRecovery(job.worker_id, job.worker_generation, now);
       this.connection
         .query(`
           UPDATE jobs
@@ -525,12 +802,23 @@ export class LoylexDatabase {
               resume_thread_id = COALESCE(codex_thread_id, resume_thread_id),
               worker_id = NULL,
               lease_expires_at = NULL,
-              claimed_at = NULL
+              claimed_at = NULL,
+              worker_generation = ?
           WHERE id = ? AND state = 'running'
         `)
-        .run(job.id);
+        .run(generation, job.id);
     }
     return jobs.length;
+  }
+
+  private generationForRecovery(workerId: string | null, generation: number, now: number): number {
+    if (workerId !== null) {
+      const owner = this.worker(workerId);
+      if (owner?.state === "active" && owner.last_seen_at >= now - workerLeaseDurationMs) {
+        return generation;
+      }
+    }
+    return this.activeWorkerGeneration();
   }
 
   listRecentJobs(chatId: number, limit = 5): JobSummary[] {

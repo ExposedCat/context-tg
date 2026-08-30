@@ -117,12 +117,29 @@ export class TelegramClient {
     return this.call<TelegramMessage>("sendRichMessage", body);
   }
 
-  editRich(chatId: number, messageId: number, markdown: string): Promise<TelegramMessage> {
-    return this.call<TelegramMessage>("editMessageText", {
-      chat_id: chatId,
-      message_id: messageId,
-      rich_message: { markdown },
-    });
+  async editRich(chatId: number, messageId: number, markdown: string): Promise<TelegramMessage> {
+    try {
+      return await this.call<TelegramMessage>("editMessageText", {
+        chat_id: chatId,
+        message_id: messageId,
+        rich_message: { markdown },
+      });
+    } catch (error) {
+      if (
+        error instanceof TelegramApiError &&
+        error.errorCode === 400 &&
+        /message is not modified/i.test(error.message)
+      ) {
+        // Telegram treats an idempotent edit as an error. The requested state is already live,
+        // so keep the job successful and return the edited message reference to the caller.
+        return {
+          message_id: messageId,
+          date: Math.floor(Date.now() / 1_000),
+          chat: { id: chatId, type: "private" },
+        };
+      }
+      throw error;
+    }
   }
 
   sendTyping(chatId: number, threadId: number | null = null): Promise<boolean> {
