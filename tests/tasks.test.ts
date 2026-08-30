@@ -22,10 +22,9 @@ test("formats recent tasks with status, safe labels, dates, and message links", 
     task({ prompt: "<проверь> сервер", completedAt: Date.parse("2026-08-30T00:05:00Z") }),
   ]);
 
-  expect(document).toContain("<b>Последние задачи</b>");
-  expect(document).toContain('🔄 <a href="https://t.me/c/123/11">&lt;проверь&gt; сервер</a>');
-  expect(document).toContain("в работе · 2026-08-30 00:00 → 2026-08-30 00:05");
-  expect(document).toContain("ответь /stop");
+  expect(document).toBe(
+    '<tg-emoji emoji-id="6113685078825505075">⏳</tg-emoji> <a href="https://t.me/c/123/11">&lt;проверь&gt; сервер</a>\n2026-08-30 00:00 - 2026-08-30 00:05 - /cancel_10',
+  );
 });
 
 test("reports an empty task list", () => {

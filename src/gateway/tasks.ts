@@ -3,23 +3,15 @@ import type { JobSummary, LoylexDatabase } from "./database.ts";
 import type { TelegramClient } from "./telegram.ts";
 
 const recentTasksLimit = 5;
-const taskLabelLength = 80;
+const taskLabelLength = 40;
 
-const stateLabels = {
-  pending: "в очереди",
-  running: "в работе",
-  completed: "готово",
-  failed: "ошибка",
-  cancelled: "остановлено",
-} satisfies Record<JobSummary["state"], string>;
-
-const stateIcons = {
-  pending: "⏳",
-  running: "🔄",
-  completed: "✅",
-  failed: "❌",
-  cancelled: "⏹️",
-} satisfies Record<JobSummary["state"], string>;
+const stateEmojis = {
+  pending: { id: "6113685078825505075", fallback: "⏳" },
+  running: { id: "6113685078825505075", fallback: "⏳" },
+  completed: { id: "5825794181183836432", fallback: "✅" },
+  failed: { id: "6269316311172518259", fallback: "❌" },
+  cancelled: { id: "6269316311172518259", fallback: "❌" },
+} satisfies Record<JobSummary["state"], { id: string; fallback: string }>;
 
 function escapeHtml(value: string): string {
   return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
@@ -59,27 +51,35 @@ function messageLink(task: JobSummary): string {
   return `tg://openmessage?chat_id=${encodeURIComponent(chatId)}&message_id=${messageId}`;
 }
 
-function formatTask(task: JobSummary): string {
-  const label = escapeHtml(taskLabel(task.prompt));
-  const link = escapeHtmlAttribute(messageLink(task));
-  const finished = task.completedAt === null ? "" : ` → ${formatDate(task.completedAt)}`;
-  return [
-    `${stateIcons[task.state]} <a href="${link}">${label}</a>`,
-    `${stateLabels[task.state]} · ${formatDate(task.createdAt)}${finished}`,
-  ].join("\n");
+function statusEmoji(state: JobSummary["state"], useCustomEmoji: boolean): string {
+  const emoji = stateEmojis[state];
+  return useCustomEmoji
+    ? `<tg-emoji emoji-id="${emoji.id}">${emoji.fallback}</tg-emoji>`
+    : emoji.fallback;
 }
 
-export function formatTasksDocument(tasks: JobSummary[]): string {
+function cancelCommand(task: JobSummary): string {
+  return `/cancel_${task.messageId}`;
+}
+
+function formatTask(task: JobSummary, useCustomEmoji: boolean): string {
+  const label = escapeHtml(taskLabel(task.prompt));
+  const link = escapeHtmlAttribute(messageLink(task));
+  const details = [formatDate(task.createdAt)];
+  if (task.completedAt !== null) {
+    details.push(formatDate(task.completedAt));
+  }
+  if (task.state === "pending" || task.state === "running") {
+    details.push(cancelCommand(task));
+  }
+  return `${statusEmoji(task.state, useCustomEmoji)} <a href="${link}">${label}</a>\n${details.join(" - ")}`;
+}
+
+export function formatTasksDocument(tasks: JobSummary[], useCustomEmoji = true): string {
   if (tasks.length === 0) {
     return "Задач пока нет.";
   }
-  return [
-    "<b>Последние задачи</b>",
-    "",
-    tasks.map(formatTask).join("\n\n"),
-    "",
-    "<i>Чтобы остановить задачу, ответь /stop на сообщение Loylex.</i>",
-  ].join("\n");
+  return tasks.map((task) => formatTask(task, useCustomEmoji)).join("\n\n");
 }
 
 export async function sendTasks(
@@ -91,5 +91,6 @@ export async function sendTasks(
   await telegram.sendRich(message.chat.id, formatTasksDocument(tasks), {
     replyTo: message.message_id,
     threadId: message.message_thread_id ?? null,
+    disableLinkPreview: true,
   });
 }

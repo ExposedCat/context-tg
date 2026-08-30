@@ -95,7 +95,11 @@ export class TelegramClient {
   async sendRich(
     chatId: number,
     markdown: string,
-    options: { replyTo?: number; threadId?: number | null } = {},
+    options: {
+      replyTo?: number;
+      threadId?: number | null;
+      disableLinkPreview?: boolean;
+    } = {},
   ): Promise<TelegramMessage> {
     const body: JsonObject = {
       chat_id: chatId,
@@ -106,6 +110,9 @@ export class TelegramClient {
     }
     if (options.threadId !== undefined && options.threadId !== null) {
       body.message_thread_id = options.threadId;
+    }
+    if (options.disableLinkPreview) {
+      body.link_preview_options = { is_disabled: true };
     }
     return this.call<TelegramMessage>("sendRichMessage", body);
   }
@@ -123,7 +130,7 @@ export class TelegramClient {
       commands: [
         { command: "start", description: "Как обратиться к Loylex" },
         { command: "help", description: "Возможности и синтаксис" },
-        { command: "stop", description: "Остановить текущую работу в reply" },
+        { command: "stop", description: "Остановить работу" },
         { command: "tasks", description: "Показать последние задачи" },
       ] as JsonValue[],
     });

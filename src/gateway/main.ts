@@ -4,7 +4,7 @@ import { stopResultMessage } from "./presentation.ts";
 import { GatewayServer } from "./server.ts";
 import { sendTasks } from "./tasks.ts";
 import { TelegramClient } from "./telegram.ts";
-import { detectTrigger, isStopCommand, isTasksCommand } from "./triggers.ts";
+import { cancelTaskMessageId, detectTrigger, isStopCommand, isTasksCommand } from "./triggers.ts";
 
 const config = loadGatewayConfig();
 const database = new LoylexDatabase(config.databasePath);
@@ -27,6 +27,28 @@ async function poll(): Promise<void> {
         const message = database.archiveUpdate(update);
         offset = update.update_id + 1;
         if (!message || message.from?.is_bot) {
+          continue;
+        }
+        const cancelledMessageId = cancelTaskMessageId(message, bot.username);
+        if (cancelledMessageId !== null) {
+          const cancelledJobIds = database.cancelJobsForMessage(
+            message.chat.id,
+            cancelledMessageId,
+          );
+          if (cancelledJobIds.length > 0) {
+            console.log(
+              JSON.stringify({
+                level: "info",
+                component: "poller",
+                event: "jobs_cancelled",
+                jobIds: cancelledJobIds,
+              }),
+            );
+          }
+          await telegram.sendRich(message.chat.id, stopResultMessage(cancelledJobIds.length), {
+            replyTo: message.message_id,
+            threadId: message.message_thread_id ?? null,
+          });
           continue;
         }
         if (isStopCommand(message, bot.id, bot.username)) {

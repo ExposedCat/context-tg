@@ -3,6 +3,8 @@ import type { AgentJob, JsonValue, TelegramMessage, TelegramUpdate } from "../sh
 
 export type JobState = "pending" | "running" | "completed" | "failed" | "cancelled";
 
+export const jobLeaseDurationMs = 60_000;
+
 export type JobSummary = {
   id: number;
   chatId: number;
@@ -48,6 +50,11 @@ type JobSummaryRow = {
   created_at: number;
   completed_at: number | null;
   thinking_message_id: number | null;
+};
+
+type JobOwnershipRow = {
+  state: string;
+  worker_id: string | null;
 };
 
 export type SearchResult = {
@@ -170,6 +177,8 @@ export class LoylexDatabase {
         attachments_json TEXT NOT NULL,
         state TEXT NOT NULL DEFAULT 'pending',
         claimed_at INTEGER,
+        worker_id TEXT,
+        lease_expires_at INTEGER,
         completed_at INTEGER,
         codex_thread_id TEXT,
         thinking_message_id INTEGER,
@@ -192,6 +201,18 @@ export class LoylexDatabase {
       CREATE INDEX IF NOT EXISTS jobs_state_created_idx ON jobs(state, created_at);
       CREATE INDEX IF NOT EXISTS outbound_thread_idx ON outbound_messages(codex_thread_id);
     `);
+    this.ensureJobColumn("worker_id", "TEXT");
+    this.ensureJobColumn("lease_expires_at", "INTEGER");
+    this.connection.exec(
+      "CREATE INDEX IF NOT EXISTS jobs_lease_idx ON jobs(state, lease_expires_at)",
+    );
+  }
+
+  private ensureJobColumn(name: "worker_id" | "lease_expires_at", definition: string): void {
+    const columns = this.connection.query<{ name: string }, []>("PRAGMA table_info(jobs)").all();
+    if (!columns.some((column) => column.name === name)) {
+      this.connection.exec(`ALTER TABLE jobs ADD COLUMN ${name} ${definition}`);
+    }
   }
 
   archiveUpdate(update: TelegramUpdate): TelegramMessage | null {
@@ -291,8 +312,10 @@ export class LoylexDatabase {
       );
   }
 
-  claimNext(contextMessages: number): AgentJob | null {
+  claimNext(contextMessages: number, workerId: string | null = null): AgentJob | null {
     const transaction = this.connection.transaction(() => {
+      const now = Date.now();
+      this.recoverExpiredLeasesInTransaction(now);
       const row = this.connection
         .query<JobRow, []>("SELECT * FROM jobs WHERE state = 'pending' ORDER BY created_at LIMIT 1")
         .get();
@@ -300,8 +323,10 @@ export class LoylexDatabase {
         return null;
       }
       this.connection
-        .query("UPDATE jobs SET state = 'running', claimed_at = ? WHERE id = ?")
-        .run(Date.now(), row.id);
+        .query(
+          "UPDATE jobs SET state = 'running', claimed_at = ?, worker_id = ?, lease_expires_at = ? WHERE id = ?",
+        )
+        .run(now, workerId, workerId === null ? null : now + jobLeaseDurationMs, row.id);
       return row;
     });
     const row = transaction.immediate();
@@ -321,6 +346,50 @@ export class LoylexDatabase {
       context: this.recentContext(row.chat_id, row.message_id, contextMessages),
       attachments: JSON.parse(row.attachments_json) as JsonValue[],
     };
+  }
+
+  recoverExpiredJobs(now = Date.now()): number {
+    const transaction = this.connection.transaction(() =>
+      this.recoverExpiredJobsInTransaction(now),
+    );
+    return transaction.immediate();
+  }
+
+  private recoverExpiredJobsInTransaction(now: number): number {
+    return this.recoverJobsInTransaction(now, true);
+  }
+
+  private recoverExpiredLeasesInTransaction(now: number): number {
+    return this.recoverJobsInTransaction(now, false);
+  }
+
+  private recoverJobsInTransaction(now: number, includeUnleased: boolean): number {
+    const condition = includeUnleased
+      ? "(worker_id IS NULL OR lease_expires_at IS NULL OR lease_expires_at < ?)"
+      : "lease_expires_at IS NOT NULL AND lease_expires_at < ?";
+    const jobs = this.connection
+      .query<{ id: number }, [number]>(`
+        SELECT id
+        FROM jobs
+        WHERE state = 'running'
+          AND ${condition}
+        ORDER BY id
+      `)
+      .all(now);
+    for (const job of jobs) {
+      this.connection
+        .query(`
+          UPDATE jobs
+          SET state = 'pending',
+              resume_thread_id = COALESCE(codex_thread_id, resume_thread_id),
+              worker_id = NULL,
+              lease_expires_at = NULL,
+              claimed_at = NULL
+          WHERE id = ? AND state = 'running'
+        `)
+        .run(job.id);
+    }
+    return jobs.length;
   }
 
   listRecentJobs(chatId: number, limit = 5): JobSummary[] {
@@ -372,15 +441,24 @@ export class LoylexDatabase {
       .join("\n");
   }
 
-  appendStatus(jobId: number, text: string, threadId: string | undefined): string {
-    this.connection
+  appendStatus(
+    jobId: number,
+    text: string,
+    threadId: string | undefined,
+    workerId?: string,
+  ): string | null {
+    const result = this.connection
       .query(`
         UPDATE jobs SET
           status_log = status_log || CASE WHEN status_log = '' THEN '' ELSE '\n\n' END || ?,
           codex_thread_id = COALESCE(?, codex_thread_id)
-        WHERE id = ?
+        WHERE id = ? AND state = 'running'
+          AND (? IS NULL OR worker_id = ?)
       `)
-      .run(text, threadId ?? null, jobId);
+      .run(text, threadId ?? null, jobId, workerId ?? null, workerId ?? null);
+    if (result.changes === 0) {
+      return null;
+    }
     if (threadId) {
       this.connection
         .query(
@@ -391,8 +469,24 @@ export class LoylexDatabase {
     return (
       this.connection
         .query<{ status_log: string }, [number]>("SELECT status_log FROM jobs WHERE id = ?")
-        .get(jobId)?.status_log ?? ""
+        .get(jobId)?.status_log ?? null
     );
+  }
+
+  heartbeat(jobId: number, workerId: string): boolean {
+    const result = this.connection
+      .query(
+        "UPDATE jobs SET lease_expires_at = ? WHERE id = ? AND state = 'running' AND worker_id = ?",
+      )
+      .run(Date.now() + jobLeaseDurationMs, jobId, workerId);
+    return result.changes > 0;
+  }
+
+  isJobOwned(jobId: number, workerId: string): boolean {
+    const row = this.connection
+      .query<JobOwnershipRow, [number]>("SELECT state, worker_id FROM jobs WHERE id = ?")
+      .get(jobId);
+    return Boolean(row && row.state === "running" && row.worker_id === workerId);
   }
 
   thinkingMessage(jobId: number): number | null {
@@ -437,12 +531,24 @@ export class LoylexDatabase {
           "SELECT job_id, codex_thread_id FROM outbound_messages WHERE chat_id = ? AND message_id = ?",
         )
         .get(chatId, messageId);
-      const targetJobId = outbound?.job_id ?? -1;
-      const targetThreadId = outbound?.codex_thread_id ?? null;
+      const sourceJob = this.connection
+        .query<
+          { id: number; codex_thread_id: string | null; resume_thread_id: string | null },
+          [number, number]
+        >(
+          "SELECT id, codex_thread_id, resume_thread_id FROM jobs WHERE chat_id = ? AND message_id = ?",
+        )
+        .get(chatId, messageId);
+      const targetJobId = outbound?.job_id ?? sourceJob?.id ?? -1;
+      const targetThreadId =
+        outbound?.codex_thread_id ??
+        sourceJob?.codex_thread_id ??
+        sourceJob?.resume_thread_id ??
+        null;
       const jobs = this.connection
         .query<
           { id: number },
-          [number, number, number, string | null, string | null, string | null]
+          [number, number, number, number, string | null, string | null, string | null]
         >(`
           SELECT DISTINCT id
           FROM jobs
@@ -450,6 +556,7 @@ export class LoylexDatabase {
             AND state IN ('pending', 'running')
             AND (
               id = ?
+              OR message_id = ?
               OR thinking_message_id = ?
               OR (
                 ? IS NOT NULL
@@ -458,12 +565,20 @@ export class LoylexDatabase {
             )
           ORDER BY id
         `)
-        .all(chatId, targetJobId, messageId, targetThreadId, targetThreadId, targetThreadId);
+        .all(
+          chatId,
+          targetJobId,
+          messageId,
+          messageId,
+          targetThreadId,
+          targetThreadId,
+          targetThreadId,
+        );
       const cancelledAt = Date.now();
       for (const job of jobs) {
         this.connection
           .query(
-            "UPDATE jobs SET state = 'cancelled', completed_at = ?, error = ? WHERE id = ? AND state IN ('pending', 'running')",
+            "UPDATE jobs SET state = 'cancelled', completed_at = ?, error = ?, worker_id = NULL, lease_expires_at = NULL WHERE id = ? AND state IN ('pending', 'running')",
           )
           .run(cancelledAt, "Остановлено пользователем", job.id);
       }
@@ -510,7 +625,12 @@ export class LoylexDatabase {
     };
   }
 
-  complete(jobId: number, answerMessageId: number, codexThreadId: string): boolean {
+  complete(
+    jobId: number,
+    answerMessageId: number,
+    codexThreadId: string,
+    workerId?: string,
+  ): boolean {
     const address = this.jobAddress(jobId);
     const transaction = this.connection.transaction(() => {
       const result = this.connection
@@ -518,8 +638,9 @@ export class LoylexDatabase {
           UPDATE jobs
           SET state = 'completed', completed_at = ?, codex_thread_id = ?
           WHERE id = ? AND state = 'running'
+            AND (? IS NULL OR worker_id = ?)
         `)
-        .run(Date.now(), codexThreadId, jobId);
+        .run(Date.now(), codexThreadId, jobId, workerId ?? null, workerId ?? null);
       if (result.changes === 0) {
         return false;
       }
@@ -534,12 +655,12 @@ export class LoylexDatabase {
     return transaction.immediate();
   }
 
-  fail(jobId: number, error: string): void {
+  fail(jobId: number, error: string, workerId?: string): void {
     this.connection
       .query(
-        "UPDATE jobs SET state = 'failed', completed_at = ?, error = ? WHERE id = ? AND state = 'running'",
+        "UPDATE jobs SET state = 'failed', completed_at = ?, error = ? WHERE id = ? AND state = 'running' AND (? IS NULL OR worker_id = ?)",
       )
-      .run(Date.now(), error, jobId);
+      .run(Date.now(), error, jobId, workerId ?? null, workerId ?? null);
   }
 
   chatExists(chatId: number): boolean {

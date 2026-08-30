@@ -3,6 +3,7 @@ import type { TelegramMessage } from "../shared/types.ts";
 const prefixPattern = /^\s*(?:loylex|лойлекс)(?=$|[\s:;,—–-])[\s:;,—–-]*/iu;
 const stopPattern = /^\/stop(?:@[a-z0-9_]+)?$/iu;
 const tasksPattern = /^\/tasks(?:@[a-z0-9_]+)?$/iu;
+const cancelPattern = /^\/cancel_(\d+)(?:@([a-z0-9_]+))?$/iu;
 
 export type TriggerDecision = {
   prompt: string;
@@ -39,6 +40,20 @@ export function isTasksCommand(message: TelegramMessage, botUsername?: string): 
     return true;
   }
   return mention.slice(1).toLocaleLowerCase() === botUsername.toLocaleLowerCase();
+}
+
+export function cancelTaskMessageId(message: TelegramMessage, botUsername?: string): number | null {
+  const text = (message.text ?? message.caption ?? "").trim();
+  const match = text.match(cancelPattern);
+  if (!match) {
+    return null;
+  }
+  const mention = match[2];
+  if (mention && botUsername && mention.toLocaleLowerCase() !== botUsername.toLocaleLowerCase()) {
+    return null;
+  }
+  const messageId = Number.parseInt(match[1] ?? "", 10);
+  return Number.isSafeInteger(messageId) && messageId > 0 ? messageId : null;
 }
 
 export function detectTrigger(message: TelegramMessage, botUserId: number): TriggerDecision | null {

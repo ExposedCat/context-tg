@@ -8,6 +8,7 @@ import { buildPrompt } from "./prompt.ts";
 const config = loadAgentConfig();
 const gateway = new GatewayClient(config.bridgeUrl, config.bridgeToken);
 let stopping = false;
+const leaseHeartbeatIntervalMs = 20_000;
 
 process.once("SIGINT", () => {
   stopping = true;
@@ -17,11 +18,19 @@ process.once("SIGTERM", () => {
 });
 
 async function monitorCancellation(jobId: number, controller: AbortController): Promise<void> {
+  let nextHeartbeatAt = Date.now() + leaseHeartbeatIntervalMs;
   while (!controller.signal.aborted) {
     try {
       if (await gateway.isCancelled(jobId)) {
         controller.abort();
         return;
+      }
+      if (Date.now() >= nextHeartbeatAt) {
+        if (!(await gateway.heartbeat(jobId))) {
+          controller.abort();
+          return;
+        }
+        nextHeartbeatAt = Date.now() + leaseHeartbeatIntervalMs;
       }
     } catch {
       // A transient bridge failure should not stop a running job. Retry on the next poll.

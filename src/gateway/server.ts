@@ -28,6 +28,11 @@ function bearer(request: Request): string | null {
   return authorization?.startsWith("Bearer ") ? authorization.slice(7) : null;
 }
 
+function workerId(request: Request): string | undefined {
+  const value = request.headers.get("x-loylex-worker-id")?.trim();
+  return value || undefined;
+}
+
 async function body<T>(request: Request): Promise<T> {
   return (await request.json()) as T;
 }
@@ -44,6 +49,7 @@ export class GatewayServer {
   ) {}
 
   start(): void {
+    this.database.recoverExpiredJobs();
     this.#server = Bun.serve({
       hostname: this.config.listenHost,
       port: this.config.listenPort,
@@ -66,7 +72,9 @@ export class GatewayServer {
 
     try {
       if (request.method === "GET" && url.pathname === "/v1/jobs/next") {
-        return json(this.database.claimNext(this.config.contextMessages));
+        return json(
+          this.database.claimNext(this.config.contextMessages, workerId(request) ?? null),
+        );
       }
 
       const cancellationMatch = url.pathname.match(/^\/v1\/jobs\/(\d+)\/cancelled$/);
@@ -76,9 +84,23 @@ export class GatewayServer {
         });
       }
 
+      const heartbeatMatch = url.pathname.match(/^\/v1\/jobs\/(\d+)\/heartbeat$/);
+      if (request.method === "POST" && heartbeatMatch?.[1]) {
+        const currentWorkerId = workerId(request);
+        return json({
+          owned:
+            currentWorkerId !== undefined &&
+            this.database.heartbeat(Number.parseInt(heartbeatMatch[1], 10), currentWorkerId),
+        });
+      }
+
       const eventMatch = url.pathname.match(/^\/v1\/jobs\/(\d+)\/events$/);
       if (request.method === "POST" && eventMatch?.[1]) {
-        await this.event(Number.parseInt(eventMatch[1], 10), await body<AgentEvent>(request));
+        await this.event(
+          Number.parseInt(eventMatch[1], 10),
+          await body<AgentEvent>(request),
+          workerId(request),
+        );
         return json({ ok: true });
       }
 
@@ -87,6 +109,7 @@ export class GatewayServer {
         await this.complete(
           Number.parseInt(completionMatch[1], 10),
           await body<AgentCompletion>(request),
+          workerId(request),
         );
         return json({ ok: true });
       }
@@ -94,7 +117,7 @@ export class GatewayServer {
       const failureMatch = url.pathname.match(/^\/v1\/jobs\/(\d+)\/fail$/);
       if (request.method === "POST" && failureMatch?.[1]) {
         const payload = await body<{ error: string }>(request);
-        await this.fail(Number.parseInt(failureMatch[1], 10), payload.error);
+        await this.fail(Number.parseInt(failureMatch[1], 10), payload.error, workerId(request));
         return json({ ok: true });
       }
 
@@ -173,12 +196,15 @@ export class GatewayServer {
     }
   }
 
-  private async event(jobId: number, event: AgentEvent): Promise<void> {
+  private async event(jobId: number, event: AgentEvent, workerId?: string): Promise<void> {
     if (this.database.isJobCancelled(jobId)) {
       return;
     }
     const line = `${event.kind}: ${event.text.trim()}`;
-    const status = this.database.appendStatus(jobId, line, event.threadId);
+    const status = this.database.appendStatus(jobId, line, event.threadId, workerId);
+    if (status === null) {
+      return;
+    }
     const address = this.database.jobAddress(jobId);
     const thinkingMessageId = this.database.thinkingMessage(jobId);
     const now = Date.now();
@@ -203,13 +229,20 @@ export class GatewayServer {
     }
   }
 
-  private async complete(jobId: number, completion: AgentCompletion): Promise<void> {
+  private async complete(
+    jobId: number,
+    completion: AgentCompletion,
+    workerId?: string,
+  ): Promise<void> {
     if (this.database.isJobCancelled(jobId)) {
       return;
     }
     const address = this.database.jobAddress(jobId);
     const thinkingMessageId = this.database.thinkingMessage(jobId);
-    const status = this.database.appendStatus(jobId, "Готово", completion.threadId);
+    const status = this.database.appendStatus(jobId, "Готово", completion.threadId, workerId);
+    if (status === null) {
+      return;
+    }
     const document = completedDocument(status, completion.answer);
     const message =
       thinkingMessageId === null
@@ -218,13 +251,16 @@ export class GatewayServer {
             threadId: address.threadId,
           })
         : await this.telegram.editRich(address.chatId, thinkingMessageId, document);
-    this.database.complete(jobId, message.message_id, completion.threadId);
+    this.database.complete(jobId, message.message_id, completion.threadId, workerId);
     this.#lastStreamEdit.delete(jobId);
     this.#lastStreamDocument.delete(jobId);
   }
 
-  private async fail(jobId: number, error: string): Promise<void> {
+  private async fail(jobId: number, error: string, workerId?: string): Promise<void> {
     if (this.database.isJobCancelled(jobId)) {
+      return;
+    }
+    if (workerId !== undefined && !this.database.isJobOwned(jobId, workerId)) {
       return;
     }
     const address = this.database.jobAddress(jobId);
@@ -238,7 +274,7 @@ export class GatewayServer {
     } else {
       await this.telegram.editRich(address.chatId, thinkingMessageId, markdown);
     }
-    this.database.fail(jobId, error.slice(0, 8_000));
+    this.database.fail(jobId, error.slice(0, 8_000), workerId);
     this.#lastStreamEdit.delete(jobId);
     this.#lastStreamDocument.delete(jobId);
   }

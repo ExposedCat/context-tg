@@ -33,6 +33,6 @@ export function loadAgentConfig(): AgentConfig {
     repositoryPath: process.env.LOYLEX_REPOSITORY_PATH ?? "/workspace/Loylex",
     memoryPath: process.env.LOYLEX_MEMORY_PATH ?? "/memory",
     pollIntervalMs: Number.parseInt(process.env.LOYLEX_POLL_INTERVAL_MS ?? "1000", 10),
-    maxConcurrentJobs: Number.parseInt(process.env.LOYLEX_MAX_CONCURRENT_JOBS ?? "4", 10),
+    maxConcurrentJobs: Number.parseInt(process.env.LOYLEX_MAX_CONCURRENT_JOBS ?? "50", 10),
   };
 }
