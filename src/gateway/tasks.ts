@@ -69,16 +69,21 @@ function resumeCommand(task: JobSummary): string {
 function formatTask(task: JobSummary, useCustomEmoji: boolean): string {
   const label = escapeHtml(taskLabel(task.prompt));
   const link = escapeHtmlAttribute(messageLink(task));
-  const details = [formatDate(task.createdAt)];
+  const dates = [formatDate(task.createdAt)];
   if (task.completedAt !== null) {
-    details.push(formatDate(task.completedAt));
+    dates.push(formatDate(task.completedAt));
   }
+  const controls: string[] = [];
   if (task.state === "pending" || task.state === "running") {
-    details.push(cancelCommand(task));
+    controls.push(cancelCommand(task));
   } else if (task.canResume) {
-    details.push(resumeCommand(task));
+    controls.push(resumeCommand(task));
   }
-  return `${statusEmoji(task.state, useCustomEmoji)} <a href="${link}">${label}</a>\n${details.join(" - ")}`;
+  return [
+    `${statusEmoji(task.state, useCustomEmoji)} <a href="${link}">${label}</a>`,
+    dates.join(" - "),
+    ...controls,
+  ].join("\n");
 }
 
 export function formatTasksDocument(tasks: JobSummary[], useCustomEmoji = true): string {
