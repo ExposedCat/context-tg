@@ -83,7 +83,7 @@ function formatTask(task: JobSummary, useCustomEmoji: boolean): string {
     `${statusEmoji(task.state, useCustomEmoji)} <a href="${link}">${label}</a>`,
     dates.join(" - "),
     ...controls,
-  ].join("\n");
+  ].join("  \n");
 }
 
 export function formatTasksDocument(tasks: JobSummary[], useCustomEmoji = true): string {
