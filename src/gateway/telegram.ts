@@ -107,46 +107,15 @@ export class TelegramClient {
     if (options.threadId !== undefined && options.threadId !== null) {
       body.message_thread_id = options.threadId;
     }
-    try {
-      return await this.call<TelegramMessage>("sendRichMessage", body);
-    } catch (error) {
-      if (!(error instanceof TelegramApiError) || error.errorCode >= 500) {
-        throw error;
-      }
-      const fallback: JsonObject = {
-        chat_id: chatId,
-        text: markdown.slice(0, 4_096),
-      };
-      if (options.replyTo !== undefined) {
-        fallback.reply_parameters = {
-          message_id: options.replyTo,
-          allow_sending_without_reply: true,
-        };
-      }
-      if (options.threadId !== undefined && options.threadId !== null) {
-        fallback.message_thread_id = options.threadId;
-      }
-      return await this.call<TelegramMessage>("sendMessage", fallback);
-    }
+    return this.call<TelegramMessage>("sendRichMessage", body);
   }
 
-  async editRich(chatId: number, messageId: number, markdown: string): Promise<TelegramMessage> {
-    try {
-      return await this.call<TelegramMessage>("editMessageText", {
-        chat_id: chatId,
-        message_id: messageId,
-        rich_message: { markdown: markdown.slice(0, 32_768) },
-      });
-    } catch (error) {
-      if (!(error instanceof TelegramApiError) || error.errorCode >= 500) {
-        throw error;
-      }
-      return await this.call<TelegramMessage>("editMessageText", {
-        chat_id: chatId,
-        message_id: messageId,
-        text: markdown.slice(0, 4_096),
-      });
-    }
+  editRich(chatId: number, messageId: number, markdown: string): Promise<TelegramMessage> {
+    return this.call<TelegramMessage>("editMessageText", {
+      chat_id: chatId,
+      message_id: messageId,
+      rich_message: { markdown: markdown.slice(0, 32_768) },
+    });
   }
 
   setCommands(): Promise<boolean> {

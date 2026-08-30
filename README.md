@@ -89,6 +89,7 @@ window and matching private memory buckets are added to the request.
 While Codex works, terminal and reasoning events create or edit one persistent Rich Message
 with a collapsed `<details>` history in every chat. Completion replaces that same message
 with the same collapsed `<details>` history and the final Rich Markdown.
+Rich API errors are surfaced instead of silently sending the same document as unformatted text.
 Replying `/stop` to any Loylex message belonging to an active job cancels that Codex thread;
 the command is consumed and is not submitted as a new prompt.
 Telegram Bot API 10.2 supports up to 32,768 UTF-8 characters,
