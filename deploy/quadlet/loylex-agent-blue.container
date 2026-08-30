@@ -10,9 +10,9 @@ Image=ghcr.io/chelokot/loylex-agent:main
 ContainerName=loylex-agent-blue
 AutoUpdate=registry
 Network=loylex.network
-Volume=loylex-agent-home.volume:/home/loylex:U
-Volume=loylex-memory.volume:/memory:U
-Volume=loylex-workspace.volume:/workspace:U
+Volume=loylex-agent-home.volume:/home/loylex
+Volume=loylex-memory.volume:/memory
+Volume=loylex-workspace.volume:/workspace
 Secret=loylex-bridge-token,type=mount,target=bridge_token
 Secret=loylex-supervisor-token,type=mount,target=supervisor_token
 Environment=LOYLEX_BRIDGE_TOKEN_FILE=/run/secrets/bridge_token
