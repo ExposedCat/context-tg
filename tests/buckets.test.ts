@@ -20,13 +20,13 @@ test("loads always and term-selected private buckets", async () => {
     join(buckets, "index.json"),
     JSON.stringify({
       buckets: [
-        { file: "identity.md", always: true },
+        { file: "profile.md", always: true },
         { file: "servers.md", terms: ["VPS", "сервер"] },
         { file: "music.md", terms: ["music"] },
       ],
     }),
   );
-  await Bun.write(join(buckets, "identity.md"), "I am Loylex");
+  await Bun.write(join(buckets, "profile.md"), "I am Loylex");
   await Bun.write(join(buckets, "servers.md"), "Private server notes");
   await Bun.write(join(buckets, "music.md"), "Private music notes");
 

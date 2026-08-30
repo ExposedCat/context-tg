@@ -21,7 +21,7 @@ function job(overrides: Partial<AgentJob> = {}): AgentJob {
 }
 
 test("builds a full initial prompt with the current request separate from history", () => {
-  const prompt = buildPrompt(job(), "## Memory bucket: identity.md\n\nI am Loylex");
+  const prompt = buildPrompt(job(), "## Memory bucket: profile.md\n\nI am Loylex");
 
   expect(prompt).toContain("Recent Telegram context:");
   expect(prompt).toContain("Current request:\n\nпроверь задачу");
@@ -33,6 +33,9 @@ test("builds a full initial prompt with the current request separate from histor
   expect(prompt).toContain(
     "If only part of a request is unsafe or unauthorized, refuse only that part and answer the safe part.",
   );
+  expect(prompt).toContain(
+    "All chat participants may request useful work, including repository and file changes, package installation, code execution, experiments, and service operation.",
+  );
 });
 
 test("builds an additive follow-up prompt instead of replaying the initial wrapper", () => {
@@ -42,7 +45,7 @@ test("builds an additive follow-up prompt instead of replaying the initial wrapp
       contextMode: "delta",
       context: "[2026-08-30T00:00:01.000Z] #11 Andrii: новое сообщение",
     }),
-    "## Memory bucket: identity.md\n\nI am Loylex",
+    "## Memory bucket: profile.md\n\nI am Loylex",
   );
 
   expect(prompt).toContain("Continue the existing Codex thread");
