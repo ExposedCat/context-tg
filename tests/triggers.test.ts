@@ -1,12 +1,21 @@
 import { describe, expect, test } from "bun:test";
-import { detectTrigger, isStopCommand, isTasksCommand } from "../src/gateway/triggers.ts";
+import {
+  detectTrigger,
+  isNewChatCommand,
+  isStopCommand,
+  isTasksCommand,
+  newChatPrompt,
+} from "../src/gateway/triggers.ts";
 import type { TelegramMessage } from "../src/shared/types.ts";
 
-function message(text: string): TelegramMessage {
+function message(
+  text: string,
+  chatType: TelegramMessage["chat"]["type"] = "supergroup",
+): TelegramMessage {
   return {
     message_id: 1,
     date: 1,
-    chat: { id: -100, type: "supergroup" },
+    chat: { id: chatType === "private" ? 42 : -100, type: chatType },
     from: { id: 7, is_bot: false, first_name: "Andrii" },
     text,
   };
@@ -25,6 +34,13 @@ describe("detectTrigger", () => {
 
   test("does not match a longer word", () => {
     expect(detectTrigger(message("loylexical"), 42)).toBeNull();
+  });
+
+  test("accepts plain messages in private chats", () => {
+    expect(detectTrigger(message("проверь сервер", "private"), 42)).toEqual({
+      kind: "private",
+      prompt: "проверь сервер",
+    });
   });
 
   test("resumes on a reply to the bot", () => {
@@ -65,5 +81,20 @@ describe("detectTrigger", () => {
     expect(isTasksCommand(message("/tasks@loylexbot"), "LoylexBot")).toBe(true);
     expect(isTasksCommand(message("/tasks@AnotherBot"), "LoylexBot")).toBe(false);
     expect(isTasksCommand(message("/tasks now"), "LoylexBot")).toBe(false);
+  });
+
+  test("recognizes /newchat and extracts its prompt", () => {
+    const input = message("/newchat проверь сервер", "private");
+    expect(isNewChatCommand(input)).toBe(true);
+    expect(newChatPrompt(input, "LoylexBot")).toBe("проверь сервер");
+    expect(newChatPrompt(message("/newchat@loylexbot новая задача", "private"), "LoylexBot")).toBe(
+      "новая задача",
+    );
+    expect(newChatPrompt(message("/newchat", "private"), "LoylexBot")).toBe(
+      "Ответь на это сообщение.",
+    );
+    expect(newChatPrompt(message("/newchat@OtherBot не трогай", "private"), "LoylexBot")).toBe(
+      null,
+    );
   });
 });

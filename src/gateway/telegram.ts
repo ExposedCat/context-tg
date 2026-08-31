@@ -173,6 +173,7 @@ export class TelegramClient {
         { command: "stop", description: "Остановить работу" },
         { command: "tasks", description: "Показать последние задачи" },
         { command: "resume", description: "Продолжить задачу по ID" },
+        { command: "newchat", description: "Начать новый тред в личке" },
       ] as JsonValue[],
     });
   }

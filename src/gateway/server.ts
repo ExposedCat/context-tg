@@ -2,6 +2,7 @@ import type { Server } from "bun";
 import type { AgentCompletion, AgentEvent, TelegramMessage } from "../shared/types.ts";
 import type { GatewayConfig } from "./config.ts";
 import type { LoylexDatabase } from "./database.ts";
+import { responseOptions } from "./message-options.ts";
 import { completedDocuments, failedDocument, workDocument } from "./presentation.ts";
 import type { TelegramClient } from "./telegram.ts";
 
@@ -330,8 +331,7 @@ export class GatewayServer {
     const document = workDocument(status);
     if (thinkingMessageId === null) {
       const message = await this.telegram.sendRich(address.chatId, document, {
-        replyTo: address.messageId,
-        threadId: address.threadId,
+        ...responseOptions(address.chatType, address.messageId, address.threadId),
       });
       this.database.setThinkingMessage(jobId, message.message_id);
       this.#lastStreamEdit.set(jobId, now);
@@ -366,15 +366,14 @@ export class GatewayServer {
     let message: TelegramMessage;
     if (thinkingMessageId === null) {
       message = await this.telegram.sendRich(address.chatId, documents[0] ?? "", {
-        replyTo: address.messageId,
-        threadId: address.threadId,
+        ...responseOptions(address.chatType, address.messageId, address.threadId),
       });
     } else {
-      // Keep the final answer at the bottom of the chat so it replies to the user's request,
-      // even when other messages arrived while Codex was working.
+      // Keep the final answer at the bottom of the chat. In groups it replies to the user's
+      // request even when other messages arrived while Codex was working; private chats omit
+      // reply markers by design.
       message = await this.telegram.sendRich(address.chatId, documents[0] ?? "", {
-        replyTo: address.messageId,
-        threadId: address.threadId,
+        ...responseOptions(address.chatType, address.messageId, address.threadId),
       });
       await this.telegram.deleteMessage(address.chatId, thinkingMessageId);
     }
@@ -382,8 +381,7 @@ export class GatewayServer {
     let replyTo = message.message_id;
     for (const document of documents.slice(1)) {
       const followUp = await this.telegram.sendRich(address.chatId, document, {
-        replyTo,
-        threadId: address.threadId,
+        ...responseOptions(address.chatType, replyTo, address.threadId),
       });
       this.database.recordOutboundMessage(jobId, followUp.message_id, completion.threadId);
       replyTo = followUp.message_id;
@@ -407,8 +405,7 @@ export class GatewayServer {
     let message: { message_id: number };
     if (thinkingMessageId === null) {
       message = await this.telegram.sendRich(address.chatId, markdown, {
-        replyTo: address.messageId,
-        threadId: address.threadId,
+        ...responseOptions(address.chatType, address.messageId, address.threadId),
       });
     } else {
       message = await this.telegram.editRich(address.chatId, thinkingMessageId, markdown);

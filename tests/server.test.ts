@@ -147,6 +147,7 @@ test("sends a new final reply and removes the temporary progress message", async
 
 test("uses the same replace-with-reply flow in private chats", async () => {
   const sent: string[] = [];
+  const sentOptions: Array<{ replyTo?: number; threadId?: number | null }> = [];
   const deleted: Array<{ chatId: number; messageId: number }> = [];
   let thinkingMessageId: number | null = null;
   let completedMessageId: number | null = null;
@@ -175,8 +176,13 @@ test("uses the same replace-with-reply flow in private chats", async () => {
   } as unknown as LoylexDatabase;
 
   const telegram = {
-    sendRich: async (_chatId: number, markdown: string) => {
+    sendRich: async (
+      _chatId: number,
+      markdown: string,
+      options: { replyTo?: number; threadId?: number | null },
+    ) => {
       sent.push(markdown);
+      sentOptions.push(options);
       return botMessage(sent.length === 1 ? 21 : 22);
     },
     deleteMessage: async (chatId: number, messageId: number) => {
@@ -205,6 +211,7 @@ test("uses the same replace-with-reply flow in private chats", async () => {
     "<details><summary>Ход работы</summary>\n\n- Проверяю код\n\n</details>",
     "<details><summary>Ход работы</summary>\n\n- Проверяю код\n- Запускаю тесты\n\n</details>\n\nОтвет",
   ]);
+  expect(sentOptions).toEqual([{ threadId: null }, { threadId: null }]);
   expect(deleted).toEqual([{ chatId: 42, messageId: 21 }]);
   expect(completedMessageId as number | null).toBe(22);
 });

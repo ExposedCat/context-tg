@@ -44,6 +44,16 @@ function botMessage(id: number, text: string): TelegramMessage {
   };
 }
 
+function privateMessage(id: number, text: string): TelegramMessage {
+  return {
+    message_id: id,
+    date: 1_700_000_000 + id,
+    chat: { id: 42, type: "private" },
+    from: { id: 7, is_bot: false, first_name: "Artem" },
+    text,
+  };
+}
+
 function forwardedMessage(id: number, text: string): TelegramMessage {
   return {
     ...message(id, text),
@@ -110,6 +120,31 @@ describe("LoylexDatabase", () => {
     expect(resumed?.context).not.toContain("#1");
     expect(resumed?.context).not.toContain("#2");
     expect(resumed?.context).not.toContain("#4");
+    database.close();
+  });
+
+  test("finds the latest private thread and resolves replies to job messages", () => {
+    const database = setup();
+    const first = privateMessage(1, "первая задача");
+    database.archiveMessage(first, "bot_api");
+    database.enqueue(55, first, "первая задача", null);
+
+    const firstJob = database.claimNext(10);
+    expect(firstJob).not.toBeNull();
+    database.complete(firstJob?.id ?? 0, 2, "thread-one");
+
+    expect(database.latestThread(42)).toBe("thread-one");
+    expect(database.resumeThread(42, 2)).toBe("thread-one");
+    expect(database.resumeThread(42, 1)).toBe("thread-one");
+
+    const second = privateMessage(3, "вторая задача");
+    database.archiveMessage(second, "bot_api");
+    database.enqueue(56, second, "вторая задача", "thread-one");
+    const secondJob = database.claimNext(10);
+    expect(secondJob?.resumeThreadId).toBe("thread-one");
+    database.complete(secondJob?.id ?? 0, 4, "thread-two");
+
+    expect(database.latestThread(42)).toBe("thread-two");
     database.close();
   });
 

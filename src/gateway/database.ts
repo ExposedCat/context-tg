@@ -595,12 +595,45 @@ export class LoylexDatabase {
     if (repliedMessageId === undefined) {
       return null;
     }
-    const row = this.connection
-      .query<{ codex_thread_id: string | null }, [number, number]>(
-        "SELECT codex_thread_id FROM outbound_messages WHERE chat_id = ? AND message_id = ?",
+    const outbound = this.connection
+      .query<{ thread_id: string | null }, [number, number]>(
+        `
+          SELECT COALESCE(o.codex_thread_id, j.codex_thread_id, j.resume_thread_id) AS thread_id
+          FROM outbound_messages AS o
+          LEFT JOIN jobs AS j ON j.id = o.job_id
+          WHERE o.chat_id = ? AND o.message_id = ?
+        `,
       )
       .get(chatId, repliedMessageId);
-    return row?.codex_thread_id ?? null;
+    if (outbound?.thread_id) {
+      return outbound.thread_id;
+    }
+    return (
+      this.connection
+        .query<{ thread_id: string | null }, [number, number]>(`
+          SELECT COALESCE(codex_thread_id, resume_thread_id) AS thread_id
+          FROM jobs
+          WHERE chat_id = ? AND message_id = ?
+          ORDER BY created_at DESC, id DESC
+          LIMIT 1
+        `)
+        .get(chatId, repliedMessageId)?.thread_id ?? null
+    );
+  }
+
+  latestThread(chatId: number): string | null {
+    return (
+      this.connection
+        .query<{ thread_id: string | null }, [number]>(`
+          SELECT COALESCE(codex_thread_id, resume_thread_id) AS thread_id
+          FROM jobs
+          WHERE chat_id = ?
+            AND COALESCE(codex_thread_id, resume_thread_id) IS NOT NULL
+          ORDER BY created_at DESC, id DESC
+          LIMIT 1
+        `)
+        .get(chatId)?.thread_id ?? null
+    );
   }
 
   enqueue(

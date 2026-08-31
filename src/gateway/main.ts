@@ -1,6 +1,7 @@
 import type { TelegramMessage } from "../shared/types.ts";
 import { loadGatewayConfig } from "./config.ts";
 import { LoylexDatabase } from "./database.ts";
+import { responseOptions } from "./message-options.ts";
 import { helpMessage, resumeUnavailableMessage, stopResultMessage } from "./presentation.ts";
 import { GatewayServer } from "./server.ts";
 import { sendTasks } from "./tasks.ts";
@@ -9,8 +10,10 @@ import {
   cancelTaskMessageId,
   detectTrigger,
   isHelpCommand,
+  isNewChatCommand,
   isStopCommand,
   isTasksCommand,
+  newChatPrompt,
   resumeTaskMessageId,
 } from "./triggers.ts";
 
@@ -76,8 +79,11 @@ async function poll(): Promise<void> {
             );
           }
           await telegram.sendRich(message.chat.id, stopResultMessage(cancelledJobIds.length), {
-            replyTo: message.message_id,
-            threadId: message.message_thread_id ?? null,
+            ...responseOptions(
+              message.chat.type,
+              message.message_id,
+              message.message_thread_id ?? null,
+            ),
           });
           continue;
         }
@@ -96,8 +102,11 @@ async function poll(): Promise<void> {
             );
           }
           await telegram.sendRich(message.chat.id, stopResultMessage(cancelledJobIds.length), {
-            replyTo: message.message_id,
-            threadId: message.message_thread_id ?? null,
+            ...responseOptions(
+              message.chat.type,
+              message.message_id,
+              message.message_thread_id ?? null,
+            ),
           });
           continue;
         }
@@ -107,8 +116,11 @@ async function poll(): Promise<void> {
         }
         if (isHelpCommand(message, bot.username)) {
           await telegram.sendRich(message.chat.id, helpMessage(), {
-            replyTo: message.message_id,
-            threadId: message.message_thread_id ?? null,
+            ...responseOptions(
+              message.chat.type,
+              message.message_id,
+              message.message_thread_id ?? null,
+            ),
           });
           continue;
         }
@@ -117,8 +129,11 @@ async function poll(): Promise<void> {
           const resumeThreadId = database.resumableThread(message.chat.id, resumeMessageId);
           if (resumeThreadId === null) {
             await telegram.sendRich(message.chat.id, resumeUnavailableMessage(), {
-              replyTo: message.message_id,
-              threadId: message.message_thread_id ?? null,
+              ...responseOptions(
+                message.chat.type,
+                message.message_id,
+                message.message_thread_id ?? null,
+              ),
             });
           } else {
             acknowledgeWork(message);
@@ -131,15 +146,26 @@ async function poll(): Promise<void> {
           }
           continue;
         }
+        if (message.chat.type === "private" && isNewChatCommand(message)) {
+          const prompt = newChatPrompt(message, bot.username);
+          if (prompt !== null) {
+            acknowledgeWork(message);
+            database.enqueue(update.update_id, message, prompt, null);
+          }
+          continue;
+        }
         const trigger = detectTrigger(message, bot.id);
         if (!trigger) {
           continue;
         }
         acknowledgeWork(message);
-        const resumeThreadId = database.resumeThread(
+        const repliedThreadId = database.resumeThread(
           message.chat.id,
           message.reply_to_message?.message_id,
         );
+        const resumeThreadId =
+          repliedThreadId ??
+          (message.chat.type === "private" ? database.latestThread(message.chat.id) : null);
         database.enqueue(update.update_id, message, trigger.prompt, resumeThreadId);
       }
     } catch (error) {

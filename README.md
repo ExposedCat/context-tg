@@ -3,10 +3,12 @@
 Loylex is a persistent, self-evolving Codex agent that lives in Telegram and owns a
 sandboxed Fedora workbench on its personal VPS.
 
-Write `loylex …`, `лойлекс …`, or `лойликс …` in any supported case, or reply to a
-Loylex answer. A reply resumes the exact Codex thread. The agent can work in its terminal for
-as long as needed, remember private context, improve its own skills, search the complete
-archived chat, and deliver native Telegram Rich Messages.
+In a private chat, write a normal message to continue the latest Codex thread, reply to an old
+message to use that message's thread, or write `/newchat …` to start a clean thread. In groups,
+write `loylex …`, `лойлекс …`, or `лойликс …` in any supported case, or reply to a Loylex answer.
+A reply resumes the exact Codex thread. The agent can work in its terminal for as long as needed,
+remember private context, improve its own skills, search the complete archived chat, and deliver
+native Telegram Rich Messages.
 
 ## Shape
 
@@ -96,11 +98,13 @@ receives only archived messages since its previous turn because the saved Codex 
 already contains the earlier prompt and context.
 
 While Codex works, terminal and reasoning events create or edit one persistent Rich Message
-with a collapsed `<details>` history in every chat. Completion sends a new Rich Markdown reply
+with a collapsed `<details>` history in every chat. Completion sends a new Rich Markdown message
 containing the collapsed history and final answer, then removes the temporary progress message.
-This keeps the final reply at the bottom of the chat and mentions the user through the reply to
-their request.
+This keeps the final answer at the bottom of the chat; group messages reply to the request, while
+private-chat messages remain ordinary unthreaded messages.
 Rich API errors are surfaced instead of silently sending the same document as unformatted text.
+Private-chat responses are sent as ordinary messages without reply markers; group responses keep
+the reply to the triggering message.
 Replying `/stop` to any Loylex message belonging to an active job cancels that Codex thread,
 and Loylex replies with the cancellation result; the command is consumed and is not submitted
 as a new prompt. `/tasks` shows the five latest jobs in the current chat with their status,
