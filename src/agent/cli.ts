@@ -241,8 +241,51 @@ async function run(): Promise<void> {
     console.log(JSON.stringify(await response.json(), null, 2));
     return;
   }
+  if (command === "upload-album") {
+    let paths = arguments_;
+    let caption: string | undefined;
+    const captionIndex = arguments_.findIndex(
+      (argument) => argument === "--caption" || argument.startsWith("--caption="),
+    );
+    if (captionIndex >= 0) {
+      const argument = arguments_[captionIndex];
+      if (argument === undefined) {
+        throw new Error("Usage: loylex upload-album CHAT_ID FILE... [--caption CAPTION]");
+      }
+      if (argument === "--caption") {
+        if (captionIndex !== arguments_.length - 2) {
+          throw new Error("Usage: loylex upload-album CHAT_ID FILE... [--caption CAPTION]");
+        }
+        caption = arguments_[captionIndex + 1];
+      } else {
+        caption = argument.slice("--caption=".length);
+        if (captionIndex !== arguments_.length - 1) {
+          throw new Error("Usage: loylex upload-album CHAT_ID FILE... [--caption CAPTION]");
+        }
+      }
+      paths = arguments_.slice(0, captionIndex);
+    }
+    const [chatId, ...files] = paths;
+    if (!chatId || files.length < 2 || files.length > 10) {
+      throw new Error("Usage: loylex upload-album CHAT_ID FILE... [--caption CAPTION]");
+    }
+    const form = new FormData();
+    form.set("chat_id", chatId);
+    for (const path of files) {
+      form.append("file", Bun.file(path), basename(path));
+    }
+    if (caption !== undefined) {
+      form.set("caption", caption);
+    }
+    const response = await request("/v1/telegram/upload-album", {
+      method: "POST",
+      body: form,
+    });
+    console.log(JSON.stringify(await response.json(), null, 2));
+    return;
+  }
   throw new Error(
-    "Usage: loylex <status|search|recent|media-list|message|messages|import|send|media|upload|system>",
+    "Usage: loylex <status|search|recent|media-list|message|messages|import|send|media|upload|upload-album|system>",
   );
 }
 

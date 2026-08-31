@@ -291,6 +291,27 @@ export class GatewayServer {
         return json({ chatId: message.chat.id, messageId: message.message_id });
       }
 
+      if (request.method === "POST" && url.pathname === "/v1/telegram/upload-album") {
+        const form = await request.formData();
+        const chatId = Number(form.get("chat_id"));
+        const files = form.getAll("file").filter((value) => value instanceof File) as Array<
+          Blob & { readonly name: string }
+        >;
+        const caption = form.get("caption");
+        if (!Number.isSafeInteger(chatId) || !this.database.chatExists(chatId)) {
+          return json({ error: "unknown chat" }, 403);
+        }
+        if (files.length < 2 || files.length > 10) {
+          return json({ error: "album must contain 2-10 files" }, 400);
+        }
+        const messages = await this.telegram.sendMediaGroup(
+          chatId,
+          files,
+          typeof caption === "string" ? caption : null,
+        );
+        return json({ chatId, messageIds: messages.map((message) => message.message_id) });
+      }
+
       if (request.method === "POST" && url.pathname === "/v1/telegram/send") {
         const payload = await body<{
           chatId: number;

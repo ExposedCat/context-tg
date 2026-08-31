@@ -81,3 +81,36 @@ test("deletes a Telegram message", async () => {
   await expect(client.deleteMessage(42, 17)).resolves.toBe(true);
   expect(requestBody).toEqual({ chat_id: 42, message_id: 17 });
 });
+
+test("sends a photo album with a caption on the first photo", async () => {
+  let requestBody: FormData | undefined;
+  globalThis.fetch = (async (input, init) => {
+    expect(String(input)).toBe("https://api.telegram.org/bottest-token/sendMediaGroup");
+    requestBody = init?.body as FormData;
+    return Response.json({
+      ok: true,
+      result: [
+        { message_id: 18, date: 1, chat: { id: 42, type: "supergroup" } },
+        { message_id: 19, date: 1, chat: { id: 42, type: "supergroup" } },
+      ],
+    });
+  }) as typeof fetch;
+
+  const client = new TelegramClient("test-token");
+  await expect(
+    client.sendMediaGroup(
+      42,
+      [new File(["one"], "one.png", { type: "image/png" }), new File(["two"], "two.png")],
+      "Графики",
+    ),
+  ).resolves.toHaveLength(2);
+
+  expect(requestBody).toBeDefined();
+  expect(requestBody?.get("chat_id")).toBe("42");
+  expect(JSON.parse(String(requestBody?.get("media")))).toEqual([
+    { type: "photo", media: "attach://file0", caption: "Графики" },
+    { type: "photo", media: "attach://file1" },
+  ]);
+  expect((requestBody?.get("file0") as File).name).toBe("one.png");
+  expect((requestBody?.get("file1") as File).name).toBe("two.png");
+});

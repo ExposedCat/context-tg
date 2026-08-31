@@ -287,3 +287,48 @@ test("keeps progress when replacing a temporary message with a failure", async (
     threadId: "thread-1",
   });
 });
+
+test("uploads an album to a known chat", async () => {
+  type UploadFile = Blob & { readonly name: string };
+  const uploads: Array<{ chatId: number; files: UploadFile[]; caption: string | null }> = [];
+  const database = {
+    chatExists: (chatId: number) => chatId === -10042,
+  } as unknown as LoylexDatabase;
+  const telegram = {
+    sendMediaGroup: async (
+      chatId: number,
+      files: ReadonlyArray<UploadFile>,
+      caption: string | null,
+    ) => {
+      uploads.push({ chatId, files: [...files], caption });
+      return [botMessage(18), botMessage(19)];
+    },
+  } as unknown as TelegramClient;
+  const server = new GatewayServer(config(), database, telegram);
+  const route = (server as unknown as { route: (request: Request) => Promise<Response> }).route;
+  const form = new FormData();
+  form.set("chat_id", "-10042");
+  form.append("file", new File(["one"], "one.png", { type: "image/png" }));
+  form.append("file", new File(["two"], "two.png", { type: "image/png" }));
+  form.set("caption", "Графики");
+
+  const response = await route.call(
+    server,
+    new Request("http://localhost/v1/telegram/upload-album", {
+      method: "POST",
+      headers: { authorization: "Bearer unused" },
+      body: form,
+    }),
+  );
+
+  expect(response.status).toBe(200);
+  expect(await response.json()).toEqual({ chatId: -10042, messageIds: [18, 19] });
+  expect(uploads).toHaveLength(1);
+  const uploaded = uploads[0];
+  if (uploaded === undefined) {
+    throw new Error("album was not uploaded");
+  }
+  expect(uploaded.chatId).toBe(-10042);
+  expect(uploaded.files.map((file) => file.name)).toEqual(["one.png", "two.png"]);
+  expect(uploaded.caption).toBe("Графики");
+});

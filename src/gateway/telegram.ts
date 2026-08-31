@@ -235,4 +235,40 @@ export class TelegramClient {
     }
     return payload.result;
   }
+
+  async sendMediaGroup(
+    chatId: number,
+    files: ReadonlyArray<Blob & { readonly name: string }>,
+    caption: string | null,
+  ): Promise<TelegramMessage[]> {
+    const form = new FormData();
+    form.set("chat_id", String(chatId));
+    form.set(
+      "media",
+      JSON.stringify(
+        files.map((_file, index) => ({
+          type: "photo",
+          media: `attach://file${index}`,
+          ...(index === 0 && caption ? { caption: caption.slice(0, 1_024) } : {}),
+        })),
+      ),
+    );
+    files.forEach((file, index) => {
+      form.set(`file${index}`, file, file.name);
+    });
+    const response = await fetch(`${this.#baseUrl}/sendMediaGroup`, {
+      method: "POST",
+      body: form,
+      signal: AbortSignal.timeout(120_000),
+    });
+    const payload = (await response.json()) as TelegramResponse<TelegramMessage[]>;
+    if (!response.ok || !payload.ok || !payload.result) {
+      throw new TelegramApiError(
+        "sendMediaGroup",
+        payload.error_code ?? response.status,
+        payload.description ?? response.statusText,
+      );
+    }
+    return payload.result;
+  }
 }
