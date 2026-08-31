@@ -52,12 +52,13 @@ async function run(): Promise<void> {
   if (command === "search") {
     const query = arguments_[0];
     if (!query) {
-      throw new Error("Usage: loylex search QUERY [CHAT_ID]");
+      throw new Error("Usage: loylex search QUERY [CHAT_ID] [LIMIT] [OFFSET]");
     }
     const chat = arguments_[1] ? `&chat=${encodeURIComponent(arguments_[1])}` : "";
     const limit = arguments_[2] ? `&limit=${encodeURIComponent(arguments_[2])}` : "";
+    const offset = arguments_[3] ? `&offset=${encodeURIComponent(arguments_[3])}` : "";
     const response = await request(
-      `/v1/archive/search?q=${encodeURIComponent(query)}${chat}${limit}`,
+      `/v1/archive/search?q=${encodeURIComponent(query)}${chat}${limit}${offset}`,
     );
     console.log(JSON.stringify(await response.json(), null, 2));
     return;

@@ -1429,18 +1429,18 @@ export class LoylexDatabase {
     );
   }
 
-  search(query: string, chatId: number | null, limit: number): SearchResult[] {
+  search(query: string, chatId: number | null, limit: number, offset = 0): SearchResult[] {
     const rows = this.connection
-      .query<SearchRow, [string, number | null, number | null, number]>(`
+      .query<SearchRow, [string, number | null, number | null, number, number]>(`
         SELECT m.chat_id, m.message_id, m.date, m.from_user_id, m.from_display_name, m.from_username,
                m.text, m.raw_json
         FROM messages_fts f
         JOIN messages m ON m.rowid = f.rowid
         WHERE messages_fts MATCH ? AND (? IS NULL OR m.chat_id = ?)
         ORDER BY bm25(messages_fts), m.date DESC
-        LIMIT ?
+        LIMIT ? OFFSET ?
       `)
-      .all(query, chatId, chatId, limit);
+      .all(query, chatId, chatId, limit, offset);
     return rows.map(searchResult);
   }
 

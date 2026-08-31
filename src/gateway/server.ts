@@ -163,8 +163,12 @@ export class GatewayServer {
         const chat = url.searchParams.get("chat");
         const parsedLimit = Number.parseInt(url.searchParams.get("limit") ?? "20", 10);
         const limit = Number.isNaN(parsedLimit) ? 20 : Math.min(Math.max(parsedLimit, 1), 100);
+        const parsedOffset = Number.parseInt(url.searchParams.get("offset") ?? "0", 10);
+        if (!Number.isInteger(parsedOffset) || parsedOffset < 0) {
+          return json({ error: "offset must be a non-negative integer" }, 400);
+        }
         return json({
-          results: this.database.search(query, chat ? Number(chat) : null, limit),
+          results: this.database.search(query, chat ? Number(chat) : null, limit, parsedOffset),
         });
       }
 
