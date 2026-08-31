@@ -210,6 +210,9 @@ describe("LoylexDatabase", () => {
 
     const job = database.claimNext(10);
     expect(job?.attachments).toEqual([{ kind: "document", value: document }]);
+    expect(job?.replyContext).toContain(
+      `attachments=${JSON.stringify([{ kind: "document", value: document }])}`,
+    );
     database.close();
   });
 

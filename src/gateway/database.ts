@@ -235,10 +235,14 @@ function messageReference(message: UnknownRecord, label: string): string | null 
     return null;
   }
   const text = stringField(message.text) ?? stringField(message.caption) ?? "";
-  const mediaKinds = ["photo", "document", "audio", "video", "voice", "animation"].filter(
-    (key) => message[key] !== undefined,
-  );
-  const mediaText = mediaKinds.length > 0 ? ` attachments=${mediaKinds.join(",")}` : "";
+  const attachments: JsonValue[] = [];
+  for (const key of ["photo", "document", "audio", "video", "voice", "animation"]) {
+    const value = message[key];
+    if (value) {
+      attachments.push({ kind: key, value: value as JsonValue });
+    }
+  }
+  const mediaText = attachments.length > 0 ? ` attachments=${JSON.stringify(attachments)}` : "";
   return `${label} #${messageId} ${nestedAuthor(message)}: ${text}${mediaText}`;
 }
 
