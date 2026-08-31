@@ -62,6 +62,12 @@ RUN dnf install -y \
     && dnf clean all \
     && rm -rf /tmp/bun /tmp/bun.zip /root/.npm
 
+RUN python3 -m pip install \
+      --no-cache-dir \
+      --disable-pip-version-check \
+      --target /opt/loylex/python \
+      "pybooru==4.2.2"
+
 COPY --chown=loylex:loylex package.json bun.lock tsconfig.json /opt/loylex/app/
 COPY --chown=loylex:loylex src /opt/loylex/app/src
 COPY --chown=loylex:loylex AGENTS.md /opt/loylex/seed/AGENTS.md
@@ -77,6 +83,7 @@ ENV CODEX_HOME=/home/loylex/.codex
 ENV LANG=en_US.UTF-8
 ENV LOYLEX_MEMORY_PATH=/memory
 ENV LOYLEX_REPOSITORY_PATH=/workspace/Loylex
+ENV PYTHONPATH=/opt/loylex/python
 ENV PATH=/home/loylex/.local/bin:/usr/local/bin:/usr/bin
 
 ENTRYPOINT ["loylex-agent"]
