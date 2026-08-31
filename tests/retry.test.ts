@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { isThreadStoreConflict } from "../src/agent/codex.ts";
 import { isTransientNetworkError, retryTransient } from "../src/agent/retry.ts";
 
 test("recognizes a closed gateway socket as transient", () => {
@@ -40,4 +41,15 @@ test("does not retry non-network failures", async () => {
     }, [0, 0]),
   ).rejects.toThrow("invalid request");
   expect(attempts).toBe(1);
+});
+
+test("recognizes a Codex thread writer conflict for agent-level retry", () => {
+  expect(
+    isThreadStoreConflict(
+      new Error(
+        "Codex exited with 1: thread-store conflict: thread abc already has an active writer",
+      ),
+    ),
+  ).toBe(true);
+  expect(isThreadStoreConflict(new Error("Codex exited with 1: invalid prompt"))).toBe(false);
 });

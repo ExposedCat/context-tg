@@ -998,7 +998,14 @@ export class LoylexDatabase {
         ORDER BY id
       `)
       .all(now);
+    let recovered = 0;
     for (const job of jobs) {
+      // A job lease can expire while its worker is still alive (for example when a
+      // long-running tool call delays the per-job heartbeat). Do not hand that job to a
+      // second Codex process: the original process may still hold the thread writer lock.
+      if (job.worker_id !== null && this.hasLiveWorkerLease(job.worker_id, now)) {
+        continue;
+      }
       const generation = this.generationForRecovery(job.worker_id, job.worker_generation, now);
       this.connection
         .query(`
@@ -1012,8 +1019,18 @@ export class LoylexDatabase {
           WHERE id = ? AND state = 'running'
         `)
         .run(generation, job.id);
+      recovered += 1;
     }
-    return jobs.length;
+    return recovered;
+  }
+
+  private hasLiveWorkerLease(workerId: string, now: number): boolean {
+    const owner = this.worker(workerId);
+    return (
+      owner !== null &&
+      owner.state !== "stopped" &&
+      owner.last_seen_at >= now - workerLeaseDurationMs
+    );
   }
 
   private generationForRecovery(workerId: string | null, generation: number, now: number): number {

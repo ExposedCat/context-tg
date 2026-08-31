@@ -202,6 +202,49 @@ describe("LoylexDatabase", () => {
     database.close();
   });
 
+  test("does not requeue an expired lease while its worker is alive", () => {
+    const database = setup();
+    const now = Date.now();
+    database.registerWorker("worker-a", now);
+
+    const incoming = message(1, "долгая задача");
+    database.enqueue(55, incoming, "долгая задача", null);
+    const running = database.claimNext(10, "worker-a");
+    expect(running).not.toBeNull();
+    database.appendStatus(running?.id ?? 0, "commentary: работаю", "thread-123", "worker-a");
+
+    database.connection
+      .query("UPDATE jobs SET lease_expires_at = ? WHERE id = ?")
+      .run(now - 1, running?.id ?? 0);
+    database.heartbeatWorker("worker-a", now);
+
+    expect(database.recoverExpiredJobs(now)).toBe(0);
+    expect(database.claimNext(10, "worker-a")).toBeNull();
+    database.close();
+  });
+
+  test("requeues an expired lease after its worker stops being live", () => {
+    const database = setup();
+    const now = Date.now();
+    database.registerWorker("worker-a", now);
+
+    const incoming = message(1, "задача после сбоя worker");
+    database.enqueue(55, incoming, "задача после сбоя worker", null);
+    const running = database.claimNext(10, "worker-a");
+    expect(running).not.toBeNull();
+    database.connection
+      .query("UPDATE jobs SET lease_expires_at = ? WHERE id = ?")
+      .run(now - 1, running?.id ?? 0);
+    database.heartbeatWorker("worker-a", now - 60_000);
+
+    expect(database.recoverExpiredJobs(now)).toBe(1);
+    database.registerWorker("worker-b", now);
+    const recovered = database.claimNext(10, "worker-b");
+    expect(recovered?.id).toBe(running?.id);
+    expect(recovered?.resumeThreadId).toBeNull();
+    database.close();
+  });
+
   test("reassigns queued old-generation work when a worker stops", () => {
     const database = setup();
     database.registerWorker("blue", 1_000);

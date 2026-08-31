@@ -27,7 +27,38 @@ export class CodexCancelledError extends Error {
   }
 }
 
-export async function runCodex(
+const threadConflictRetryDelaysMs = [1_000, 2_000, 5_000, 10_000, 20_000, 30_000, 60_000] as const;
+
+function errorText(error: unknown): string {
+  return error instanceof Error ? `${error.name} ${error.message}` : String(error);
+}
+
+export function isThreadStoreConflict(error: unknown): boolean {
+  return /thread-store conflict\b[\s\S]*\bactive writer\b/i.test(errorText(error));
+}
+
+async function waitForThreadWriter(
+  delayMs: number,
+  signal: AbortSignal | undefined,
+): Promise<void> {
+  if (signal?.aborted) {
+    throw new CodexCancelledError();
+  }
+  await new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", abort);
+      resolve();
+    }, delayMs);
+    function abort(): void {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", abort);
+      reject(new CodexCancelledError());
+    }
+    signal?.addEventListener("abort", abort, { once: true });
+  });
+}
+
+async function runCodexAttempt(
   config: AgentConfig,
   prompt: string,
   resumeThreadId: string | null,
@@ -180,6 +211,36 @@ export async function runCodex(
     signal?.removeEventListener("abort", abortHandler);
     if (forceKillTimer !== undefined) {
       clearTimeout(forceKillTimer);
+    }
+  }
+}
+
+export async function runCodex(
+  config: AgentConfig,
+  prompt: string,
+  resumeThreadId: string | null,
+  onEvent: (event: AgentEvent) => Promise<void>,
+  signal?: AbortSignal,
+): Promise<CodexRunResult> {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await runCodexAttempt(config, prompt, resumeThreadId, onEvent, signal);
+    } catch (error) {
+      if (!resumeThreadId || !isThreadStoreConflict(error)) {
+        throw error;
+      }
+      const delayMs =
+        threadConflictRetryDelaysMs[Math.min(attempt, threadConflictRetryDelaysMs.length - 1)] ??
+        60_000;
+      console.warn(
+        JSON.stringify({
+          level: "warn",
+          event: "codex_thread_writer_busy",
+          attempt: attempt + 1,
+          retryInMs: delayMs,
+        }),
+      );
+      await waitForThreadWriter(delayMs, signal);
     }
   }
 }
