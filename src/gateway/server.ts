@@ -179,6 +179,47 @@ export class GatewayServer {
         return json({ results: this.database.archivedMedia(chatId, limit) });
       }
 
+      if (request.method === "GET" && url.pathname === "/v1/archive/message") {
+        const chat = url.searchParams.get("chat");
+        const message = url.searchParams.get("message");
+        const chatId = chat === null ? Number.NaN : Number(chat);
+        const messageId = message === null ? Number.NaN : Number(message);
+        if (
+          !chat ||
+          !Number.isSafeInteger(chatId) ||
+          !message ||
+          !Number.isSafeInteger(messageId)
+        ) {
+          return json({ error: "chat and message must be valid integer IDs" }, 400);
+        }
+        const result = this.database.archivedMessage(chatId, messageId);
+        return result === null ? json({ error: "message not found" }, 404) : json(result);
+      }
+
+      if (request.method === "GET" && url.pathname === "/v1/archive/messages") {
+        const chat = url.searchParams.get("chat");
+        const chatId = chat === null ? Number.NaN : Number(chat);
+        if (!chat || !Number.isSafeInteger(chatId)) {
+          return json({ error: "chat must be a valid chat ID" }, 400);
+        }
+        const parseBound = (name: string): number | null | "invalid" => {
+          const value = url.searchParams.get(name);
+          if (value === null || value === "") {
+            return null;
+          }
+          const parsed = Number(value);
+          return Number.isSafeInteger(parsed) ? parsed : "invalid";
+        };
+        const after = parseBound("after");
+        const before = parseBound("before");
+        if (after === "invalid" || before === "invalid") {
+          return json({ error: "after and before must be valid integer message IDs" }, 400);
+        }
+        const parsedLimit = Number.parseInt(url.searchParams.get("limit") ?? "100", 10);
+        const limit = Number.isNaN(parsedLimit) ? 100 : Math.min(Math.max(parsedLimit, 1), 500);
+        return json({ results: this.database.archivedMessages(chatId, after, before, limit) });
+      }
+
       if (request.method === "POST" && url.pathname === "/v1/archive/import") {
         const payload = await body<{ messages?: unknown }>(request);
         if (

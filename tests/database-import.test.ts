@@ -38,5 +38,16 @@ test("archives imported messages in one batch and exposes their media", () => {
       media: [{ kind: "document", value: { file_id: "file-1", file_name: "part-000" } }],
     },
   ]);
+  expect(database.archivedMessage(-10042, 1)).toMatchObject({
+    chatId: -10042,
+    messageId: 1,
+    userId: 7,
+    text: "историческое сообщение",
+    source: "telegram_export",
+    raw: message,
+  });
+  expect(database.archivedMessages(-10042, null, null, 10).map((item) => item.messageId)).toEqual([
+    1,
+  ]);
   database.close();
 });

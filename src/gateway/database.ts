@@ -110,6 +110,21 @@ export type ArchivedMedia = {
   media: JsonValue[];
 };
 
+export type ArchivedMessage = {
+  chatId: number;
+  messageId: number;
+  date: number;
+  userId: number | null;
+  author: string;
+  text: string;
+  replyToMessageId: number | null;
+  mediaGroupId: string | null;
+  source: "bot_api" | "telegram_export";
+  media: JsonValue[];
+  raw: JsonObject;
+  forwardOrigin?: JsonObject;
+};
+
 type SearchRow = {
   chat_id: number;
   message_id: number;
@@ -119,6 +134,21 @@ type SearchRow = {
   from_username: string | null;
   text: string | null;
   raw_json: string;
+};
+
+type ArchivedMessageRow = {
+  chat_id: number;
+  message_id: number;
+  date: number;
+  from_user_id: number | null;
+  from_display_name: string | null;
+  from_username: string | null;
+  text: string | null;
+  reply_to_message_id: number | null;
+  media_group_id: string | null;
+  media_json: string;
+  raw_json: string;
+  source: string;
 };
 
 type UnknownRecord = Record<string, unknown>;
@@ -176,6 +206,27 @@ function searchResult(row: SearchRow): SearchResult {
   };
   const origin = forwardOrigin(row.raw_json);
   return origin === null ? result : { ...result, forwardOrigin: origin };
+}
+
+function archivedMessage(row: ArchivedMessageRow): ArchivedMessage {
+  const raw = parseObject(row.raw_json) as unknown as JsonObject;
+  const origin = forwardOrigin(row.raw_json);
+  return {
+    chatId: row.chat_id,
+    messageId: row.message_id,
+    date: row.date,
+    userId: row.from_user_id,
+    author: row.from_username
+      ? `${row.from_display_name ?? row.from_username} (@${row.from_username})`
+      : (row.from_display_name ?? "unknown"),
+    text: row.text ?? "",
+    replyToMessageId: row.reply_to_message_id,
+    mediaGroupId: row.media_group_id,
+    source: row.source as ArchivedMessage["source"],
+    media: JSON.parse(row.media_json) as JsonValue[],
+    raw,
+    ...(origin === null ? {} : { forwardOrigin: origin }),
+  };
 }
 
 function messageReference(message: UnknownRecord, label: string): string | null {
@@ -498,6 +549,42 @@ export class LoylexDatabase {
       source: row.source as ArchivedMedia["source"],
       media: JSON.parse(row.media_json) as JsonValue[],
     }));
+  }
+
+  archivedMessage(chatId: number, messageId: number): ArchivedMessage | null {
+    const row = this.connection
+      .query<ArchivedMessageRow, [number, number]>(`
+        SELECT chat_id, message_id, date, from_user_id, from_display_name, from_username,
+               text, reply_to_message_id, media_group_id, media_json, raw_json, source
+        FROM messages
+        WHERE chat_id = ? AND message_id = ?
+      `)
+      .get(chatId, messageId);
+    return row ? archivedMessage(row) : null;
+  }
+
+  archivedMessages(
+    chatId: number,
+    afterMessageId: number | null,
+    beforeMessageId: number | null,
+    limit: number,
+  ): ArchivedMessage[] {
+    const rows = this.connection
+      .query<
+        ArchivedMessageRow,
+        [number, number | null, number | null, number | null, number | null, number]
+      >(`
+        SELECT chat_id, message_id, date, from_user_id, from_display_name, from_username,
+               text, reply_to_message_id, media_group_id, media_json, raw_json, source
+        FROM messages
+        WHERE chat_id = ?
+          AND (? IS NULL OR message_id > ?)
+          AND (? IS NULL OR message_id < ?)
+        ORDER BY message_id ASC
+        LIMIT ?
+      `)
+      .all(chatId, afterMessageId, afterMessageId, beforeMessageId, beforeMessageId, limit);
+    return rows.map(archivedMessage);
   }
 
   resumeThread(chatId: number, repliedMessageId: number | undefined): string | null {

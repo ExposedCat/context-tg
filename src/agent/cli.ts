@@ -88,6 +88,50 @@ async function run(): Promise<void> {
     console.log(JSON.stringify(await response.json(), null, 2));
     return;
   }
+  if (command === "message") {
+    const [chatId, messageId] = arguments_;
+    const parsedChatId = Number(chatId);
+    const parsedMessageId = Number(messageId);
+    if (
+      !chatId ||
+      !messageId ||
+      !Number.isSafeInteger(parsedChatId) ||
+      !Number.isSafeInteger(parsedMessageId)
+    ) {
+      throw new Error("Usage: loylex message CHAT_ID MESSAGE_ID");
+    }
+    const response = await request(
+      `/v1/archive/message?chat=${encodeURIComponent(chatId)}&message=${encodeURIComponent(messageId)}`,
+    );
+    console.log(JSON.stringify(await response.json(), null, 2));
+    return;
+  }
+  if (command === "messages") {
+    const [chatId, rawAfter = "", rawBefore = "", rawLimit = "100"] = arguments_;
+    const parsedChatId = Number(chatId);
+    const parsedAfter = rawAfter === "" ? null : Number(rawAfter);
+    const parsedBefore = rawBefore === "" ? null : Number(rawBefore);
+    const parsedLimit = Number.parseInt(rawLimit, 10);
+    if (
+      !chatId ||
+      !Number.isSafeInteger(parsedChatId) ||
+      (parsedAfter !== null && !Number.isSafeInteger(parsedAfter)) ||
+      (parsedBefore !== null && !Number.isSafeInteger(parsedBefore)) ||
+      !Number.isInteger(parsedLimit)
+    ) {
+      throw new Error(
+        "Usage: loylex messages CHAT_ID [AFTER_MESSAGE_ID] [BEFORE_MESSAGE_ID] [LIMIT]",
+      );
+    }
+    const after = parsedAfter === null ? "" : `&after=${encodeURIComponent(String(parsedAfter))}`;
+    const before =
+      parsedBefore === null ? "" : `&before=${encodeURIComponent(String(parsedBefore))}`;
+    const response = await request(
+      `/v1/archive/messages?chat=${encodeURIComponent(chatId)}${after}${before}&limit=${encodeURIComponent(String(parsedLimit))}`,
+    );
+    console.log(JSON.stringify(await response.json(), null, 2));
+    return;
+  }
   if (command === "import") {
     const [path, rawChatId] = arguments_;
     if (!path) {
@@ -164,7 +208,7 @@ async function run(): Promise<void> {
     return;
   }
   throw new Error(
-    "Usage: loylex <status|search|recent|media-list|import|send|media|upload|system>",
+    "Usage: loylex <status|search|recent|media-list|message|messages|import|send|media|upload|system>",
   );
 }
 
