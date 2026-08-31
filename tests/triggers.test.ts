@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   detectTrigger,
   isNewChatCommand,
+  isSlashCommand,
   isStopCommand,
   isTasksCommand,
   newChatPrompt,
@@ -65,7 +66,7 @@ describe("detectTrigger", () => {
 
     expect(isStopCommand(input, 42, "LoylexBot")).toBe(true);
     expect(isStopCommand(input, 42, "AnotherBot")).toBe(false);
-    expect(detectTrigger(input, 42)).toEqual({ kind: "reply", prompt: "/stop@LoylexBot" });
+    expect(detectTrigger(input, 42)).toBeNull();
 
     input.reply_to_message.from = { id: 8, is_bot: true, first_name: "Other bot" };
     expect(isStopCommand(input, 42, "LoylexBot")).toBe(false);
@@ -74,6 +75,19 @@ describe("detectTrigger", () => {
   test("does not recognize /stop outside a bot reply", () => {
     expect(isStopCommand(message("/stop"), 42, "LoylexBot")).toBe(false);
     expect(isStopCommand(message("/stop now"), 42, "LoylexBot")).toBe(false);
+  });
+
+  test("ignores slash-prefixed requests", () => {
+    const input = message(" /покажи это", "private");
+    input.reply_to_message = {
+      message_id: 10,
+      date: 1,
+      chat: input.chat,
+      from: { id: 42, is_bot: true, first_name: "Loylex" },
+    };
+
+    expect(isSlashCommand(input)).toBe(true);
+    expect(detectTrigger(input, 42)).toBeNull();
   });
 
   test("recognizes /tasks with an optional Loylex mention", () => {

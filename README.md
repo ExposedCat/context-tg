@@ -110,6 +110,7 @@ Replying `/stop` to any Loylex message belonging to an active job cancels that C
 and Loylex replies with the cancellation result; the command is consumed and is not submitted
 as a new prompt. `/tasks` shows the five latest jobs in the current chat with their status,
 timestamps, and a link to the related Loylex message.
+Other slash-prefixed messages are ignored and never submitted as prompts.
 The agent runs up to 50 jobs concurrently by default; the durable SQLite job queue remains as
 backpressure and restart recovery for work beyond that limit. Jobs that resume the same Codex
 thread are serialized to avoid concurrent writers, while unrelated threads still run in parallel.

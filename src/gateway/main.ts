@@ -11,6 +11,7 @@ import {
   detectTrigger,
   isHelpCommand,
   isNewChatCommand,
+  isSlashCommand,
   isStopCommand,
   isTasksCommand,
   newChatPrompt,
@@ -172,6 +173,9 @@ async function poll(): Promise<void> {
             acknowledgeWork(message);
             database.enqueue(update.update_id, message, prompt, null);
           }
+          continue;
+        }
+        if (isSlashCommand(message)) {
           continue;
         }
         const trigger = detectTrigger(message, bot.id);

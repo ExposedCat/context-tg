@@ -18,6 +18,10 @@ function messageText(message: TelegramMessage): string {
   return message.text ?? message.caption ?? "";
 }
 
+export function isSlashCommand(message: TelegramMessage): boolean {
+  return messageText(message).trimStart().startsWith("/");
+}
+
 function mentionsAnotherBot(mention: string | undefined, botUsername: string | undefined): boolean {
   return Boolean(
     mention && botUsername && mention.toLocaleLowerCase() !== botUsername.toLocaleLowerCase(),
@@ -110,6 +114,9 @@ export function resumeTaskMessageId(message: TelegramMessage, botUsername?: stri
 
 export function detectTrigger(message: TelegramMessage, botUserId: number): TriggerDecision | null {
   const text = messageText(message);
+  if (isSlashCommand(message)) {
+    return null;
+  }
   const prefix = text.match(prefixPattern);
   if (prefix) {
     const prompt = text.slice(prefix[0].length).trim();
