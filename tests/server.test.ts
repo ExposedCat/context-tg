@@ -145,11 +145,17 @@ test("sends a new final reply and removes the temporary progress message", async
   });
 });
 
-test("uses the same replace-with-reply flow in private chats", async () => {
-  const sent: string[] = [];
-  const sentOptions: Array<{ replyTo?: number; threadId?: number | null }> = [];
+test("uses ephemeral rich drafts in private chats", async () => {
+  const drafts: Array<{
+    chatId: number;
+    markdown: string;
+    options: { draftId: number; threadId?: number | null; canStop?: boolean };
+  }> = [];
+  const sent: Array<{
+    markdown: string;
+    options: { replyTo?: number; threadId?: number | null };
+  }> = [];
   const deleted: Array<{ chatId: number; messageId: number }> = [];
-  let thinkingMessageId: number | null = null;
   let completedMessageId: number | null = null;
   let status = "";
 
@@ -160,14 +166,11 @@ test("uses the same replace-with-reply flow in private chats", async () => {
       messageId: 10,
       threadId: null,
     }),
-    thinkingMessage: () => thinkingMessageId,
+    thinkingMessage: () => null,
     isJobCancelled: () => false,
     appendStatus: (_jobId: number, line: string) => {
       status = status ? `${status}\n\n${line}` : line;
       return status;
-    },
-    setThinkingMessage: (_jobId: number, messageId: number) => {
-      thinkingMessageId = messageId;
     },
     recordOutboundMessage: () => {},
     complete: (_jobId: number, messageId: number) => {
@@ -176,14 +179,21 @@ test("uses the same replace-with-reply flow in private chats", async () => {
   } as unknown as LoylexDatabase;
 
   const telegram = {
+    sendRichMessageDraft: async (
+      chatId: number,
+      markdown: string,
+      options: { draftId: number; threadId?: number | null; canStop?: boolean },
+    ) => {
+      drafts.push({ chatId, markdown, options });
+      return true;
+    },
     sendRich: async (
       _chatId: number,
       markdown: string,
       options: { replyTo?: number; threadId?: number | null },
     ) => {
-      sent.push(markdown);
-      sentOptions.push(options);
-      return botMessage(sent.length === 1 ? 21 : 22);
+      sent.push({ markdown, options });
+      return botMessage(22);
     },
     deleteMessage: async (chatId: number, messageId: number) => {
       deleted.push({ chatId, messageId });
@@ -204,15 +214,22 @@ test("uses the same replace-with-reply flow in private chats", async () => {
   ).complete;
 
   await event.call(server, 7, { kind: "commentary", text: "Проверяю код" });
-  await event.call(server, 7, { kind: "commentary", text: "Запускаю тесты" });
   await complete.call(server, 7, { answer: "Ответ", threadId: "thread-1" });
 
-  expect(sent).toEqual([
-    "<details><summary>Ход работы</summary>\n\n- Проверяю код\n\n</details>",
-    "<details><summary>Ход работы</summary>\n\n- Проверяю код\n- Запускаю тесты\n\n</details>\n\nОтвет",
+  expect(drafts).toEqual([
+    {
+      chatId: 42,
+      markdown: "<details><summary>Ход работы</summary>\n\n- Проверяю код\n\n</details>",
+      options: { draftId: 7, threadId: null, canStop: true },
+    },
   ]);
-  expect(sentOptions).toEqual([{ threadId: null }, { threadId: null }]);
-  expect(deleted).toEqual([{ chatId: 42, messageId: 21 }]);
+  expect(sent).toEqual([
+    {
+      markdown: "<details><summary>Ход работы</summary>\n\n- Проверяю код\n\n</details>\n\nОтвет",
+      options: { threadId: null },
+    },
+  ]);
+  expect(deleted).toEqual([]);
   expect(completedMessageId as number | null).toBe(22);
 });
 

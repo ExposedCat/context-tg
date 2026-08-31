@@ -59,6 +59,26 @@ async function poll(): Promise<void> {
       for (const update of updates) {
         const message = database.archiveUpdate(update);
         offset = update.update_id + 1;
+        const stopped = update.stopped_message_generation;
+        if (stopped && Number.isSafeInteger(stopped.draft_id)) {
+          const cancelledJobIds = database.cancelJobsForDraft(stopped.chat.id, stopped.draft_id);
+          if (cancelledJobIds.length > 0) {
+            console.log(
+              JSON.stringify({
+                level: "info",
+                component: "poller",
+                event: "draft_jobs_cancelled",
+                jobIds: cancelledJobIds,
+              }),
+            );
+          }
+          await telegram.sendRich(
+            stopped.chat.id,
+            stopResultMessage(cancelledJobIds.length),
+            responseOptions(stopped.chat.type, undefined, stopped.message_thread_id ?? null),
+          );
+          continue;
+        }
         if (!message || message.from?.is_bot) {
           continue;
         }

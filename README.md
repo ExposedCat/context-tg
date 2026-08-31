@@ -97,11 +97,12 @@ thread receives the latest chat window and matching private memory buckets. A re
 receives only archived messages since its previous turn because the saved Codex transcript
 already contains the earlier prompt and context.
 
-While Codex works, terminal and reasoning events create or edit one persistent Rich Message
-with a collapsed `<details>` history in every chat. Completion sends a new Rich Markdown message
-containing the collapsed history and final answer, then removes the temporary progress message.
-This keeps the final answer at the bottom of the chat; group messages reply to the request, while
-private-chat messages remain ordinary unthreaded messages.
+While Codex works, terminal and reasoning events update an ephemeral rich draft in private chats,
+or create/edit one persistent Rich Message with a collapsed `<details>` history in groups.
+Completion sends a new Rich Markdown message containing the collapsed history and final answer,
+then removes the temporary group progress message. This keeps the final answer at the bottom of
+the chat; group messages reply to the request, while private-chat messages remain ordinary
+unthreaded messages.
 Rich API errors are surfaced instead of silently sending the same document as unformatted text.
 Private-chat responses are sent as ordinary messages without reply markers; group responses keep
 the reply to the triggering message.

@@ -7,11 +7,11 @@ export type TelegramMessageOptions = {
 
 export function responseOptions(
   chatType: TelegramChat["type"],
-  replyTo: number,
+  replyTo: number | undefined,
   threadId: number | null,
 ): TelegramMessageOptions {
   return {
-    ...(chatType === "private" ? {} : { replyTo }),
+    ...(chatType === "private" || replyTo === undefined ? {} : { replyTo }),
     threadId,
   };
 }

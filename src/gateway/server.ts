@@ -329,6 +329,22 @@ export class GatewayServer {
     const thinkingMessageId = this.database.thinkingMessage(jobId);
     const now = Date.now();
     const document = workDocument(status);
+    if (address.chatType === "private") {
+      if (this.#lastStreamDocument.get(jobId) === document) {
+        return;
+      }
+      if (now - (this.#lastStreamEdit.get(jobId) ?? 0) < 1_500) {
+        return;
+      }
+      await this.telegram.sendRichMessageDraft(address.chatId, document, {
+        draftId: jobId,
+        threadId: address.threadId,
+        canStop: true,
+      });
+      this.#lastStreamEdit.set(jobId, now);
+      this.#lastStreamDocument.set(jobId, document);
+      return;
+    }
     if (thinkingMessageId === null) {
       const message = await this.telegram.sendRich(address.chatId, document, {
         ...responseOptions(address.chatType, address.messageId, address.threadId),

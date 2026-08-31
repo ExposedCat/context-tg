@@ -63,12 +63,19 @@ export type TelegramMessage = {
   [key: string]: unknown;
 };
 
+export type TelegramMessageGenerationStopped = {
+  chat: TelegramChat;
+  message_thread_id?: number;
+  draft_id: number;
+};
+
 export type TelegramUpdate = {
   update_id: number;
   message?: TelegramMessage;
   edited_message?: TelegramMessage;
   channel_post?: TelegramMessage;
   edited_channel_post?: TelegramMessage;
+  stopped_message_generation?: TelegramMessageGenerationStopped;
   [key: string]: unknown;
 };
 

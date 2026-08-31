@@ -1359,6 +1359,15 @@ export class LoylexDatabase {
     return transaction.immediate();
   }
 
+  cancelJobsForDraft(chatId: number, draftId: number): number[] {
+    const messageId = this.connection
+      .query<{ message_id: number }, [number, number]>(
+        "SELECT message_id FROM jobs WHERE id = ? AND chat_id = ?",
+      )
+      .get(draftId, chatId)?.message_id;
+    return messageId === undefined ? [] : this.cancelJobsForMessage(chatId, messageId);
+  }
+
   resumableThread(chatId: number, messageId: number): string | null {
     return (
       this.connection

@@ -341,6 +341,18 @@ describe("LoylexDatabase", () => {
     database.close();
   });
 
+  test("cancels a private job addressed by its draft ID", () => {
+    const database = setup();
+    const incoming = privateMessage(1, "долгая задача");
+    database.enqueue(55, incoming, "долгая задача", null);
+
+    const running = database.claimNext(10);
+    expect(running).not.toBeNull();
+    expect(database.cancelJobsForDraft(42, running?.id ?? 0)).toEqual([running?.id ?? 0]);
+    expect(database.isJobCancelled(running?.id ?? 0)).toBe(true);
+    database.close();
+  });
+
   test("lists the latest jobs for one chat with their current state", () => {
     const database = setup();
     const incoming = message(1, "Лойлекс, проверь очередь");

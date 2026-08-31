@@ -117,6 +117,25 @@ export class TelegramClient {
     return this.call<TelegramMessage>("sendRichMessage", body);
   }
 
+  sendRichMessageDraft(
+    chatId: number,
+    markdown: string,
+    options: { draftId: number; threadId?: number | null; canStop?: boolean },
+  ): Promise<boolean> {
+    const body: JsonObject = {
+      chat_id: chatId,
+      draft_id: options.draftId,
+      rich_message: { markdown },
+    };
+    if (options.threadId !== undefined && options.threadId !== null) {
+      body.message_thread_id = options.threadId;
+    }
+    if (options.canStop) {
+      body.can_stop = true;
+    }
+    return this.call<boolean>("sendRichMessageDraft", body);
+  }
+
   async editRich(chatId: number, messageId: number, markdown: string): Promise<TelegramMessage> {
     try {
       return await this.call<TelegramMessage>("editMessageText", {

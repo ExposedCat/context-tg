@@ -44,6 +44,31 @@ test("treats an idempotent rich edit as success", async () => {
   expect(result.chat.id).toBe(42);
 });
 
+test("sends rich message drafts with a stable draft ID", async () => {
+  let requestBody: unknown;
+  globalThis.fetch = (async (input, init) => {
+    expect(String(input)).toBe("https://api.telegram.org/bottest-token/sendRichMessageDraft");
+    requestBody = JSON.parse(String(init?.body));
+    return Response.json({ ok: true, result: true });
+  }) as typeof fetch;
+
+  const client = new TelegramClient("test-token");
+  await expect(
+    client.sendRichMessageDraft(42, "<details>working</details>", {
+      draftId: 7,
+      threadId: null,
+      canStop: true,
+    }),
+  ).resolves.toBe(true);
+
+  expect(requestBody).toEqual({
+    chat_id: 42,
+    draft_id: 7,
+    rich_message: { markdown: "<details>working</details>" },
+    can_stop: true,
+  });
+});
+
 test("deletes a Telegram message", async () => {
   let requestBody: unknown;
   globalThis.fetch = (async (input, init) => {
