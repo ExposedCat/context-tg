@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { AgentCompletion, AgentEvent, AgentJob, WorkerRegistration } from "../shared/types.ts";
+import { retryTransient } from "./retry.ts";
 
 export class GatewayClient {
   private readonly workerId = randomUUID();
@@ -78,15 +79,31 @@ export class GatewayClient {
     return result.cancelled;
   }
 
-  downloadMedia(fileId: string): Promise<Response> {
-    return fetch(`${this.baseUrl}/v1/media?file_id=${encodeURIComponent(fileId)}`, {
-      headers: { authorization: `Bearer ${this.token}` },
-      signal: AbortSignal.timeout(65_000),
-    }).then(async (response) => {
+  async downloadMedia(fileId: string, maxBytes?: number): Promise<Uint8Array> {
+    return retryTransient(async () => {
+      const response = await fetch(
+        `${this.baseUrl}/v1/media?file_id=${encodeURIComponent(fileId)}`,
+        {
+          headers: { authorization: `Bearer ${this.token}` },
+          signal: AbortSignal.timeout(65_000),
+        },
+      );
       if (!response.ok) {
         throw new Error(`Gateway ${response.status}: ${await response.text()}`);
       }
-      return response;
+      const declaredLength = Number.parseInt(response.headers.get("content-length") ?? "", 10);
+      if (
+        maxBytes !== undefined &&
+        Number.isSafeInteger(declaredLength) &&
+        declaredLength > maxBytes
+      ) {
+        throw new Error(`file is larger than ${maxBytes} bytes`);
+      }
+      const bytes = new Uint8Array(await response.arrayBuffer());
+      if (maxBytes !== undefined && bytes.byteLength > maxBytes) {
+        throw new Error(`file is larger than ${maxBytes} bytes`);
+      }
+      return bytes;
     });
   }
 

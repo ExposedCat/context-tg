@@ -114,6 +114,10 @@ export function failureMessage(error: string): string {
   return `Не получилось завершить задачу.\n\n\`\`\`text\n${error.slice(0, 2_000)}\n\`\`\``;
 }
 
+export function failedDocument(status: string, error: string): string {
+  return `${workDocument(status)}\n\n${failureMessage(error)}`;
+}
+
 export function completedDocuments(status: string, answer: string): string[] {
   const prefix = `${workDocument(status)}\n\n`;
   const availableAnswerBytes = richMessageLimitBytes - byteLength(prefix);

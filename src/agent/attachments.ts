@@ -96,12 +96,7 @@ async function downloadOne(
   attachment: AttachmentReference,
   path: string,
 ): Promise<number> {
-  const response = await gateway.downloadMedia(attachment.fileId);
-  const declaredLength = Number.parseInt(response.headers.get("content-length") ?? "", 10);
-  if (Number.isSafeInteger(declaredLength) && declaredLength > maxAttachmentBytes) {
-    throw new Error(`file is larger than ${maxAttachmentBytes} bytes`);
-  }
-  const bytes = new Uint8Array(await response.arrayBuffer());
+  const bytes = await gateway.downloadMedia(attachment.fileId, maxAttachmentBytes);
   if (bytes.byteLength > maxAttachmentBytes) {
     throw new Error(`file is larger than ${maxAttachmentBytes} bytes`);
   }

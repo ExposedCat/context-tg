@@ -1,13 +1,15 @@
+import { rename, rm } from "node:fs/promises";
 import { basename } from "node:path";
 import { type TelegramExport, telegramExportMessages } from "../shared/telegram-export.ts";
 import { loadAgentConfig } from "./config.ts";
+import { retryTransient } from "./retry.ts";
 import { scheduleSupervisorOperation, supervisorStatus } from "./supervisor.ts";
 
 const config = loadAgentConfig();
 const [command, ...arguments_] = process.argv.slice(2);
 const importBatchSize = 250;
 
-async function request(path: string, init: RequestInit = {}): Promise<Response> {
+async function requestOnce(path: string, init: RequestInit = {}): Promise<Response> {
   const response = await fetch(config.bridgeUrl + path, {
     ...init,
     headers: {
@@ -19,6 +21,24 @@ async function request(path: string, init: RequestInit = {}): Promise<Response> 
     throw new Error(`Gateway ${response.status}: ${await response.text()}`);
   }
   return response;
+}
+
+async function request(path: string, init: RequestInit = {}, retry = false): Promise<Response> {
+  return retry ? retryTransient(() => requestOnce(path, init)) : requestOnce(path, init);
+}
+
+async function downloadMedia(fileId: string, output: string): Promise<void> {
+  const temporary = `${output}.loylex-part`;
+  try {
+    await retryTransient(async () => {
+      await rm(temporary, { force: true });
+      const response = await request(`/v1/media?file_id=${encodeURIComponent(fileId)}`);
+      await Bun.write(temporary, response);
+      await rename(temporary, output);
+    });
+  } finally {
+    await rm(temporary, { force: true });
+  }
 }
 
 async function run(): Promise<void> {
@@ -46,7 +66,7 @@ async function run(): Promise<void> {
     return;
   }
   if (command === "status") {
-    console.log(JSON.stringify(await (await request("/v1/status")).json(), null, 2));
+    console.log(JSON.stringify(await (await request("/v1/status", {}, true)).json(), null, 2));
     return;
   }
   if (command === "search") {
@@ -59,6 +79,8 @@ async function run(): Promise<void> {
     const offset = arguments_[3] ? `&offset=${encodeURIComponent(arguments_[3])}` : "";
     const response = await request(
       `/v1/archive/search?q=${encodeURIComponent(query)}${chat}${limit}${offset}`,
+      {},
+      true,
     );
     console.log(JSON.stringify(await response.json(), null, 2));
     return;
@@ -72,6 +94,8 @@ async function run(): Promise<void> {
     }
     const response = await request(
       `/v1/archive/recent?chat=${encodeURIComponent(chatId)}&limit=${encodeURIComponent(String(parsedLimit))}`,
+      {},
+      true,
     );
     console.log(JSON.stringify(await response.json(), null, 2));
     return;
@@ -85,6 +109,8 @@ async function run(): Promise<void> {
     }
     const response = await request(
       `/v1/archive/media?chat=${encodeURIComponent(chatId)}&limit=${encodeURIComponent(String(parsedLimit))}`,
+      {},
+      true,
     );
     console.log(JSON.stringify(await response.json(), null, 2));
     return;
@@ -103,6 +129,8 @@ async function run(): Promise<void> {
     }
     const response = await request(
       `/v1/archive/message?chat=${encodeURIComponent(chatId)}&message=${encodeURIComponent(messageId)}`,
+      {},
+      true,
     );
     console.log(JSON.stringify(await response.json(), null, 2));
     return;
@@ -129,6 +157,8 @@ async function run(): Promise<void> {
       parsedBefore === null ? "" : `&before=${encodeURIComponent(String(parsedBefore))}`;
     const response = await request(
       `/v1/archive/messages?chat=${encodeURIComponent(chatId)}${after}${before}&limit=${encodeURIComponent(String(parsedLimit))}`,
+      {},
+      true,
     );
     console.log(JSON.stringify(await response.json(), null, 2));
     return;
@@ -150,11 +180,15 @@ async function run(): Promise<void> {
     let imported = 0;
     for (let index = 0; index < messages.length; index += importBatchSize) {
       const batch = messages.slice(index, index + importBatchSize);
-      const response = await request("/v1/archive/import", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ messages: batch }),
-      });
+      const response = await request(
+        "/v1/archive/import",
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ messages: batch }),
+        },
+        true,
+      );
       const result = (await response.json()) as { imported?: number };
       imported += result.imported ?? batch.length;
     }
@@ -188,8 +222,7 @@ async function run(): Promise<void> {
     if (!fileId || !output) {
       throw new Error("Usage: loylex media FILE_ID OUTPUT_PATH");
     }
-    const response = await request(`/v1/media?file_id=${encodeURIComponent(fileId)}`);
-    await Bun.write(output, response);
+    await downloadMedia(fileId, output);
     console.log(output);
     return;
   }

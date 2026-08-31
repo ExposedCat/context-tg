@@ -1220,6 +1220,14 @@ export class LoylexDatabase {
     );
   }
 
+  statusLog(jobId: number): string | null {
+    return (
+      this.connection
+        .query<{ status_log: string }, [number]>("SELECT status_log FROM jobs WHERE id = ?")
+        .get(jobId)?.status_log ?? null
+    );
+  }
+
   jobThreadId(jobId: number): string | null {
     return (
       this.connection

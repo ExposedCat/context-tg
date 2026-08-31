@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   activityLines,
   completedDocuments,
+  failedDocument,
   failureMessage,
   stopResultMessage,
 } from "../src/gateway/presentation.ts";
@@ -82,4 +83,16 @@ test("explains a busy Codex thread without exposing CLI diagnostics", () => {
   );
   expect(message).not.toContain("thread-store conflict");
   expect(message).not.toContain("active writer");
+});
+
+test("keeps the work history in a failure document", () => {
+  const message = failedDocument(
+    "commentary: Проверяю архив",
+    "TypeError: The socket connection was closed unexpectedly",
+  );
+
+  expect(message).toContain("<summary>Ход работы</summary>");
+  expect(message).toContain("- Проверяю архив");
+  expect(message).toContain("Не получилось завершить задачу.");
+  expect(message).toContain("The socket connection was closed unexpectedly");
 });

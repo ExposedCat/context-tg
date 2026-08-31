@@ -208,3 +208,58 @@ test("uses the same replace-with-reply flow in private chats", async () => {
   expect(deleted).toEqual([{ chatId: 42, messageId: 21 }]);
   expect(completedMessageId as number | null).toBe(22);
 });
+
+test("keeps progress when replacing a temporary message with a failure", async () => {
+  let edited = "";
+  let failed: { jobId: number; error: string; threadId: string | null } | null = null;
+
+  const database = {
+    jobAddress: () => ({
+      chatId: -10042,
+      chatType: "supergroup" as const,
+      messageId: 10,
+      threadId: null,
+    }),
+    thinkingMessage: () => 11,
+    isJobCancelled: () => false,
+    isJobOwned: () => true,
+    statusLog: () =>
+      "commentary: Проверяю архив\n\ncommand: loylex media file-id /tmp/archive.json",
+    jobThreadId: () => "thread-1",
+    recordOutboundMessage: () => {},
+    fail: (
+      jobId: number,
+      error: string,
+      _workerId: string | undefined,
+      threadId: string | null,
+    ) => {
+      failed = { jobId, error, threadId };
+    },
+  } as unknown as LoylexDatabase;
+
+  const telegram = {
+    editRich: async (_chatId: number, _messageId: number, markdown: string) => {
+      edited = markdown;
+      return botMessage(11);
+    },
+  } as unknown as TelegramClient;
+
+  const server = new GatewayServer(config(), database, telegram);
+  const fail = (
+    server as unknown as {
+      fail: (jobId: number, error: string, workerId?: string) => Promise<void>;
+    }
+  ).fail;
+
+  await fail.call(server, 7, "The socket connection was closed unexpectedly", "worker-1");
+
+  expect(edited).toContain("<summary>Ход работы</summary>");
+  expect(edited).toContain("- Проверяю архив");
+  expect(edited).toContain("Не получилось завершить задачу.");
+  expect(edited).toContain("The socket connection was closed unexpectedly");
+  expect(failed as { jobId: number; error: string; threadId: string | null } | null).toEqual({
+    jobId: 7,
+    error: "The socket connection was closed unexpectedly",
+    threadId: "thread-1",
+  });
+});
