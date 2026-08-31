@@ -27,6 +27,12 @@ description: Search Danbooru posts with pybooru and Loylex's private API credent
 - Keep `limit <= 100`; start with a small result set and paginate with `page` only when asked or needed.
 - If there are no hits, relax the least certain tag one at a time and say what changed. Do not silently rewrite the request.
 
+## Safety and moderation
+
+- Danbooru moderation, ratings, and API availability are signals about the site's handling of a post, not a guarantee that every result is legal, safe, or permitted in the user's jurisdiction. Do not encode or rely on a blanket claim that the API cannot return illegal material.
+- For ordinary, non-sensitive searches, use the requested tags and ratings directly and avoid unnecessary editorializing or extra filtering.
+- Do not search for, retrieve, or distribute sexualized depictions of minors, or sexual content involving ambiguous-age characters. `rating:q` and an "aged-up" label do not by themselves establish adulthood; when a request or result raises this concern, stop and request a clearly safe adult or non-sexual alternative.
+
 Return compact results: post URL (`https://danbooru.donmai.us/posts/{id}`), score, rating, and the best available file/preview URL. Do not dump whole JSON or download files unless requested.
 
 ## Smoke test
