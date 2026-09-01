@@ -483,6 +483,169 @@ Deno.test("read_image download failure is reported to the agent as unavailable",
   }
 });
 
+Deno.test("corrupted request images are removed before retrying", async () => {
+  setLlmDeploymentName("small", "test-model");
+  const requests: Array<Record<string, unknown>> = [];
+  const originalFetch = globalThis.fetch;
+
+  globalThis.fetch = (async (input, init) => {
+    const request = new Request(input, init);
+    requests.push((await request.json()) as Record<string, unknown>);
+
+    if (requests.length <= 2) {
+      return new Response(
+        JSON.stringify({
+          error: {
+            code: "invalid_value",
+            type: "invalid_request_error",
+            message:
+              "The image data you provided does not represent a valid image. Please check your input and try again with one of the supported image formats: ['image/jpeg', 'image/png', 'image/gif', 'image/webp'].",
+          },
+        }),
+        { status: 400, headers: { "content-type": "application/json" } },
+      );
+    }
+
+    return new Response(
+      JSON.stringify(
+        createApiResponse("resp_without_corrupted_image", [
+          {
+            id: "msg_without_corrupted_image",
+            type: "message",
+            role: "assistant",
+            status: "completed",
+            content: [
+              {
+                type: "output_text",
+                text: "I continued without the corrupted image.",
+                annotations: [],
+              },
+            ],
+          },
+        ]),
+      ),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
+  }) as typeof fetch;
+
+  try {
+    const response = await requestLlm(
+      {
+        text: "Inspect these images",
+        images: [
+          { image_url: "data:image/png;base64,VALID" },
+          { image_url: "data:image/png;base64,CORRUPTED" },
+        ],
+      },
+      [],
+      undefined,
+      { context: { chatId: 1, messageId: 1 } },
+    );
+
+    strictEqual(response.response, "I continued without the corrupted image.");
+    strictEqual(requests.length, 3);
+    ok(JSON.stringify(requests[0]).includes("CORRUPTED"));
+    ok(!JSON.stringify(requests[1]).includes("CORRUPTED"));
+    ok(JSON.stringify(requests[1]).includes("VALID"));
+    ok(
+      JSON.stringify(requests[1]).includes(
+        "1 attached images were removed due to corrupted contents.",
+      ),
+    );
+    ok(!JSON.stringify(requests[2]).includes("CORRUPTED"));
+    ok(!JSON.stringify(requests[2]).includes("VALID"));
+    ok(
+      JSON.stringify(requests[2]).includes(
+        "2 attached images were removed due to corrupted contents.",
+      ),
+    );
+    ok(
+      !JSON.stringify(requests[2]).includes(
+        "1 attached images were removed due to corrupted contents.",
+      ),
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+Deno.test("corrupted images are removed from conversation history", async () => {
+  setLlmDeploymentName("small", "test-model");
+  const requests: Array<Record<string, unknown>> = [];
+  const originalFetch = globalThis.fetch;
+
+  globalThis.fetch = (async (input, init) => {
+    const request = new Request(input, init);
+    requests.push((await request.json()) as Record<string, unknown>);
+
+    if (requests.length === 2) {
+      return new Response(
+        JSON.stringify({
+          error: {
+            code: "invalid_value",
+            type: "invalid_request_error",
+            message:
+              "The image data you provided does not represent a valid image.",
+          },
+        }),
+        { status: 400, headers: { "content-type": "application/json" } },
+      );
+    }
+
+    const id = requests.length === 1 ? "resp_with_image" : "resp_recovered";
+    return new Response(
+      JSON.stringify(
+        createApiResponse(id, [
+          {
+            id: `msg_${id}`,
+            type: "message",
+            role: "assistant",
+            status: "completed",
+            content: [
+              {
+                type: "output_text",
+                text: requests.length === 1 ? "Image received." : "Recovered.",
+                annotations: [],
+              },
+            ],
+          },
+        ]),
+      ),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
+  }) as typeof fetch;
+
+  try {
+    const firstResponse = await requestLlm(
+      {
+        text: "Remember this image",
+        images: [{ image_url: "data:image/png;base64,LATER_CORRUPTED" }],
+      },
+      [],
+      undefined,
+      { context: { chatId: 1, messageId: 1 } },
+    );
+    const recoveredResponse = await requestLlm(
+      "Continue the conversation",
+      [],
+      firstResponse.response_id,
+      { context: { chatId: 1, messageId: 2 } },
+    );
+
+    strictEqual(recoveredResponse.response, "Recovered.");
+    strictEqual(requests.length, 3);
+    ok(JSON.stringify(requests[1]).includes("LATER_CORRUPTED"));
+    ok(!JSON.stringify(requests[2]).includes("LATER_CORRUPTED"));
+    ok(
+      JSON.stringify(requests[2]).includes(
+        "1 attached images were removed due to corrupted contents.",
+      ),
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 Deno.test("requestLlm retries empty responses twice before succeeding", async () => {
   setLlmDeploymentName("small", "test-model");
   let requestCount = 0;

@@ -25,6 +25,7 @@ import {
   formatImageMarkdown,
   resolveRichMessageImageMedia,
   saveImageFileId,
+  stripRichMessageImages,
 } from "./images.ts";
 import { readLastMessages } from "./last-messages.ts";
 import {
@@ -1478,6 +1479,45 @@ function formatHtmlBlockquote(text: string): string {
   return `<blockquote>${escapeHtml(trimmedText)}</blockquote>`;
 }
 
+const AZURE_DOWN_EMOJI = {
+  id: "5384549865625758405",
+  fallback: "😔",
+} as const;
+
+export function getAzureDownMessage(error: unknown):
+  | {
+      text: string;
+      entities: [
+        {
+          type: "custom_emoji";
+          offset: number;
+          length: number;
+          custom_emoji_id: string;
+        },
+      ];
+    }
+  | undefined {
+  const details = getErrorDetails(error);
+
+  if (!/\b503\b/.test(details) || !/no healthy upstream/i.test(details)) {
+    return undefined;
+  }
+
+  const prefix = "Azure is down ";
+
+  return {
+    text: `${prefix}${AZURE_DOWN_EMOJI.fallback}`,
+    entities: [
+      {
+        type: "custom_emoji",
+        offset: prefix.length,
+        length: AZURE_DOWN_EMOJI.fallback.length,
+        custom_emoji_id: AZURE_DOWN_EMOJI.id,
+      },
+    ],
+  };
+}
+
 function formatModelFailureResponse(
   error: unknown,
   resumeCommand: string | undefined,
@@ -1807,7 +1847,20 @@ function getResumePrompt(taskText: string): string {
   ].join("\n");
 }
 
-function getErrorRecoveryPrompt(taskText: string, error: unknown): string {
+export function getErrorRecoveryPrompt(
+  taskText: string,
+  error: unknown,
+): string {
+  if (isUnavailableRichMessagePhotoError(error)) {
+    return [
+      "Some image in your previous response cannot be sent.",
+      "Retry the complete user-facing answer without that image. Do not include or reference it again.",
+      "",
+      "Original request:",
+      taskText.trim() || "No text message was available.",
+    ].join("\n");
+  }
+
   return [
     "The previous attempt to handle this Telegram message failed because of an application or tool error.",
     "Use the original request and the error below to produce the best user-facing response you can.",
@@ -1819,6 +1872,10 @@ function getErrorRecoveryPrompt(taskText: string, error: unknown): string {
     "Error:",
     getErrorDetails(error),
   ].join("\n");
+}
+
+export function isUnavailableRichMessagePhotoError(error: unknown): boolean {
+  return /RICH_MESSAGE_PHOTO_NO_MEDIA_FOUND/i.test(getErrorDetails(error));
 }
 
 function getResumableResponseId(
@@ -1961,13 +2018,33 @@ async function sendRecoveredErrorResponse(
   );
   const formattedResponse = formatLlmResponse(llmResponse, {
     debug: await getChatDebugMode(ctx.database, chatId),
-    errors: [getErrorDetails(error)],
+    errors: isUnavailableRichMessagePhotoError(error)
+      ? []
+      : [getErrorDetails(error)],
   });
-  const sentMessages = await sendRichMarkdownResponse(
-    ctx,
-    message,
-    formattedResponse.richMarkdown,
-  );
+  let sentMessages: SentRichMarkdownMessage[];
+
+  try {
+    sentMessages = await sendRichMarkdownResponse(
+      ctx,
+      message,
+      formattedResponse.richMarkdown,
+    );
+  } catch (deliveryError) {
+    if (!isUnavailableRichMessagePhotoError(deliveryError)) {
+      throw deliveryError;
+    }
+
+    logError("Recovered response still contained unavailable image media", {
+      error: deliveryError,
+    });
+    sentMessages = await sendRichMarkdownResponse(
+      ctx,
+      message,
+      stripRichMessageImages(formattedResponse.richMarkdown) ||
+        "I couldn't send that image.",
+    );
+  }
 
   await saveRecoveredResponseThread(
     ctx,
@@ -2306,6 +2383,8 @@ async function handleChatRequest(
 
     if (!(error instanceof LlmRequestError) && !responseSent) {
       try {
+        const unavailableRichMessagePhoto =
+          isUnavailableRichMessagePhotoError(error);
         await sendRecoveredErrorResponse(
           ctx,
           chatId,
@@ -2316,8 +2395,29 @@ async function handleChatRequest(
           error,
           resumableResponseId,
           taskAbortController.signal,
-          !resumable,
+          !resumable || unavailableRichMessagePhoto,
         );
+
+        if (unavailableRichMessagePhoto) {
+          taskStatus = "finished";
+
+          if (imageUsageConsumedCount > 0) {
+            try {
+              await refundUsage(
+                ctx.database,
+                chatId,
+                "image_responses",
+                imageUsageConsumedCount,
+              );
+              imageUsageConsumedCount = 0;
+            } catch (refundError) {
+              logError("Failed to refund unavailable image usage", {
+                error: refundError,
+              });
+            }
+          }
+        }
+
         responseSent = true;
         return;
       } catch (recoveryError) {
@@ -2331,15 +2431,22 @@ async function handleChatRequest(
 
     await refundUnusedUsage();
 
-    const errorResponse = formatModelFailureResponse(
-      responseError,
-      resumable ? getResumeCommand(message.message_id) : undefined,
-    );
-
-    const sentMessage = await ctx.reply(errorResponse, {
-      ...linkPreviewOptions,
-      parse_mode: "HTML",
-    });
+    const azureDownMessage = getAzureDownMessage(responseError);
+    const sentMessage = azureDownMessage
+      ? await ctx.reply(azureDownMessage.text, {
+          ...linkPreviewOptions,
+          entities: azureDownMessage.entities,
+        })
+      : await ctx.reply(
+          formatModelFailureResponse(
+            responseError,
+            resumable ? getResumeCommand(message.message_id) : undefined,
+          ),
+          {
+            ...linkPreviewOptions,
+            parse_mode: "HTML",
+          },
+        );
     await saveContinuationMessageThread(
       ctx,
       chatId,
@@ -2530,7 +2637,7 @@ async function handleGuestChatRequest(
             replyContext,
           ),
         );
-    const llmResponse = await requestLlm(
+    let llmResponse = await requestLlm(
       request,
       agentTools,
       responseId,
@@ -2551,7 +2658,48 @@ async function handleGuestChatRequest(
       llmResponse.tool_call_count,
     );
 
-    const delivery = await sendGuestLlmResponse(ctx, message, llmResponse);
+    let delivery: GuestResponseDelivery;
+
+    try {
+      delivery = await sendGuestLlmResponse(ctx, message, llmResponse);
+    } catch (error) {
+      if (!isUnavailableRichMessagePhotoError(error)) {
+        throw error;
+      }
+
+      logError("Guest response contained unavailable image media", { error });
+      llmResponse = await requestLlm(
+        formatSystemPromptMessageXml(getErrorRecoveryPrompt(text, error)),
+        [],
+        llmResponse.response_id,
+        {
+          database: ctx.database,
+          context: toolContext,
+          agentId: guestAgent.id,
+        },
+        guestAgent.buildInstructions(chatId),
+        guestAgent.MODEL,
+      );
+
+      try {
+        delivery = await sendGuestLlmResponse(ctx, message, llmResponse);
+      } catch (retryError) {
+        if (!isUnavailableRichMessagePhotoError(retryError)) {
+          throw retryError;
+        }
+
+        logError("Retried guest response still contained unavailable image", {
+          error: retryError,
+        });
+        llmResponse = {
+          ...llmResponse,
+          response:
+            stripRichMessageImages(llmResponse.response ?? "") ||
+            "I couldn't send that image.",
+        };
+        delivery = await sendGuestLlmResponse(ctx, message, llmResponse);
+      }
+    }
     responseSent = true;
     await saveGuestChatResponseThread(
       ctx,

@@ -1,4 +1,4 @@
-import { deepStrictEqual, strictEqual } from "node:assert";
+import { deepStrictEqual, ok, strictEqual } from "node:assert";
 
 const TEST_ENV = {
   BOT_TOKEN: "test",
@@ -6,6 +6,7 @@ const TEST_ENV = {
   SQLITE_PATH: ":memory:",
   LLM_BASE_URL: "https://llm.test/v1",
   LLM_API_KEY: "test",
+  LLM_TEMPERATURE: "0.2",
   KEENABLE_API_KEY: "test",
   EMBEDDER_BASE_URL: "https://embedder.test/v1",
   EMBEDDER_API_KEY: "test",
@@ -18,7 +19,13 @@ for (const [name, value] of Object.entries(TEST_ENV)) {
 }
 
 const [
-  { buildGuestRichMessage, formatLlmToolError },
+  {
+    buildGuestRichMessage,
+    formatLlmToolError,
+    getAzureDownMessage,
+    getErrorRecoveryPrompt,
+    isUnavailableRichMessagePhotoError,
+  },
   { initDatabase },
   { saveImageFileId },
 ] = await Promise.all([
@@ -38,6 +45,49 @@ Deno.test("tool errors hide details unless debug is enabled", () => {
     formatLlmToolError(error, true),
     "Tool generate_image failed: MEDIA_CACHE_CHAT_ID is not set.",
   );
+});
+
+Deno.test("Azure upstream outages use a plain custom-emoji message", () => {
+  deepStrictEqual(
+    getAzureDownMessage(
+      new Error(
+        "status 503: server_error: no healthy upstream: 503 no healthy upstream",
+      ),
+    ),
+    {
+      text: "Azure is down 😔",
+      entities: [
+        {
+          type: "custom_emoji",
+          offset: 14,
+          length: 2,
+          custom_emoji_id: "5384549865625758405",
+        },
+      ],
+    },
+  );
+});
+
+Deno.test("other model failures do not use the Azure outage message", () => {
+  strictEqual(
+    getAzureDownMessage(new Error("status 503: another server error")),
+    undefined,
+  );
+  strictEqual(
+    getAzureDownMessage(new Error("status 502: no healthy upstream")),
+    undefined,
+  );
+});
+
+Deno.test("unavailable rich-message photos are retried without user diagnostics", () => {
+  const error = new Error("400 Bad Request: RICH_MESSAGE_PHOTO_NO_MEDIA_FOUND");
+  const prompt = getErrorRecoveryPrompt("Show me the result", error);
+
+  strictEqual(isUnavailableRichMessagePhotoError(error), true);
+  ok(prompt.includes("Some image in your previous response cannot be sent."));
+  ok(prompt.includes("Retry the complete user-facing answer"));
+  ok(prompt.includes("Show me the result"));
+  ok(!prompt.includes("RICH_MESSAGE_PHOTO_NO_MEDIA_FOUND"));
 });
 
 Deno.test("guest rich messages include saved image media mappings", async () => {

@@ -31,6 +31,7 @@ const [
     resolveRichMessageImageMedia,
     saveImage,
     saveImageFileId,
+    stripRichMessageImages,
   },
 ] = await Promise.all([import("./database.ts"), import("./images.ts")]);
 
@@ -142,4 +143,18 @@ Deno.test("unknown rich Markdown image ids are rejected", async () => {
   } finally {
     await database.destroy();
   }
+});
+
+Deno.test("unavailable rich-message images can be removed from Markdown", () => {
+  strictEqual(
+    stripRichMessageImages(
+      [
+        "Before",
+        "![](tg://photo?id=image_missing)",
+        "![](tg://document?id=document_missing)",
+        "After",
+      ].join("\n\n"),
+    ),
+    "Before\n\nAfter",
+  );
 });

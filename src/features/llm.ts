@@ -239,6 +239,10 @@ const RETRIABLE_EMPTY_RESPONSE_DETAILS = new Set([
 ]);
 const IMAGE_DOWNLOAD_ERROR_PATTERN =
   /error while downloading (?:file|image)|upstream status code:\s*(?:401|403|404|410)/i;
+const INVALID_IMAGE_DATA_ERROR_PATTERN =
+  /image data you provided does not represent a valid image|invalid image data|unsupported image (?:format|type)|supported image formats/i;
+const CORRUPTED_IMAGE_REMOVAL_NOTICE_PATTERN =
+  /\b\d+ attached images were removed due to corrupted contents\./;
 const MARKDOWN_TOOL_OUTPUTS = new Set<string>(["read_web_page"]);
 
 type LlmRequestState = {
@@ -871,6 +875,90 @@ function recoverUnavailableReadImageInput(
   return recoveredInput;
 }
 
+function removeLastInputImage(
+  inputItems: ResponseInputItem[],
+): ResponseInputItem[] | undefined {
+  for (let itemIndex = inputItems.length - 1; itemIndex >= 0; itemIndex -= 1) {
+    const item = inputItems[itemIndex];
+
+    if (item.type === "message" && Array.isArray(item.content)) {
+      const imageIndex = item.content.findLastIndex(
+        (part) => part.type === "input_image",
+      );
+
+      if (imageIndex >= 0) {
+        const recoveredInput = [...inputItems];
+        recoveredInput[itemIndex] = {
+          ...item,
+          content: item.content.toSpliced(imageIndex, 1),
+        };
+        return recoveredInput;
+      }
+    }
+
+    if (item.type === "function_call_output" && Array.isArray(item.output)) {
+      const imageIndex = item.output.findLastIndex(
+        (part) => part.type === "input_image",
+      );
+
+      if (imageIndex >= 0) {
+        const recoveredInput = [...inputItems];
+        recoveredInput[itemIndex] = {
+          ...item,
+          output: item.output.toSpliced(imageIndex, 1),
+        };
+        return recoveredInput;
+      }
+    }
+  }
+
+  return undefined;
+}
+
+function recoverCorruptedImageInput(
+  input: LlmApiInput,
+  state: LlmRequestState,
+  error: unknown,
+  removedImageCount: number,
+): LlmApiInput | undefined {
+  if (!INVALID_IMAGE_DATA_ERROR_PATTERN.test(getErrorDetail(error))) {
+    return undefined;
+  }
+
+  let recoveredInput = removeLastInputImage(input);
+  let removedFrom = "current input";
+
+  if (!recoveredInput) {
+    const recoveredContext = removeLastInputImage(state.inputItems);
+
+    if (!recoveredContext) {
+      return undefined;
+    }
+
+    state.inputItems = recoveredContext;
+    recoveredInput = [...input];
+    removedFrom = "conversation context";
+  }
+
+  logError("Removed corrupted image from LLM request", {
+    removedImageCount,
+    removedFrom,
+    error,
+  });
+
+  return [
+    ...recoveredInput.filter(
+      (item) =>
+        item.type !== "message" ||
+        typeof item.content !== "string" ||
+        !CORRUPTED_IMAGE_REMOVAL_NOTICE_PATTERN.test(item.content),
+    ),
+    createInputMessage(
+      `${removedImageCount} attached images were removed due to corrupted contents.`,
+    ),
+  ];
+}
+
 function isJsonContent(content: string): boolean {
   try {
     JSON.parse(content);
@@ -1292,6 +1380,7 @@ async function createLlmResponseWithRetries(
   let retryAttempts = 0;
   let emptyResponseRetries = 0;
   let rateLimitRetries = 0;
+  let corruptedImageRemovalCount = 0;
 
   while (true) {
     throwIfAborted(options.signal);
@@ -1335,6 +1424,19 @@ async function createLlmResponseWithRetries(
 
       if (recoveredInput) {
         currentInput = recoveredInput;
+        continue;
+      }
+
+      const recoveredCorruptedImageInput = recoverCorruptedImageInput(
+        currentInput,
+        state,
+        error,
+        corruptedImageRemovalCount + 1,
+      );
+
+      if (recoveredCorruptedImageInput) {
+        corruptedImageRemovalCount += 1;
+        currentInput = recoveredCorruptedImageInput;
         continue;
       }
 

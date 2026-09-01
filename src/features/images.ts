@@ -38,6 +38,8 @@ type ImageReference = {
 
 const IMAGE_REFERENCE_PATTERN =
   /tg:\/\/(photo|document)\?id=([A-Za-z0-9_-]{1,64})/g;
+const RICH_MESSAGE_IMAGE_MARKDOWN_PATTERN =
+  /!\[[^\]\r\n]*\]\(tg:\/\/(?:photo|document)\?id=[A-Za-z0-9_-]{1,64}\)/g;
 const pendingImageRegistrations = new WeakMap<
   Database,
   Map<string, Promise<StoredImage>>
@@ -48,6 +50,14 @@ export function formatImageMarkdown(
   mediaType: SavedImageMediaType = "photo",
 ): string {
   return `![](tg://${mediaType}?id=${imageId})`;
+}
+
+export function stripRichMessageImages(markdown: string): string {
+  return markdown
+    .replaceAll(RICH_MESSAGE_IMAGE_MARKDOWN_PATTERN, "")
+    .replaceAll(/[ \t]+\n/g, "\n")
+    .replaceAll(/\n{3,}/g, "\n\n")
+    .trim();
 }
 
 export async function migrateImages(database: Database): Promise<void> {
