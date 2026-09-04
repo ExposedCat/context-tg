@@ -1,6 +1,5 @@
 command-configure-description = Изменить настройки чата
 command-debug-description = Включить или выключить отладку
-command-stickers-description = Показать стикерпаки
 command-packs-description = Показать наборы эмодзи
 command-tasks-description = Показать последние задачи
 command-schedule-description = Показать будущие сообщения
@@ -30,12 +29,10 @@ settings-kind-reasoning-global = Общая глубина рассуждени�
 
 settings-configure-global-title = Настройки для всех чатов:
 settings-configure-menu =
-    Стикеры /stickers
     Эмодзи /packs
     Троллинг /trolling
     Проактивные ответы /proactive
 settings-configure-menu-admin =
-    Стикеры /stickers
     Эмодзи /packs
     Модели /model
     Отладка /debug

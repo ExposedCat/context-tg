@@ -1,6 +1,5 @@
 command-configure-description = Change chat settings
 command-debug-description = Turn debug details on or off
-command-stickers-description = List sticker packs
 command-packs-description = List emoji packs
 command-tasks-description = Show recent tasks
 command-schedule-description = Show upcoming messages
@@ -30,12 +29,10 @@ settings-kind-reasoning-global = Global reasoning effort
 
 settings-configure-global-title = Settings for all chats:
 settings-configure-menu =
-    Stickers /stickers
     Emoji /packs
     Trolling /trolling
     Proactive responses /proactive
 settings-configure-menu-admin =
-    Stickers /stickers
     Emoji /packs
     Models /model
     Debug /debug

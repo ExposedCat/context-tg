@@ -38,12 +38,10 @@ import * as replyTool from "./llm-tools/reply.ts";
 import type { LlmReport } from "./llm-tools/reports.ts";
 import * as reportsTool from "./llm-tools/reports.ts";
 import * as scheduleTool from "./llm-tools/schedule.ts";
-import * as stickerTool from "./llm-tools/sticker.ts";
 import type {
   FunctionToolResult,
   FunctionToolRunner,
   LlmImageInput,
-  LlmSticker,
   LlmToolContext,
 } from "./llm-tools/types.ts";
 import * as webSearchTool from "./llm-tools/web-search.ts";
@@ -51,11 +49,7 @@ import * as youtubeTool from "./llm-tools/youtube.ts";
 import { buildMemosMetadataSection } from "./memos.ts";
 
 export type { LlmReport } from "./llm-tools/reports.ts";
-export type {
-  LlmImageInput,
-  LlmSticker,
-  LlmToolContext,
-} from "./llm-tools/types.ts";
+export type { LlmImageInput, LlmToolContext } from "./llm-tools/types.ts";
 
 export const TOOL_DEFINITIONS = {
   web_search: webSearchTool.toolDefinition,
@@ -69,7 +63,6 @@ export const TOOL_DEFINITIONS = {
   get_recent_news: gdeltTool.toolDefinition,
   read_youtube_video: youtubeTool.toolDefinition,
   generate_image: imageTool.toolDefinition,
-  send_sticker: stickerTool.toolDefinition,
   set_reply_message_id: replyTool.toolDefinition,
   send_report: reportsTool.toolDefinition,
   send_trading_report: reportsTool.tradingToolDefinition,
@@ -95,7 +88,6 @@ const FUNCTION_TOOL_RUNNERS = {
   get_recent_news: gdeltTool.execute,
   read_youtube_video: youtubeTool.execute,
   generate_image: imageTool.execute,
-  send_sticker: stickerTool.execute,
   set_reply_message_id: replyTool.execute,
   send_report: reportsTool.execute,
   send_trading_report: reportsTool.executeTrading,
@@ -186,7 +178,6 @@ export type LlmResponse = {
   replyMessageId?: number | null;
   report?: LlmReport;
   generatedImageIds: string[];
-  stickers: LlmSticker[];
   errors: LlmToolError[];
   web_search: {
     used: boolean;
@@ -229,10 +220,6 @@ const MAX_EMPTY_RESPONSE_RETRIES = 2;
 const LLM_RATE_LIMIT_RETRY_DELAY_MS = 3000;
 const LLM_RATE_LIMIT_MAX_RETRIES = 5;
 const MAX_FUNCTION_TOOL_ROUNDS = 4;
-const DUPLICATE_STICKER_RESPONSE = JSON.stringify({
-  error: "Duplicate sticker",
-  details: "You have already sent a sticker.",
-});
 const RETRIABLE_EMPTY_RESPONSE_DETAILS = new Set([
   "empty response",
   "missing output",
@@ -251,10 +238,8 @@ type LlmRequestState = {
   inputItems: ResponseInputItem[];
   receivedResponse: boolean;
   sentImmediateContentFilterWarning: boolean;
-  hasStickerSlot: boolean;
   report?: LlmReport;
   generatedImageIds: string[];
-  stickers: LlmSticker[];
   errors: LlmToolError[];
   debug: LlmDebugInfo;
 };
@@ -999,20 +984,6 @@ function normalizeFunctionToolResult(
   return typeof result === "string" ? { output: result } : result;
 }
 
-function addStickerToState(
-  state: LlmRequestState,
-  sticker: LlmSticker,
-  reservedStickerSlot = false,
-): boolean {
-  if (!reservedStickerSlot && state.hasStickerSlot) {
-    return false;
-  }
-
-  state.hasStickerSlot = true;
-  state.stickers.push(sticker);
-  return true;
-}
-
 async function runFunctionToolCall(
   client: OpenAI,
   call: FunctionToolCall,
@@ -1027,17 +998,6 @@ async function runFunctionToolCall(
   const args = parseJsonObject(call.arguments);
   logDebug("Running tool call", formatToolCallLog(call));
   const runner = FUNCTION_TOOL_RUNNERS[call.name];
-  const reservedStickerSlot = call.name === "send_sticker";
-
-  if (reservedStickerSlot) {
-    if (state.hasStickerSlot) {
-      return {
-        toolOutput: createToolOutput(call, DUPLICATE_STICKER_RESPONSE),
-      };
-    }
-
-    state.hasStickerSlot = true;
-  }
 
   let result: FunctionToolResult;
   try {
@@ -1055,9 +1015,6 @@ async function runFunctionToolCall(
     throwIfAborted(signal);
     const details = getErrorDetail(error);
     state.errors.push({ tool: call.name, details });
-    if (reservedStickerSlot) {
-      state.hasStickerSlot = state.stickers.length > 0;
-    }
     logError("Function tool call failed", {
       call: formatToolCallLog(call),
       error,
@@ -1085,20 +1042,6 @@ async function runFunctionToolCall(
 
   if (result.generatedImageId) {
     state.generatedImageIds.push(result.generatedImageId);
-  }
-
-  if (result.sticker) {
-    addStickerToState(state, result.sticker, reservedStickerSlot);
-  } else if (reservedStickerSlot) {
-    state.hasStickerSlot = state.stickers.length > 0;
-  }
-
-  if (result.stickers) {
-    for (const sticker of result.stickers) {
-      if (!addStickerToState(state, sticker)) {
-        break;
-      }
-    }
   }
 
   return {
@@ -1643,9 +1586,7 @@ async function requestLlmWithInstructions(
     inputItems: previousInput,
     receivedResponse: false,
     sentImmediateContentFilterWarning: false,
-    hasStickerSlot: false,
     generatedImageIds: [],
-    stickers: [],
     errors: [],
     debug: {
       responses: [],
@@ -1696,7 +1637,6 @@ async function requestLlmWithInstructions(
     replyMessageId: state.replyMessageId,
     report: state.report,
     generatedImageIds: state.generatedImageIds,
-    stickers: state.stickers,
     errors: state.errors,
     web_search: {
       used: calledTools.includes("web_search"),

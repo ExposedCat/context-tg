@@ -19,7 +19,6 @@ import {
 } from "./agents/index.ts";
 import { isBotAdmin } from "./authorization.ts";
 import type { Database } from "./database.ts";
-import { findRandomStickerForEmoji } from "./emoji-packs.ts";
 import {
   downloadTelegramImageDataUrl,
   formatImageMarkdown,
@@ -38,7 +37,6 @@ import {
   type LlmRequestMessageInput,
   type LlmRequestOptions,
   type LlmResponse,
-  type LlmSticker,
   type LlmToolContext,
   type LlmToolError,
   requestLlm,
@@ -242,7 +240,6 @@ const PROACTIVE_CONTEXT_MESSAGE_COUNT = 10;
 const PROACTIVE_TASK_TEXT = "Proactive response";
 const PROACTIVE_DISABLED_TOOLS = new Set<ToolName>([
   "generate_image",
-  "send_sticker",
   "schedule_message",
   "cron_message",
   "get_scheduled_messages",
@@ -1401,38 +1398,6 @@ function formatDebugMarkdown(debug: LlmDebugInfo): string {
   )}</blockquote>`;
 }
 
-function removeStickerPlaceholders(
-  response: string,
-  stickers: LlmSticker[],
-): string {
-  const placeholders = new Set([
-    "[sticker]",
-    ...stickers.map((sticker) => formatStickerMarker(sticker.emoji)),
-  ]);
-  let text = response;
-  let removed = false;
-
-  for (const placeholder of placeholders) {
-    if (!text.includes(placeholder)) {
-      continue;
-    }
-
-    removed = true;
-    text = text.split(placeholder).join("");
-  }
-
-  if (!removed) {
-    return response;
-  }
-
-  return text
-    .split(/\r?\n/)
-    .map((line) => line.replaceAll(/[ \t]+([,.;:!?])/g, "$1").trimEnd())
-    .join("\n")
-    .replaceAll(/\n{3,}/g, "\n\n")
-    .trim();
-}
-
 function formatLlmResponse(
   llmResponse: LlmResponse,
   options: { debug?: boolean; errors?: string[] } = {},
@@ -1440,9 +1405,9 @@ function formatLlmResponse(
   richMarkdown: string;
 } {
   const response = llmResponse.response ?? "";
-  const richMarkdown = removeStickerPlaceholders(
-    formatMarkdownCitations(response, llmResponse.web_search.citations),
-    llmResponse.stickers,
+  const richMarkdown = formatMarkdownCitations(
+    response,
+    llmResponse.web_search.citations,
   );
   const errors = [
     ...llmResponse.errors.map((error) =>
@@ -1643,48 +1608,6 @@ async function sendReportResponse(
   );
 
   return sentMessages;
-}
-
-async function sendStickerMessages(
-  ctx: Context,
-  message: TextMessage,
-  stickers: LlmSticker[],
-  replyMessageId?: number | null,
-): Promise<{
-  sentMessages: Array<{ message_id: number }>;
-  unsentStickers: LlmSticker[];
-}> {
-  const sentMessages: Array<{ message_id: number }> = [];
-  const unsentStickers: LlmSticker[] = [];
-
-  for (const requestedSticker of stickers) {
-    try {
-      const sticker = await findRandomStickerForEmoji(
-        ctx.database,
-        ctx.api,
-        requestedSticker.emoji,
-      );
-
-      if (!sticker) {
-        unsentStickers.push(requestedSticker);
-        continue;
-      }
-
-      const sentSticker = await ctx.replyWithSticker(
-        sticker.fileId,
-        getReplyDeliveryOptions(message, replyMessageId),
-      );
-      sentMessages.push(sentSticker);
-    } catch (error) {
-      unsentStickers.push(requestedSticker);
-      logError("Failed to send sticker:", {
-        emoji: requestedSticker.emoji,
-        error,
-      });
-    }
-  }
-
-  return { sentMessages, unsentStickers };
 }
 
 async function sendRichMarkdownResponse(
@@ -2248,21 +2171,9 @@ async function handleChatRequest(
     }
 
     const sentMessages: Array<{ message_id: number }> = [];
-    const stickerMessages = await sendStickerMessages(
-      ctx,
-      message,
-      llmResponse.stickers,
-      llmResponse.replyMessageId,
-    );
-    sentMessages.push(...stickerMessages.sentMessages);
-
     const formattedResponse = formatLlmResponse(llmResponse, {
       debug: await getChatDebugMode(ctx.database, chatId),
     });
-    const missingStickerFallback =
-      stickerMessages.sentMessages.length === 0
-        ? stickerMessages.unsentStickers[0]?.emoji
-        : undefined;
 
     if (llmResponse.report) {
       sentMessages.push(
@@ -2274,24 +2185,12 @@ async function handleChatRequest(
           llmResponse.replyMessageId,
         )),
       );
-    } else if (
-      formattedResponse.richMarkdown ||
-      llmResponse.stickers.length === 0
-    ) {
+    } else {
       sentMessages.push(
         ...(await sendRichMarkdownResponse(
           ctx,
           message,
           formattedResponse.richMarkdown,
-          llmResponse.replyMessageId,
-        )),
-      );
-    } else if (missingStickerFallback) {
-      sentMessages.push(
-        ...(await sendRichMarkdownResponse(
-          ctx,
-          message,
-          missingStickerFallback,
           llmResponse.replyMessageId,
         )),
       );
@@ -2598,6 +2497,7 @@ async function handleGuestChatRequest(
   }
 
   let responseSent = false;
+  let imageUsageConsumedCount = 0;
 
   try {
     const reply = getActualReply(message);
@@ -2617,9 +2517,14 @@ async function handleGuestChatRequest(
       throw new Error(formatQuotaExceededResponse("tool_usages", toolUsage));
     }
 
+    const imageUsageRemaining = await hasUsageRemaining(
+      ctx.database,
+      chatId,
+      "image_responses",
+    );
     const agentTools = filterToolsForUsage(guestAgent.tools, {
       toolUsageRemaining: toolUsage.used < toolUsage.quota,
-      imageUsageRemaining: false,
+      imageUsageRemaining,
     });
     const toolContext = getLlmToolContext(chatId, message);
     const request = responseId
@@ -2657,6 +2562,25 @@ async function handleGuestChatRequest(
       "tool_usages",
       llmResponse.tool_call_count,
     );
+
+    const imageAttachmentCount = llmResponse.generatedImageIds.length;
+
+    if (imageAttachmentCount > 0) {
+      const imageUsage = await consumeUsage(
+        ctx.database,
+        chatId,
+        "image_responses",
+        imageAttachmentCount,
+      );
+
+      if (!imageUsage.ok) {
+        throw new Error(
+          formatQuotaExceededResponse("image_responses", imageUsage),
+        );
+      }
+
+      imageUsageConsumedCount = imageAttachmentCount;
+    }
 
     let delivery: GuestResponseDelivery;
 
@@ -2699,6 +2623,16 @@ async function handleGuestChatRequest(
         };
         delivery = await sendGuestLlmResponse(ctx, message, llmResponse);
       }
+
+      if (imageUsageConsumedCount > 0) {
+        await refundUsage(
+          ctx.database,
+          chatId,
+          "image_responses",
+          imageUsageConsumedCount,
+        );
+        imageUsageConsumedCount = 0;
+      }
     }
     responseSent = true;
     await saveGuestChatResponseThread(
@@ -2714,6 +2648,15 @@ async function handleGuestChatRequest(
 
     if (!responseSent) {
       await refundUsage(ctx.database, chatId, "text_responses");
+
+      if (imageUsageConsumedCount > 0) {
+        await refundUsage(
+          ctx.database,
+          chatId,
+          "image_responses",
+          imageUsageConsumedCount,
+        );
+      }
     }
 
     await sendGuestMarkdownResponse(

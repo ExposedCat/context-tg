@@ -1,6 +1,5 @@
 command-configure-description = Змінити налаштування чату
 command-debug-description = Увімкнути або вимкнути налагодження
-command-stickers-description = Показати стікерпаки
 command-packs-description = Показати набори емодзі
 command-tasks-description = Показати останні завдання
 command-schedule-description = Показати майбутні повідомлення
@@ -30,12 +29,10 @@ settings-kind-reasoning-global = Спільна глибина міркуван�
 
 settings-configure-global-title = Налаштування для всіх чатів:
 settings-configure-menu =
-    Стікери /stickers
     Емодзі /packs
     Тролінг /trolling
     Проактивні відповіді /proactive
 settings-configure-menu-admin =
-    Стікери /stickers
     Емодзі /packs
     Моделі /model
     Налагодження /debug

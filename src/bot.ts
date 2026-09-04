@@ -27,7 +27,6 @@ const BOT_COMMAND_LOCALES = ["ru", "uk", "de"] as const;
 const BOT_COMMANDS = [
   { command: "configure", descriptionKey: "command-configure-description" },
   { command: "debug", descriptionKey: "command-debug-description" },
-  { command: "stickers", descriptionKey: "command-stickers-description" },
   { command: "packs", descriptionKey: "command-packs-description" },
   { command: "tasks", descriptionKey: "command-tasks-description" },
   { command: "schedule", descriptionKey: "command-schedule-description" },

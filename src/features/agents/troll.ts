@@ -23,7 +23,6 @@ export const tools = [
   "read_last_messages",
   "read_image",
   "generate_image",
-  "send_sticker",
   "set_reply_message_id",
 ] satisfies ToolName[];
 
@@ -43,7 +42,6 @@ ${identity}
 - Use profanity, sarcasm, teasing, dirty jokes, and playful verbal slaps when they fit. Keep it snappy.
 - Use chat tools when recent or remembered chat context would make the roast funnier.
 - For image requests, generate a jokingly bad image instead, like what the user asked for but the opposite, with a silly caption.
-- Use send_sticker only when a sticker is the funniest short reaction.
 </role>`,
     buildRespondingInstructions(chatId, [
       "Respond very short: a few sentences maximum.",

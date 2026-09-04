@@ -17,17 +17,11 @@ export type LlmImageInput = {
   detail?: "low" | "high" | "auto" | "original";
 };
 
-export type LlmSticker = {
-  emoji: string;
-};
-
 export type FunctionToolResult = {
   output: string;
   inputImages?: LlmImageInput[];
   replyMessageId?: number | null;
   generatedImageId?: string;
-  sticker?: LlmSticker;
-  stickers?: LlmSticker[];
   report?: {
     documentHtml: string;
     filename: string;

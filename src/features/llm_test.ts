@@ -107,8 +107,8 @@ Deno.test("legacy Chat Completions history is converted to Responses items", () 
             id: "call_legacy",
             type: "function",
             function: {
-              name: "send_sticker",
-              arguments: '{"emoji":"👍"}',
+              name: "set_reply_message_id",
+              arguments: '{"message_id":42}',
             },
           },
         ],
@@ -138,8 +138,8 @@ Deno.test("legacy Chat Completions history is converted to Responses items", () 
     {
       type: "function_call",
       call_id: "call_legacy",
-      name: "send_sticker",
-      arguments: '{"emoji":"👍"}',
+      name: "set_reply_message_id",
+      arguments: '{"message_id":42}',
     },
     {
       type: "function_call_output",
@@ -163,14 +163,6 @@ Deno.test("requestLlm uses Responses items through a function-call round", async
     const body =
       requests.length === 1
         ? createApiResponse("resp_tool", [
-            {
-              id: "fc_tool",
-              type: "function_call",
-              call_id: "call_tool",
-              name: "send_sticker",
-              arguments: '{"emoji":"👍"}',
-              status: "completed",
-            },
             {
               id: "fc_reply",
               type: "function_call",
@@ -201,7 +193,7 @@ Deno.test("requestLlm uses Responses items through a function-call round", async
   try {
     const response = await requestLlm(
       {
-        text: "Use a sticker",
+        text: "Reply to message 42",
         images: [
           {
             image_url: "data:image/png;base64,AA==",
@@ -209,16 +201,15 @@ Deno.test("requestLlm uses Responses items through a function-call round", async
           },
         ],
       },
-      ["send_sticker", "set_reply_message_id"],
+      ["set_reply_message_id"],
       undefined,
       { context: { chatId: 1, messageId: 1 } },
     );
 
     strictEqual(response.response_id, "resp_final");
     strictEqual(response.response, "Done.");
-    strictEqual(response.tool_call_count, 2);
+    strictEqual(response.tool_call_count, 1);
     strictEqual(response.replyMessageId, 42);
-    deepStrictEqual(response.stickers, [{ emoji: "👍" }]);
     strictEqual(response.debug.responses[0].usage?.input_tokens, 10);
     strictEqual(response.debug.responses[0].usage?.output_tokens, 5);
     strictEqual(requests.length, 2);
@@ -229,25 +220,6 @@ Deno.test("requestLlm uses Responses items through a function-call round", async
     deepStrictEqual(firstRequest.include, ["reasoning.encrypted_content"]);
     ok(typeof firstRequest.instructions === "string");
     deepStrictEqual(firstRequest.tools, [
-      {
-        type: "function",
-        name: "send_sticker",
-        description:
-          "Send one sticker along with response. Use this for expressive sticker reactions when a sticker is more natural than text. Call at most once per response.",
-        parameters: {
-          type: "object",
-          properties: {
-            emoji: {
-              type: "string",
-              description:
-                "The emoji to match in the configured sticker packs, for example 😂, 😭, ❤️, or 👍.",
-            },
-          },
-          required: ["emoji"],
-          additionalProperties: false,
-        },
-        strict: true,
-      },
       {
         type: "function",
         name: "set_reply_message_id",
@@ -277,7 +249,7 @@ Deno.test("requestLlm uses Responses items through a function-call round", async
         type: "input_text",
         text: [
           '<message sender="User">',
-          "  <content>Use a sticker</content>",
+          "  <content>Reply to message 42</content>",
           "</message>",
         ].join("\n"),
       },
@@ -289,19 +261,12 @@ Deno.test("requestLlm uses Responses items through a function-call round", async
     ]);
 
     const secondInput = requests[1].input as Array<Record<string, unknown>>;
-    strictEqual(secondInput.length, 5);
+    strictEqual(secondInput.length, 3);
     strictEqual(secondInput[1].type, "function_call");
-    strictEqual(secondInput[3].type, "function_call_output");
-    strictEqual(secondInput[3].call_id, "call_tool");
+    strictEqual(secondInput[2].type, "function_call_output");
+    strictEqual(secondInput[2].call_id, "call_reply");
     ok(
-      String(secondInput[3].output).includes(
-        '<tool_response tool="send_sticker">',
-      ),
-    );
-    strictEqual(secondInput[4].type, "function_call_output");
-    strictEqual(secondInput[4].call_id, "call_reply");
-    ok(
-      String(secondInput[4].output).includes(
+      String(secondInput[2].output).includes(
         '<tool_response tool="set_reply_message_id">',
       ),
     );
@@ -753,8 +718,8 @@ Deno.test("failed tool follow-up preserves the complete context for the next tur
           id: "fc_before_error",
           type: "function_call",
           call_id: "call_before_error",
-          name: "send_sticker",
-          arguments: '{"emoji":"👍"}',
+          name: "set_reply_message_id",
+          arguments: '{"message_id":42}',
           status: "completed",
         },
       ]);
@@ -802,8 +767,8 @@ Deno.test("failed tool follow-up preserves the complete context for the next tur
 
     try {
       await requestLlm(
-        "Acknowledge it with a sticker",
-        ["send_sticker"],
+        "Reply to message 42",
+        ["set_reply_message_id"],
         firstResponse.response_id,
         { context: { chatId: 1, messageId: 2 } },
       );
@@ -832,12 +797,12 @@ Deno.test("failed tool follow-up preserves the complete context for the next tur
     >;
     strictEqual(resumedInput.length, 6);
     ok(JSON.stringify(resumedInput).includes("pineapple"));
-    ok(JSON.stringify(resumedInput).includes("Acknowledge it with a sticker"));
+    ok(JSON.stringify(resumedInput).includes("Reply to message 42"));
     const toolOutput = resumedInput.find(
       (item) => item.type === "function_call_output",
     );
     strictEqual(toolOutput?.call_id, "call_before_error");
-    ok(String(toolOutput?.output).includes('tool="send_sticker"'));
+    ok(String(toolOutput?.output).includes('tool="set_reply_message_id"'));
   } finally {
     globalThis.fetch = originalFetch;
   }

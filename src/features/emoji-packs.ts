@@ -28,12 +28,9 @@ type EmojiPacksDatabase = Pick<
 
 type EmojiPacksTableName = "emoji_packs" | "global_emoji_packs";
 
-type PackKind = "emoji" | "sticker";
-
 type StickerSet = {
   sticker_type: string;
   stickers: Array<{
-    file_id?: string;
     custom_emoji_id?: string;
     emoji?: string;
   }>;
@@ -56,25 +53,8 @@ type EmojiReplacementGroup = {
   emoji: string;
 };
 
-type StickerCandidate = {
-  fallback: string;
-  fileId: string;
-};
-
-type StickerGroup = {
-  candidates: StickerCandidate[];
-  emoji: string;
-};
-
 type EmojiRegistry = {
   replacements: EmojiReplacementGroup[];
-  stickers: StickerGroup[];
-};
-
-export type EmojiPackSticker = {
-  emoji: string;
-  fallback: string;
-  fileId: string;
 };
 
 type MarkdownLinkMatch = {
@@ -170,7 +150,7 @@ function getPackNameFromUrl(value: string): string | undefined {
 
     const [, kind, name] = url.pathname.split("/");
 
-    if (kind !== "addemoji" && kind !== "addstickers") {
+    if (kind !== "addemoji") {
       return undefined;
     }
 
@@ -194,17 +174,9 @@ function getPackCommandUsage(command: string): string {
   return `Usage: /${command} NAME`;
 }
 
-function getPackListFooter(kind: PackKind, global: boolean): string {
-  const addCommand = global
-    ? "global_pack_add"
-    : kind === "emoji"
-      ? "pack_add"
-      : "sticker_add";
-  const removeCommand = global
-    ? "global_pack_remove"
-    : kind === "emoji"
-      ? "pack_rm"
-      : "sticker_rm";
+function getPackListFooter(global: boolean): string {
+  const addCommand = global ? "global_pack_add" : "pack_add";
+  const removeCommand = global ? "global_pack_remove" : "pack_rm";
 
   return [`Add /${addCommand} NAME`, `Remove /${removeCommand} NAME`].join(
     "\n",
@@ -213,23 +185,21 @@ function getPackListFooter(kind: PackKind, global: boolean): string {
 
 function formatPacksList(
   packs: Array<Pick<EmojiPack, "name">>,
-  kind: PackKind,
   options: { global?: boolean; includeCommands?: boolean } = {},
 ): string {
-  const label = kind === "emoji" ? "emoji" : "sticker";
   const global = options.global ?? false;
   const includeCommands = options.includeCommands ?? true;
-  const title = global ? `Global ${label} packs:` : `Active ${label} packs:`;
+  const title = global ? "Global emoji packs:" : "Active emoji packs:";
   const emptyMessage = global
-    ? `No global ${label} packs.`
-    : `No active ${label} packs.`;
+    ? "No global emoji packs."
+    : "No active emoji packs.";
   const rows =
     packs.length === 0
       ? [emptyMessage]
       : [title, ...packs.map((pack) => `- ${pack.name}`)];
 
   if (includeCommands) {
-    rows.push("", getPackListFooter(kind, global));
+    rows.push("", getPackListFooter(global));
   }
 
   return rows.join("\n");
@@ -239,7 +209,7 @@ export function formatGlobalPacksList(
   packs: Array<{ name: string }>,
   includeCommands: boolean,
 ): string {
-  return formatPacksList(packs, "emoji", {
+  return formatPacksList(packs, {
     global: true,
     includeCommands,
   });
@@ -256,26 +226,17 @@ export async function listEmojiPacks(
     .execute();
 }
 
-function getPackKind(stickerSet: StickerSet): PackKind | undefined {
+function isEmojiPack(stickerSet: StickerSet): boolean {
   const emojiCount = stickerSet.stickers.filter(
     (sticker) => sticker.custom_emoji_id && sticker.emoji,
   ).length;
 
-  if (stickerSet.sticker_type === "custom_emoji" && emojiCount > 0) {
-    return "emoji";
-  }
-
-  const stickerCount = stickerSet.stickers.filter(
-    (sticker) => sticker.file_id && sticker.emoji,
-  ).length;
-
-  return stickerCount > 0 ? "sticker" : undefined;
+  return stickerSet.sticker_type === "custom_emoji" && emojiCount > 0;
 }
 
-async function listPacksByKind(
+async function listValidEmojiPacks(
   database: EmojiPacksDatabase,
   api: StickerSetReader,
-  kind: PackKind,
   table: EmojiPacksTableName = "emoji_packs",
 ): Promise<EmojiPack[]> {
   const packs = await listEmojiPacks(database, table);
@@ -285,7 +246,7 @@ async function listPacksByKind(
     try {
       const stickerSet = await api.getStickerSet(pack.name);
 
-      if (getPackKind(stickerSet) === kind) {
+      if (isEmojiPack(stickerSet)) {
         matchingPacks.push(pack);
       }
     } catch (error) {
@@ -388,55 +349,8 @@ async function validateEmojiPack(
   return emojiCount;
 }
 
-async function validateStickerPack(
-  api: StickerSetReader,
-  name: string,
-): Promise<number> {
-  const stickerSet = await api.getStickerSet(name);
-  const stickerCount = stickerSet.stickers.filter(
-    (sticker) => sticker.file_id && sticker.emoji,
-  ).length;
-
-  if (stickerSet.sticker_type === "custom_emoji" || stickerCount === 0) {
-    throw new Error("Sticker set does not contain emoji-mapped stickers.");
-  }
-
-  return stickerCount;
-}
-
-function getPackAdminWarning(kind: PackKind): string {
-  const label = kind === "emoji" ? "emoji" : "sticker";
-
-  return `Only the bot admin or a group admin can change ${label} packs.`;
-}
-
-function getPackNotFoundMessage(kind: PackKind, name: string): string {
-  return kind === "emoji"
-    ? `Could not add ${name}: custom emoji pack not found.`
-    : `Could not add ${name}: sticker pack not found.`;
-}
-
-async function validatePack(
-  api: StickerSetReader,
-  kind: PackKind,
-  name: string,
-): Promise<number> {
-  return kind === "emoji"
-    ? await validateEmojiPack(api, name)
-    : await validateStickerPack(api, name);
-}
-
-function getPackAddCommand(kind: PackKind): "pack_add" | "sticker_add" {
-  return kind === "emoji" ? "pack_add" : "sticker_add";
-}
-
-function getPackRemoveCommand(kind: PackKind): "pack_rm" | "sticker_rm" {
-  return kind === "emoji" ? "pack_rm" : "sticker_rm";
-}
-
 async function replyWithAddPack(
   ctx: Context,
-  kind: PackKind,
   table: EmojiPacksTableName = "emoji_packs",
 ) {
   const global = table === "global_emoji_packs";
@@ -445,7 +359,7 @@ async function replyWithAddPack(
     await ctx.reply(
       global
         ? "Only the bot admin can change global emoji packs."
-        : getPackAdminWarning(kind),
+        : "Only the bot admin or a group admin can change emoji packs.",
     );
     return;
   }
@@ -454,17 +368,17 @@ async function replyWithAddPack(
 
   if (!name) {
     await ctx.reply(
-      getPackCommandUsage(global ? "global_pack_add" : getPackAddCommand(kind)),
+      getPackCommandUsage(global ? "global_pack_add" : "pack_add"),
     );
     return;
   }
 
   let packItemCount: number;
   try {
-    packItemCount = await validatePack(ctx.api, kind, name);
+    packItemCount = await validateEmojiPack(ctx.api, name);
   } catch (error) {
-    logError("Failed to validate pack", { name, kind, error });
-    await ctx.reply(getPackNotFoundMessage(kind, name));
+    logError("Failed to validate pack", { name, error });
+    await ctx.reply(`Could not add ${name}: custom emoji pack not found.`);
     return;
   }
 
@@ -476,16 +390,11 @@ async function replyWithAddPack(
   }
 
   invalidateEmojiRegistry(ctx.database, table);
-  await ctx.reply(
-    `Added ${name} (${packItemCount} ${
-      kind === "emoji" ? "emoji" : "stickers"
-    }).`,
-  );
+  await ctx.reply(`Added ${name} (${packItemCount} emoji).`);
 }
 
 async function replyWithRemovePack(
   ctx: Context,
-  kind: PackKind,
   table: EmojiPacksTableName = "emoji_packs",
 ) {
   const global = table === "global_emoji_packs";
@@ -494,7 +403,7 @@ async function replyWithRemovePack(
     await ctx.reply(
       global
         ? "Only the bot admin can change global emoji packs."
-        : getPackAdminWarning(kind),
+        : "Only the bot admin or a group admin can change emoji packs.",
     );
     return;
   }
@@ -503,9 +412,7 @@ async function replyWithRemovePack(
 
   if (!name) {
     await ctx.reply(
-      getPackCommandUsage(
-        global ? "global_pack_remove" : getPackRemoveCommand(kind),
-      ),
+      getPackCommandUsage(global ? "global_pack_remove" : "pack_rm"),
     );
     return;
   }
@@ -525,41 +432,21 @@ async function loadEmojiRegistry(
   table: EmojiPacksTableName,
 ): Promise<EmojiRegistry> {
   const replacementGroups = new Map<string, EmojiReplacementCandidate[]>();
-  const stickerGroups = new Map<string, StickerCandidate[]>();
   const packs = await listEmojiPacks(database, table);
 
   for (const pack of packs) {
     try {
       const stickerSet = await api.getStickerSet(pack.name);
 
-      const packKind = getPackKind(stickerSet);
+      if (!isEmojiPack(stickerSet)) {
+        continue;
+      }
 
       for (const sticker of stickerSet.stickers) {
         const id = sticker.custom_emoji_id;
         const fallback = sticker.emoji;
-        const fileId = sticker.file_id;
 
-        if (!fallback) {
-          continue;
-        }
-
-        if (packKind === "sticker" && fileId) {
-          for (const emoji of getEmojiAliases(fallback)) {
-            const candidates = stickerGroups.get(emoji) ?? [];
-
-            if (!stickerGroups.has(emoji)) {
-              stickerGroups.set(emoji, candidates);
-            }
-
-            if (candidates.some((candidate) => candidate.fileId === fileId)) {
-              continue;
-            }
-
-            candidates.push({ fallback, fileId });
-          }
-        }
-
-        if (packKind !== "emoji" || !id) {
+        if (!fallback || !id) {
           continue;
         }
 
@@ -587,12 +474,7 @@ async function loadEmojiRegistry(
   );
 
   replacements.sort((left, right) => right.emoji.length - left.emoji.length);
-  const stickers = Array.from(stickerGroups.entries()).map(
-    ([emoji, candidates]) => ({ emoji, candidates }),
-  );
-
-  stickers.sort((left, right) => right.emoji.length - left.emoji.length);
-  return { replacements, stickers };
+  return { replacements };
 }
 
 async function getEmojiRegistry(
@@ -627,7 +509,6 @@ async function getEffectiveEmojiRegistry(
       ...chatRegistry.replacements,
       ...globalRegistry.replacements,
     ],
-    stickers: [...chatRegistry.stickers, ...globalRegistry.stickers],
   };
 }
 
@@ -647,34 +528,6 @@ function findEmojiReplacementAt(
   const candidate =
     group.candidates[Math.floor(Math.random() * group.candidates.length)];
   return { emoji: group.emoji, ...candidate };
-}
-
-export async function findRandomStickerForEmoji(
-  database: EmojiPacksDatabase,
-  api: StickerSetReader,
-  emoji: string,
-): Promise<EmojiPackSticker | undefined> {
-  const trimmedEmoji = emoji.trim();
-
-  if (!trimmedEmoji) {
-    return undefined;
-  }
-
-  const registry = await getEffectiveEmojiRegistry(database, api);
-
-  for (const alias of getEmojiAliases(trimmedEmoji)) {
-    const group = registry.stickers.find((sticker) => sticker.emoji === alias);
-
-    if (!group || group.candidates.length === 0) {
-      continue;
-    }
-
-    const candidate =
-      group.candidates[Math.floor(Math.random() * group.candidates.length)];
-    return { emoji: group.emoji, ...candidate };
-  }
-
-  return undefined;
 }
 
 function hasReplacementCandidates(payload: ApiPayload): boolean {
@@ -1074,56 +927,31 @@ export function createEmojiPackTransformer(
 
 emojiPacksComposer.command("packs", async (ctx) => {
   await ctx.reply(
-    formatPacksList(
-      await listPacksByKind(ctx.database, ctx.api, "emoji"),
-      "emoji",
-    ),
+    formatPacksList(await listValidEmojiPacks(ctx.database, ctx.api)),
   );
 });
 
 emojiPacksComposer.command("global_packs", async (ctx) => {
   await ctx.reply(
     formatGlobalPacksList(
-      await listPacksByKind(
-        ctx.database,
-        ctx.api,
-        "emoji",
-        "global_emoji_packs",
-      ),
+      await listValidEmojiPacks(ctx.database, ctx.api, "global_emoji_packs"),
       isBotAdmin(ctx),
     ),
   );
 });
 
-emojiPacksComposer.command("stickers", async (ctx) => {
-  await ctx.reply(
-    formatPacksList(
-      await listPacksByKind(ctx.database, ctx.api, "sticker"),
-      "sticker",
-    ),
-  );
-});
-
 emojiPacksComposer.command("pack_add", async (ctx) => {
-  await replyWithAddPack(ctx, "emoji");
+  await replyWithAddPack(ctx);
 });
 
 emojiPacksComposer.command("global_pack_add", async (ctx) => {
-  await replyWithAddPack(ctx, "emoji", "global_emoji_packs");
-});
-
-emojiPacksComposer.command("sticker_add", async (ctx) => {
-  await replyWithAddPack(ctx, "sticker");
+  await replyWithAddPack(ctx, "global_emoji_packs");
 });
 
 emojiPacksComposer.command("pack_rm", async (ctx) => {
-  await replyWithRemovePack(ctx, "emoji");
+  await replyWithRemovePack(ctx);
 });
 
 emojiPacksComposer.command("global_pack_remove", async (ctx) => {
-  await replyWithRemovePack(ctx, "emoji", "global_emoji_packs");
-});
-
-emojiPacksComposer.command("sticker_rm", async (ctx) => {
-  await replyWithRemovePack(ctx, "sticker");
+  await replyWithRemovePack(ctx, "global_emoji_packs");
 });

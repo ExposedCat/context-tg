@@ -17,6 +17,7 @@ export const tools = [
   "search_images",
   "read_image",
   "read_youtube_video",
+  "generate_image",
 ] satisfies ToolName[];
 
 export function buildInstructions(chatId: number): string {
