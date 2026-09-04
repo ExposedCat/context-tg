@@ -67,6 +67,7 @@ volumes:
   qdrant_data:
 
 networks:
+  default:
   dev-infra:
     name: dev-infra
     external: true
