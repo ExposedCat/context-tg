@@ -22,6 +22,7 @@ services:
     environment:
       DENO_DIR: /deno-dir
       DEBUG: app:*:warn,app:*:error
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://signoz-ingester:4318
       QDRANT_URL: http://qdrant:6333
       SEARXNG_URL: http://searxng:8080
       TZ: Europe/Prague
@@ -31,6 +32,9 @@ services:
     depends_on:
       - qdrant
       - searxng
+    networks:
+      - default
+      - dev-infra
     restart: unless-stopped
 
   qdrant:
@@ -61,3 +65,8 @@ services:
 volumes:
   deno_cache:
   qdrant_data:
+
+networks:
+  dev-infra:
+    name: dev-infra
+    external: true

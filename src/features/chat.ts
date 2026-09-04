@@ -65,6 +65,7 @@ import {
   type TaskStatus,
 } from "./tasks.ts";
 import { disabledLinkPreviewOptions as linkPreviewOptions } from "./telegram.ts";
+import { createLlmCallTelemetry } from "./telemetry.ts";
 import {
   createThread,
   type GuestResponseThread,
@@ -1934,6 +1935,11 @@ async function sendRecoveredErrorResponse(
           context: toolContext,
           agentId: agent.id,
           signal,
+          telemetry: createLlmCallTelemetry(
+            ctx.chat?.type,
+            "normal",
+            ctx.telemetry.event,
+          ),
         },
         agent.buildInstructions(chatId),
         agent.MODEL,
@@ -2086,6 +2092,11 @@ async function handleChatRequest(
             api: ctx.api,
             context: toolContext,
             agentId: agent.id,
+            telemetry: createLlmCallTelemetry(
+              ctx.chat?.type,
+              "normal",
+              ctx.telemetry.event,
+            ),
             onProgress: async (progress) => {
               progressResponseId = progress.responseId ?? progressResponseId;
             },
@@ -2551,6 +2562,11 @@ async function handleGuestChatRequest(
         api: ctx.api,
         context: toolContext,
         agentId: guestAgent.id,
+        telemetry: createLlmCallTelemetry(
+          ctx.chat.type,
+          "guest",
+          ctx.telemetry.event,
+        ),
       },
       guestAgent.buildInstructions(chatId),
       guestAgent.MODEL,
@@ -2600,6 +2616,11 @@ async function handleGuestChatRequest(
           database: ctx.database,
           context: toolContext,
           agentId: guestAgent.id,
+          telemetry: createLlmCallTelemetry(
+            ctx.chat.type,
+            "guest",
+            ctx.telemetry.event,
+          ),
         },
         guestAgent.buildInstructions(chatId),
         guestAgent.MODEL,

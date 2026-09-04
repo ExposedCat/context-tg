@@ -6,6 +6,7 @@ import {
 } from "node:assert";
 import { type Api, InputFile } from "grammy";
 import { parseLlmResponseInputItems } from "./llm-chat-responses.ts";
+import type { LlmCallTelemetryPayload } from "./telemetry.ts";
 
 const TEST_ENV = {
   BOT_TOKEN: "test",
@@ -153,6 +154,7 @@ Deno.test("legacy Chat Completions history is converted to Responses items", () 
 Deno.test("requestLlm uses Responses items through a function-call round", async () => {
   setLlmDeploymentName("small", "test-model");
   const requests: Array<Record<string, unknown>> = [];
+  const telemetryEvents: LlmCallTelemetryPayload[] = [];
   const originalFetch = globalThis.fetch;
 
   globalThis.fetch = (async (input, init) => {
@@ -203,7 +205,14 @@ Deno.test("requestLlm uses Responses items through a function-call round", async
       },
       ["set_reply_message_id"],
       undefined,
-      { context: { chatId: 1, messageId: 1 } },
+      {
+        context: { chatId: 1, messageId: 1 },
+        telemetry: {
+          chatType: "private",
+          mode: "normal",
+          emit: (payload) => telemetryEvents.push(payload),
+        },
+      },
     );
 
     strictEqual(response.response_id, "resp_final");
@@ -212,6 +221,16 @@ Deno.test("requestLlm uses Responses items through a function-call round", async
     strictEqual(response.replyMessageId, 42);
     strictEqual(response.debug.responses[0].usage?.input_tokens, 10);
     strictEqual(response.debug.responses[0].usage?.output_tokens, 5);
+    deepStrictEqual(telemetryEvents, [
+      {
+        chat_type: "private",
+        input_tokens: 20,
+        output_tokens: 10,
+        tools: ["set_reply_message_id"],
+        mode: "normal",
+        status: "success",
+      },
+    ]);
     strictEqual(requests.length, 2);
 
     const firstRequest = requests[0];
@@ -270,6 +289,77 @@ Deno.test("requestLlm uses Responses items through a function-call round", async
         '<tool_response tool="set_reply_message_id">',
       ),
     );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+Deno.test("requestLlm telemetry repeats tool names and reports tool errors", async () => {
+  setLlmDeploymentName("small", "test-model");
+  const telemetryEvents: LlmCallTelemetryPayload[] = [];
+  const originalFetch = globalThis.fetch;
+  let requestCount = 0;
+
+  globalThis.fetch = (async () => {
+    requestCount += 1;
+    const body =
+      requestCount === 1
+        ? createApiResponse("resp_tools", [
+            {
+              id: "fc_reply_valid",
+              type: "function_call",
+              call_id: "call_reply_valid",
+              name: "set_reply_message_id",
+              arguments: '{"message_id":42}',
+              status: "completed",
+            },
+            {
+              id: "fc_reply_invalid",
+              type: "function_call",
+              call_id: "call_reply_invalid",
+              name: "set_reply_message_id",
+              arguments: '{"message_id":0}',
+              status: "completed",
+            },
+          ])
+        : createApiResponse("resp_final", [
+            {
+              id: "msg_final",
+              type: "message",
+              role: "assistant",
+              status: "completed",
+              content: [
+                { type: "output_text", text: "Done.", annotations: [] },
+              ],
+            },
+          ]);
+
+    return new Response(JSON.stringify(body), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  }) as typeof fetch;
+
+  try {
+    await requestLlm("Set a reply", ["set_reply_message_id"], undefined, {
+      context: { chatId: 1, messageId: 1 },
+      telemetry: {
+        chatType: "group",
+        mode: "guest",
+        emit: (payload) => telemetryEvents.push(payload),
+      },
+    });
+
+    deepStrictEqual(telemetryEvents, [
+      {
+        chat_type: "group",
+        input_tokens: 20,
+        output_tokens: 10,
+        tools: ["set_reply_message_id", "set_reply_message_id"],
+        mode: "guest",
+        status: "with_errors",
+      },
+    ]);
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -655,6 +745,7 @@ Deno.test("requestLlm retries empty responses twice before succeeding", async ()
 Deno.test("requestLlm stops after three empty response attempts", async () => {
   setLlmDeploymentName("small", "test-model");
   let requestCount = 0;
+  const telemetryEvents: LlmCallTelemetryPayload[] = [];
   const originalFetch = globalThis.fetch;
 
   globalThis.fetch = (async () => {
@@ -674,11 +765,26 @@ Deno.test("requestLlm stops after three empty response attempts", async () => {
       () =>
         requestLlm("Keep trying", [], undefined, {
           context: { chatId: 1, messageId: 1 },
+          telemetry: {
+            chatType: "private",
+            mode: "normal",
+            emit: (payload) => telemetryEvents.push(payload),
+          },
         }),
       Error,
       "LLM request failed after retries",
     );
     strictEqual(requestCount, 3);
+    deepStrictEqual(telemetryEvents, [
+      {
+        chat_type: "private",
+        input_tokens: 30,
+        output_tokens: 15,
+        tools: [],
+        mode: "normal",
+        status: "failed",
+      },
+    ]);
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -813,6 +919,7 @@ Deno.test("generate_image caches media and returns reusable rich Markdown", asyn
   const database = await initDatabase()();
   const originalFetch = globalThis.fetch;
   const llmRequests: Array<Record<string, unknown>> = [];
+  const telemetryEvents: LlmCallTelemetryPayload[] = [];
   let cachedPhotoInput: unknown;
   const api = {
     sendPhoto: async (chatId: number, input: unknown) => {
@@ -839,6 +946,11 @@ Deno.test("generate_image caches media and returns reusable rich Markdown", asyn
               revised_prompt: "A tiny generated test image",
             },
           ],
+          usage: {
+            input_tokens: 100,
+            output_tokens: 200,
+            total_tokens: 300,
+          },
         }),
         { status: 200, headers: { "content-type": "application/json" } },
       );
@@ -899,6 +1011,11 @@ Deno.test("generate_image caches media and returns reusable rich Markdown", asyn
         api,
         database,
         context: { chatId: 1, messageId: 1 },
+        telemetry: {
+          chatType: "group",
+          mode: "normal",
+          emit: (payload) => telemetryEvents.push(payload),
+        },
       },
     );
 
@@ -918,6 +1035,16 @@ Deno.test("generate_image caches media and returns reusable rich Markdown", asyn
     strictEqual(storedImages[0].file_id, "generated-large");
     strictEqual(storedImages[0].media_type, "photo");
     ok(!Number.isNaN(Date.parse(storedImages[0].created_at)));
+    deepStrictEqual(telemetryEvents, [
+      {
+        chat_type: "group",
+        input_tokens: 120,
+        output_tokens: 210,
+        tools: ["generate_image"],
+        mode: "normal",
+        status: "success",
+      },
+    ]);
   } finally {
     globalThis.fetch = originalFetch;
     await database.destroy();

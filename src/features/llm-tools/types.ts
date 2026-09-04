@@ -17,6 +17,11 @@ export type LlmImageInput = {
   detail?: "low" | "high" | "auto" | "original";
 };
 
+export type LlmToolUsage = {
+  input_tokens: number;
+  output_tokens: number;
+};
+
 export type FunctionToolResult = {
   output: string;
   inputImages?: LlmImageInput[];
@@ -37,5 +42,6 @@ export type FunctionToolRunner = (
     agentId?: AgentId;
     client?: OpenAI;
     api?: Api;
+    onUsage?: (usage: LlmToolUsage) => void;
   },
 ) => FunctionToolResult | string | Promise<FunctionToolResult | string>;

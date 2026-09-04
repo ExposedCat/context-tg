@@ -6,8 +6,13 @@ import {
   saveImage,
 } from "../images.ts";
 import { LLM_DEPLOYMENTS } from "../llm-deployments.ts";
-import type { FunctionToolRunner } from "./types.ts";
-import { getJsonError, getString, getStringArray } from "./utils.ts";
+import type { FunctionToolRunner, LlmToolUsage } from "./types.ts";
+import {
+  getFiniteNumber,
+  getJsonError,
+  getString,
+  getStringArray,
+} from "./utils.ts";
 
 type ImageGenerationData = {
   b64_json?: unknown;
@@ -17,10 +22,36 @@ type ImageGenerationData = {
 
 type ImageGenerationResponse = {
   data?: unknown;
+  usage?: unknown;
   error?: {
     message?: unknown;
   };
 };
+
+function getImageGenerationUsage(
+  response: ImageGenerationResponse,
+): LlmToolUsage | undefined {
+  if (
+    typeof response.usage !== "object" ||
+    response.usage === null ||
+    Array.isArray(response.usage)
+  ) {
+    return undefined;
+  }
+
+  const usage = response.usage as Record<string, unknown>;
+  const inputTokens = getFiniteNumber(usage.input_tokens);
+  const outputTokens = getFiniteNumber(usage.output_tokens);
+
+  if (inputTokens === undefined && outputTokens === undefined) {
+    return undefined;
+  }
+
+  return {
+    input_tokens: inputTokens ?? 0,
+    output_tokens: outputTokens ?? 0,
+  };
+}
 
 export const toolDefinition = {
   type: "function",
@@ -38,7 +69,7 @@ export const toolDefinition = {
       images: {
         type: "array",
         description:
-          "Reference images. Could be remote URL or local photo id (string number).",
+          "Optional ordered input images to reference, transform, or combine. Each item must be either a direct HTTP(S) image URL or the exact saved image ID from a tg://photo or tg://document reference.",
         items: { type: "string" },
       },
     },
@@ -271,6 +302,7 @@ async function createImage(
   return {
     prompt,
     revisedPrompt,
+    usage: getImageGenerationUsage(payload),
     url: url || undefined,
     dataUrl: b64Json ? `data:image/png;base64,${b64Json}` : undefined,
     mimeType: b64Json ? "image/png" : undefined,
@@ -333,6 +365,7 @@ async function createAlternateImage(
   return {
     prompt,
     revisedPrompt,
+    usage: getImageGenerationUsage(payload),
     url: url || undefined,
     dataUrl: b64Json ? `data:image/png;base64,${b64Json}` : undefined,
     mimeType: b64Json ? "image/png" : undefined,
@@ -404,6 +437,10 @@ export const execute: FunctionToolRunner = async (args, _context, options) => {
         ].join("\n"),
       );
     }
+  }
+
+  if (image.usage) {
+    options.onUsage?.(image.usage);
   }
 
   const storedImage = await saveImage(options.database, options.api, image);

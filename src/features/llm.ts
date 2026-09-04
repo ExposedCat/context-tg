@@ -43,10 +43,16 @@ import type {
   FunctionToolRunner,
   LlmImageInput,
   LlmToolContext,
+  LlmToolUsage,
 } from "./llm-tools/types.ts";
 import * as webSearchTool from "./llm-tools/web-search.ts";
 import * as youtubeTool from "./llm-tools/youtube.ts";
 import { buildMemosMetadataSection } from "./memos.ts";
+import type {
+  LlmCallStatus,
+  LlmCallTelemetry,
+  LlmCallTelemetryPayload,
+} from "./telemetry.ts";
 
 export type { LlmReport } from "./llm-tools/reports.ts";
 export type { LlmImageInput, LlmToolContext } from "./llm-tools/types.ts";
@@ -115,6 +121,7 @@ export type LlmRequestOptions = {
   agentId?: AgentId;
   onProgress?: (progress: LlmProgress) => void | Promise<void>;
   onWarning?: (details: string) => void | Promise<void>;
+  telemetry?: LlmCallTelemetry;
   signal?: AbortSignal;
 };
 
@@ -241,6 +248,8 @@ type LlmRequestState = {
   report?: LlmReport;
   generatedImageIds: string[];
   errors: LlmToolError[];
+  hadToolErrors: boolean;
+  toolUsage: LlmToolUsage;
   debug: LlmDebugInfo;
 };
 
@@ -614,6 +623,47 @@ function recordResponseDebug(
   state.debug.tool_calls.push(
     ...getFunctionToolCalls(response).map(createDebugToolCall),
   );
+}
+
+function getLlmCallTelemetryPayload(
+  state: LlmRequestState,
+  telemetry: LlmCallTelemetry,
+  status: LlmCallStatus,
+): LlmCallTelemetryPayload {
+  const modelUsage = state.debug.responses.reduce(
+    (total, response) => ({
+      input_tokens: total.input_tokens + (response.usage?.input_tokens ?? 0),
+      output_tokens: total.output_tokens + (response.usage?.output_tokens ?? 0),
+    }),
+    { input_tokens: 0, output_tokens: 0 },
+  );
+
+  return {
+    chat_type: telemetry.chatType,
+    input_tokens: modelUsage.input_tokens + state.toolUsage.input_tokens,
+    output_tokens: modelUsage.output_tokens + state.toolUsage.output_tokens,
+    tools: state.debug.tool_calls.map((call) => call.name),
+    mode: telemetry.mode,
+    status,
+  };
+}
+
+function emitLlmCallTelemetryEvent(
+  state: LlmRequestState,
+  options: LlmRequestOptions,
+  status: LlmCallStatus,
+): void {
+  const telemetry = options.telemetry;
+
+  if (!telemetry) {
+    return;
+  }
+
+  try {
+    telemetry.emit(getLlmCallTelemetryPayload(state, telemetry, status));
+  } catch (error) {
+    logError("Failed to emit LLM telemetry event", { status, error });
+  }
 }
 
 function formatToolCallLog(call: FunctionToolCall): Record<string, unknown> {
@@ -1008,6 +1058,10 @@ async function runFunctionToolCall(
         agentId,
         client,
         api,
+        onUsage: (usage) => {
+          state.toolUsage.input_tokens += usage.input_tokens;
+          state.toolUsage.output_tokens += usage.output_tokens;
+        },
       }),
     );
     throwIfAborted(signal);
@@ -1015,6 +1069,7 @@ async function runFunctionToolCall(
     throwIfAborted(signal);
     const details = getErrorDetail(error);
     state.errors.push({ tool: call.name, details });
+    state.hadToolErrors = true;
     logError("Function tool call failed", {
       call: formatToolCallLog(call),
       error,
@@ -1030,6 +1085,10 @@ async function runFunctionToolCall(
         }),
       ),
     };
+  }
+
+  if (parseJsonObject(result.output)?.error !== undefined) {
+    state.hadToolErrors = true;
   }
 
   if (result.report) {
@@ -1245,7 +1304,13 @@ async function createFinalTextResponse(
 ): Promise<ApiResponse> {
   const unresolvedFunctionCalls = getFunctionToolCalls(response);
 
-  if (unresolvedFunctionCalls.length === 0 || getResponseText(response)) {
+  if (unresolvedFunctionCalls.length === 0) {
+    return response;
+  }
+
+  state.hadToolErrors = true;
+
+  if (getResponseText(response)) {
     return response;
   }
 
@@ -1340,13 +1405,13 @@ async function createLlmResponseWithRetries(
         settings,
         options.signal,
       );
+      recordResponseDebug(response, state, model, settings);
       const responseError = getResponseError(response);
 
       if (responseError) {
         throw responseError;
       }
 
-      recordResponseDebug(response, state, model, settings);
       state.receivedResponse = true;
       currentResponseId = await recordResponse(
         response,
@@ -1573,80 +1638,100 @@ async function requestLlmWithInstructions(
   instructions = getSystemInstructions(options.context?.chatId),
   model: AgentModel = normalAgent.MODEL,
 ): Promise<LlmResponse> {
-  logDebug("Sending request to LLM", { tools, responseId, model });
-  const client = getClient();
-  const settings = await resolveRuntimeSettings(model, options);
-  const runtimeInstructions = await withMemoMetadata(instructions, options);
-  const previousInput = await loadPreviousResponseInput(
-    responseId ?? undefined,
-    options,
-  );
   const state: LlmRequestState = {
     lastResponseId: responseId ?? undefined,
-    inputItems: previousInput,
+    inputItems: [],
     receivedResponse: false,
     sentImmediateContentFilterWarning: false,
     generatedImageIds: [],
     errors: [],
+    hadToolErrors: false,
+    toolUsage: {
+      input_tokens: 0,
+      output_tokens: 0,
+    },
     debug: {
       responses: [],
       tool_calls: [],
     },
   };
-  const initialResponse = await createLlmResponseWithRetries(
-    client,
-    createInputMessages(request),
-    tools,
-    responseId ?? undefined,
-    state,
-    options,
-    model,
-    runtimeInstructions,
-    settings,
-  );
 
-  const { response, calledTools, toolCallCount, lastResponseId } =
-    await resolveFunctionToolCalls(
-      client,
-      initialResponse,
-      tools,
+  try {
+    logDebug("Sending request to LLM", { tools, responseId, model });
+    const client = getClient();
+    const settings = await resolveRuntimeSettings(model, options);
+    const runtimeInstructions = await withMemoMetadata(instructions, options);
+    state.inputItems = await loadPreviousResponseInput(
+      responseId ?? undefined,
       options,
+    );
+    const initialResponse = await createLlmResponseWithRetries(
+      client,
+      createInputMessages(request),
+      tools,
+      responseId ?? undefined,
       state,
+      options,
       model,
       runtimeInstructions,
       settings,
     );
-  logDebug("Received response from LLM", formatResponseSummary(response));
 
-  if (!getResponseText(response) && getFunctionToolCalls(response).length > 0) {
-    logDebug("LLM response still contains unresolved function calls", {
-      response: formatResponseSummary(response),
-    });
+    const { response, calledTools, toolCallCount, lastResponseId } =
+      await resolveFunctionToolCalls(
+        client,
+        initialResponse,
+        tools,
+        options,
+        state,
+        model,
+        runtimeInstructions,
+        settings,
+      );
+    logDebug("Received response from LLM", formatResponseSummary(response));
+
+    if (
+      !getResponseText(response) &&
+      getFunctionToolCalls(response).length > 0
+    ) {
+      logDebug("LLM response still contains unresolved function calls", {
+        response: formatResponseSummary(response),
+      });
+    }
+
+    const citations = getCitations(response);
+    const citationLinks = new Set(citations.map((citation) => citation.link));
+    const sources = getWebSearchSourceLinks(response)
+      .filter((link) => !citationLinks.has(link))
+      .map((link) => ({ link }));
+    const responseText = getResponseText(response);
+    const result = {
+      response_id: lastResponseId,
+      response: responseText,
+      replyMessageId: state.replyMessageId,
+      report: state.report,
+      generatedImageIds: state.generatedImageIds,
+      errors: state.errors,
+      web_search: {
+        used: calledTools.includes("web_search"),
+        citations,
+        sources,
+      },
+      tools: calledTools,
+      tool_call_count: toolCallCount,
+      debug: state.debug,
+    };
+
+    emitLlmCallTelemetryEvent(
+      state,
+      options,
+      state.hadToolErrors ? "with_errors" : "success",
+    );
+    return result;
+  } catch (error) {
+    emitLlmCallTelemetryEvent(state, options, "failed");
+    throw error;
   }
-
-  const citations = getCitations(response);
-  const citationLinks = new Set(citations.map((citation) => citation.link));
-  const sources = getWebSearchSourceLinks(response)
-    .filter((link) => !citationLinks.has(link))
-    .map((link) => ({ link }));
-  const responseText = getResponseText(response);
-
-  return {
-    response_id: lastResponseId,
-    response: responseText,
-    replyMessageId: state.replyMessageId,
-    report: state.report,
-    generatedImageIds: state.generatedImageIds,
-    errors: state.errors,
-    web_search: {
-      used: calledTools.includes("web_search"),
-      citations,
-      sources,
-    },
-    tools: calledTools,
-    tool_call_count: toolCallCount,
-    debug: state.debug,
-  };
 }
 
 export async function requestLlm(

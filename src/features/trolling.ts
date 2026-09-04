@@ -11,6 +11,7 @@ import {
   getPromptDateTimeFromEpochSeconds,
 } from "./llm-prompt.ts";
 import type { MessageMetadata } from "./messages.ts";
+import { createLlmCallTelemetry } from "./telemetry.ts";
 
 type Sender = {
   id: number;
@@ -263,6 +264,11 @@ export async function maybeSendPeriodicTroll(
         threadId: message.message_thread_id,
       },
       agentId: trollAgent.id,
+      telemetry: createLlmCallTelemetry(
+        ctx.chat?.type,
+        "normal",
+        ctx.telemetry.event,
+      ),
     },
     trollAgent.buildInstructions(chatId),
     trollAgent.MODEL,

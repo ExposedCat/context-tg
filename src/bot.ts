@@ -1,4 +1,10 @@
 import { createDebug } from "@grammyjs/debug";
+import {
+  type OpenTelemetryContext,
+  openTelemetry,
+  type SpanDefinitions,
+} from "@grammyjs/opentelemetry";
+import { DiagLogLevel } from "@opentelemetry/api";
 import { Bot, type Context as GrammyContext, type Transformer } from "grammy";
 import { I18n, type I18nFlavor } from "grammy-i18n";
 import { run } from "grammy-runner";
@@ -17,6 +23,7 @@ import {
 } from "./features/messages.ts";
 import { startScheduleDispatcher } from "./features/schedules.ts";
 import { stateComposer } from "./features/state.ts";
+import type { BotTelemetryEvents } from "./features/telemetry.ts";
 import { safelyMaybeSendPeriodicTroll } from "./features/trolling.ts";
 import { delay } from "./utils/async.ts";
 
@@ -37,7 +44,8 @@ const logDebug = createDebug("app:bot:debug");
 const logError = createDebug("app:bot:error");
 
 export type Context = GrammyContext &
-  I18nFlavor & {
+  I18nFlavor &
+  OpenTelemetryContext<SpanDefinitions, BotTelemetryEvents> & {
     database: Database;
   };
 
@@ -78,8 +86,15 @@ function createTelegramRateLimitRetryTransformer(): Transformer {
 
 export function initBot(token: string, database: Database) {
   const bot = new Bot<Context>(token);
+  const { telemetryMiddleware, telemetryTransformer } = openTelemetry<
+    SpanDefinitions,
+    BotTelemetryEvents
+  >("context-tg", {
+    logLevel: DiagLogLevel.WARN,
+  });
   bot.api.config.use(createTelegramRateLimitRetryTransformer());
   bot.api.config.use(createEmojiPackTransformer(database, bot.api));
+  bot.api.config.use(telemetryTransformer);
   setIndexedTextMessageHandler(async (ctx, message, sender, chatId) => {
     await safelyMaybeSendPeriodicTroll(ctx, message, sender, chatId);
     await safelyMaybeSendProactiveAgentResponse(ctx, message, chatId);
@@ -90,6 +105,7 @@ export function initBot(token: string, database: Database) {
     defaultLocale: "en",
   });
 
+  bot.use(telemetryMiddleware);
   bot.use((ctx, next) => {
     ctx.database = database;
     return next();
