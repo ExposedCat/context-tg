@@ -49,6 +49,7 @@ import {
   getPromptDateTimeFromEpochSeconds,
   type PromptMessageAttributes,
 } from "./llm-prompt.ts";
+import { MediaGroupCollector } from "./media-group-collector.ts";
 import { startsWithCommandPrefix } from "./message-filter.ts";
 import type { MessageMetadata } from "./messages.ts";
 import {
@@ -212,6 +213,12 @@ type TelegramImageAttachment = {
   mimeType?: string;
 };
 
+type LlmRequestSourceMessage = {
+  text: string;
+  message: LlmContextMessage | undefined;
+  imageMessages?: LlmContextMessage[];
+};
+
 type SentRichMarkdownMessage = {
   message_id: number;
   text: string;
@@ -239,6 +246,16 @@ const GUEST_RESULT_DESCRIPTION_LENGTH = 120;
 const SLOW_RESPONSE_REACTION_DELAY_MS = 15_000;
 const PROACTIVE_CONTEXT_MESSAGE_COUNT = 10;
 const PROACTIVE_TASK_TEXT = "Proactive response";
+const MEDIA_GROUP_IDLE_MS = 1_000;
+const MEDIA_GROUP_MAX_AGE_MS = 30_000;
+const MEDIA_GROUP_MAX_PENDING_GROUPS = 1_000;
+const MEDIA_GROUP_MAX_ITEMS = 10;
+const incomingMediaGroups = new MediaGroupCollector<TextMessage>({
+  idleMs: MEDIA_GROUP_IDLE_MS,
+  maxAgeMs: MEDIA_GROUP_MAX_AGE_MS,
+  maxGroups: MEDIA_GROUP_MAX_PENDING_GROUPS,
+  maxItemsPerGroup: MEDIA_GROUP_MAX_ITEMS,
+});
 const PROACTIVE_DISABLED_TOOLS = new Set<ToolName>([
   "generate_image",
   "schedule_message",
@@ -531,6 +548,17 @@ async function getMessageImageMarkdown(
   return undefined;
 }
 
+async function getMessagesImageMarkdown(
+  database: Database,
+  messages: LlmContextMessage[],
+): Promise<string | undefined> {
+  const markdown = await Promise.all(
+    messages.map((message) => getMessageImageMarkdown(database, message)),
+  );
+
+  return joinTextParts(markdown, "\n");
+}
+
 function getImageMimeTypeFromFilename(filename: string | undefined) {
   const extension = filename?.split(".").at(-1)?.toLocaleLowerCase();
 
@@ -588,6 +616,65 @@ function getMessageImageAttachments(
 
 function hasImageAttachments(message: LlmContextMessage | undefined): boolean {
   return getMessageImageAttachments(message).length > 0;
+}
+
+export function getMessagesImageAttachments(
+  messages: LlmContextMessage[],
+): TelegramImageAttachment[] {
+  return messages.flatMap(getMessageImageAttachments);
+}
+
+function hasMessagesImageAttachments(messages: LlmContextMessage[]): boolean {
+  return getMessagesImageAttachments(messages).length > 0;
+}
+
+async function collectMediaGroupMessages(
+  chatId: number,
+  message: TextMessage,
+): Promise<TextMessage[]> {
+  if (!message.media_group_id) {
+    return [message];
+  }
+
+  return await incomingMediaGroups.collect(
+    `${chatId}:${message.media_group_id}`,
+    message,
+  );
+}
+
+function selectGuestMediaGroupMessage(
+  messages: TextMessage[],
+): TextMessage | undefined {
+  return (
+    messages.find((message) => getMessageText(message)?.trim()) ??
+    messages.find(hasImageAttachments)
+  );
+}
+
+function selectNormalMediaGroupMessage(
+  messages: TextMessage[],
+  ownUsername: string,
+  botId: number,
+): TextMessage | undefined {
+  const groupHasImages = hasMessagesImageAttachments(messages);
+
+  return messages.find((message) => {
+    const text = getMessageText(message);
+    const reply = getActualReply(message);
+    const addressed = text ? isAddressed(text, ownUsername) : false;
+    const directReply = isDirectReplyToBot(reply, botId);
+    const requestText =
+      text ??
+      (directReply && groupHasImages
+        ? "Please respond to the attached image."
+        : undefined);
+
+    return (
+      Boolean(requestText) &&
+      !startsWithCommandPrefix(text) &&
+      (addressed || directReply)
+    );
+  });
 }
 
 function isAddressed(text: string, ownUsername: string): boolean {
@@ -711,12 +798,13 @@ async function formatCurrentLlmMessage(
   message: TextMessage,
   text: string,
   replyContext: LlmContextMessage | undefined,
+  imageMessages: LlmContextMessage[] = [message],
 ): Promise<string> {
   const content =
     getLlmMessageContent(
       message,
       text,
-      await getMessageImageMarkdown(database, message),
+      await getMessagesImageMarkdown(database, imageMessages),
     ) ?? text;
   const quoteText = getQuoteReplyContextText(message);
   const reply =
@@ -741,17 +829,14 @@ async function buildRootRequestMessages(
   message: TextMessage,
   text: string,
   replyContext: LlmContextMessage | undefined,
-): Promise<
-  Array<{
-    text: string;
-    message: LlmContextMessage | undefined;
-  }>
-> {
+  imageMessages: LlmContextMessage[] = [message],
+): Promise<LlmRequestSourceMessage[]> {
   const currentMessageText = await formatCurrentLlmMessage(
     database,
     message,
     text,
     replyContext,
+    imageMessages,
   );
   const quoteText = getQuoteReplyContextText(message);
   const replyMessageText =
@@ -762,11 +847,11 @@ async function buildRootRequestMessages(
   if (replyMessageText) {
     return [
       { text: replyMessageText, message: replyContext },
-      { text: currentMessageText, message },
+      { text: currentMessageText, message, imageMessages },
     ];
   }
 
-  return [{ text: currentMessageText, message }];
+  return [{ text: currentMessageText, message, imageMessages }];
 }
 
 async function buildThreadRequest(
@@ -774,8 +859,15 @@ async function buildThreadRequest(
   message: TextMessage,
   text: string,
   replyContext: LlmContextMessage | undefined,
+  imageMessages: LlmContextMessage[] = [message],
 ): Promise<string> {
-  return await formatCurrentLlmMessage(database, message, text, replyContext);
+  return await formatCurrentLlmMessage(
+    database,
+    message,
+    text,
+    replyContext,
+    imageMessages,
+  );
 }
 
 function getLlmToolContext(
@@ -815,8 +907,9 @@ async function buildLlmRequestInput(
   text: string,
   message: LlmContextMessage | undefined,
   signal?: AbortSignal,
+  imageMessages: LlmContextMessage[] = message ? [message] : [],
 ): Promise<LlmRequestMessageInput> {
-  const attachments = getMessageImageAttachments(message);
+  const attachments = getMessagesImageAttachments(imageMessages);
 
   if (attachments.length === 0) {
     return text;
@@ -834,15 +927,12 @@ async function buildLlmRequestInput(
 
 async function buildLlmRequestInputs(
   ctx: Context,
-  messages: Array<{
-    text: string;
-    message: LlmContextMessage | undefined;
-  }>,
+  messages: LlmRequestSourceMessage[],
   signal?: AbortSignal,
 ): Promise<LlmRequestInput> {
   const inputs = await Promise.all(
-    messages.map(({ text, message }) =>
-      buildLlmRequestInput(ctx, text, message, signal),
+    messages.map(({ text, message, imageMessages }) =>
+      buildLlmRequestInput(ctx, text, message, signal, imageMessages),
     ),
   );
 
@@ -1990,10 +2080,8 @@ async function sendRecoveredErrorResponse(
 type HandleChatRequestOptions = {
   reply?: TextMessage;
   replyContext?: LlmContextMessage;
-  requestMessages?: Array<{
-    text: string;
-    message: LlmContextMessage | undefined;
-  }>;
+  requestMessages?: LlmRequestSourceMessage[];
+  imageMessages?: LlmContextMessage[];
   thread?: Thread;
   threadId?: number;
   taskText?: string;
@@ -2113,9 +2201,11 @@ async function handleChatRequest(
                 message,
                 text,
                 replyContext,
+                options.imageMessages,
               ),
               message,
               taskAbortController.signal,
+              options.imageMessages,
             );
 
             return await requestLlm(
@@ -2136,6 +2226,7 @@ async function handleChatRequest(
                 message,
                 text,
                 replyContext,
+                options.imageMessages,
               )),
             taskAbortController.signal,
           );
@@ -2490,6 +2581,7 @@ async function handleGuestChatRequest(
   ctx: Context,
   message: TextMessage,
   text: string,
+  imageMessages: LlmContextMessage[] = [message],
 ): Promise<void> {
   if (!ctx.chat) {
     return;
@@ -2541,8 +2633,16 @@ async function handleGuestChatRequest(
     const request = responseId
       ? await buildLlmRequestInput(
           ctx,
-          await buildThreadRequest(ctx.database, message, text, replyContext),
+          await buildThreadRequest(
+            ctx.database,
+            message,
+            text,
+            replyContext,
+            imageMessages,
+          ),
           message,
+          undefined,
+          imageMessages,
         )
       : await buildLlmRequestInputs(
           ctx,
@@ -2551,6 +2651,7 @@ async function handleGuestChatRequest(
             message,
             text,
             replyContext,
+            imageMessages,
           ),
         );
     let llmResponse = await requestLlm(
@@ -2850,7 +2951,18 @@ chatComposer.on("guest_message", async (ctx, next) => {
     return;
   }
 
-  const message = ctx.guestMessage as TextMessage;
+  const incomingMessage = ctx.guestMessage as TextMessage;
+  const mediaGroupMessages = await collectMediaGroupMessages(
+    ctx.chat.id,
+    incomingMessage,
+  );
+  const message = selectGuestMediaGroupMessage(mediaGroupMessages);
+
+  if (!message || message.message_id !== incomingMessage.message_id) {
+    await next();
+    return;
+  }
+
   const text = getMessageText(message);
   const usageArgs = text
     ? parseGuestUsageCommand(text, ctx.me.username)
@@ -2871,7 +2983,7 @@ chatComposer.on("guest_message", async (ctx, next) => {
 
   const requestText =
     text ??
-    (hasImageAttachments(message)
+    (hasMessagesImageAttachments(mediaGroupMessages)
       ? "Please respond to the attached image."
       : undefined);
 
@@ -2880,7 +2992,7 @@ chatComposer.on("guest_message", async (ctx, next) => {
     return;
   }
 
-  await handleGuestChatRequest(ctx, message, requestText);
+  await handleGuestChatRequest(ctx, message, requestText, mediaGroupMessages);
 });
 
 chatComposer.on("message", async (ctx, next) => {
@@ -2889,7 +3001,22 @@ chatComposer.on("message", async (ctx, next) => {
     return;
   }
 
-  const message = ctx.message as TextMessage;
+  const incomingMessage = ctx.message as TextMessage;
+  const mediaGroupMessages = await collectMediaGroupMessages(
+    ctx.chat.id,
+    incomingMessage,
+  );
+  const message = selectNormalMediaGroupMessage(
+    mediaGroupMessages,
+    ctx.me.username,
+    ctx.me.id,
+  );
+
+  if (!message || message.message_id !== incomingMessage.message_id) {
+    await next();
+    return;
+  }
+
   const text = getMessageText(message);
   const reply = getActualReply(message);
   const replyContext = getReplyContext(message, reply);
@@ -2910,7 +3037,7 @@ chatComposer.on("message", async (ctx, next) => {
       : undefined;
   const requestText =
     text ??
-    (isDirectBotReply && hasImageAttachments(message)
+    (isDirectBotReply && hasMessagesImageAttachments(mediaGroupMessages)
       ? "Please respond to the attached image."
       : undefined);
 
@@ -2928,6 +3055,7 @@ chatComposer.on("message", async (ctx, next) => {
     replyContext,
     thread,
     threadId: repliedTask?.thread_id ?? message.message_thread_id,
+    imageMessages: mediaGroupMessages,
     onUnhandledError: next,
   });
 });

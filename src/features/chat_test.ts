@@ -24,6 +24,7 @@ const [
     formatLlmToolError,
     getAzureDownMessage,
     getErrorRecoveryPrompt,
+    getMessagesImageAttachments,
     isUnavailableRichMessagePhotoError,
   },
   { initDatabase },
@@ -76,6 +77,29 @@ Deno.test("other model failures do not use the Azure outage message", () => {
   strictEqual(
     getAzureDownMessage(new Error("status 502: no healthy upstream")),
     undefined,
+  );
+});
+
+Deno.test("media-group input includes the largest photo from every message", () => {
+  deepStrictEqual(
+    getMessagesImageAttachments([
+      {
+        photo: [
+          { file_id: "small-1", width: 100, height: 100 },
+          { file_id: "large-1", width: 1200, height: 800 },
+        ],
+      },
+      {
+        photo: [
+          { file_id: "small-2", width: 90, height: 90 },
+          { file_id: "large-2", width: 800, height: 1200 },
+        ],
+      },
+    ]),
+    [
+      { fileId: "large-1", mimeType: "image/jpeg" },
+      { fileId: "large-2", mimeType: "image/jpeg" },
+    ],
   );
 });
 
