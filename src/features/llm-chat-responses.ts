@@ -1,6 +1,7 @@
 import type { ColumnType, Selectable } from "@kysely/kysely";
 import type OpenAI from "@openai/openai";
 import type { Database } from "./database.ts";
+import type { ConversationMemory } from "./llm-memory.ts";
 
 type ResponseInputItem = OpenAI.Responses.ResponseInputItem;
 
@@ -20,6 +21,12 @@ export type LlmResponseHistoryTable = {
 export type LlmResponseHistory = Selectable<LlmResponseHistoryTable>;
 
 export async function migrateLlmResponseHistory(database: Database) {
+  await database.schema
+    .createTable("llm_response_memory")
+    .ifNotExists()
+    .addColumn("response_id", "text", (column) => column.primaryKey().notNull())
+    .addColumn("memory_state", "text", (column) => column.notNull())
+    .execute();
   await database.schema
     .createTable("llm_chat_responses")
     .ifNotExists()
@@ -232,27 +239,56 @@ export async function saveLlmResponseInputItems(
     responseId: string;
     previousResponseId?: string | null;
     inputItems: ResponseInputItem[];
+    memoryState?: ConversationMemory;
   },
 ): Promise<void> {
-  const now = new Date().toISOString();
-  const messages = JSON.stringify(response.inputItems);
-  const previous_response_id = response.previousResponseId ?? null;
+  await database.transaction().execute(async (transaction) => {
+    if (response.memoryState) {
+      await transaction
+        .insertInto("llm_response_memory")
+        .values({
+          response_id: response.responseId,
+          memory_state: JSON.stringify(response.memoryState),
+        })
+        .onConflict((conflict) =>
+          conflict.column("response_id").doUpdateSet({
+            memory_state: JSON.stringify(response.memoryState),
+          }),
+        )
+        .execute();
+    }
+    const now = new Date().toISOString();
+    const messages = JSON.stringify(response.inputItems);
+    const previous_response_id = response.previousResponseId ?? null;
 
-  await database
-    .insertInto("llm_chat_responses")
-    .values({
-      response_id: response.responseId,
-      previous_response_id,
-      messages,
-      created_at: now,
-      updated_at: now,
-    })
-    .onConflict((conflict) =>
-      conflict.column("response_id").doUpdateSet({
+    await transaction
+      .insertInto("llm_chat_responses")
+      .values({
+        response_id: response.responseId,
         previous_response_id,
         messages,
+        created_at: now,
         updated_at: now,
-      }),
-    )
-    .execute();
+      })
+      .onConflict((conflict) =>
+        conflict.column("response_id").doUpdateSet({
+          previous_response_id,
+          messages,
+          updated_at: now,
+        }),
+      )
+      .execute();
+  });
+}
+
+export async function getLlmResponseMemory(
+  database: Database,
+  responseId: string,
+): Promise<ConversationMemory | undefined> {
+  const row = await database
+    .selectFrom("llm_response_memory")
+    .select("memory_state")
+    .where("response_id", "=", responseId)
+    .executeTakeFirst();
+  return row ? (JSON.parse(row.memory_state) as ConversationMemory) : undefined;
 }

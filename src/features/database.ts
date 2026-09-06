@@ -45,6 +45,7 @@ export type DatabaseSchema = {
   threads: ThreadsTable;
   guest_response_threads: GuestResponseThreadsTable;
   llm_chat_responses: LlmResponseHistoryTable;
+  llm_response_memory: { response_id: string; memory_state: string };
   llm_settings: LlmSettingsTable;
   chat_llm_settings: ChatLlmSettingsTable;
   tasks: TasksTable;

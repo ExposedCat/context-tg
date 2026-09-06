@@ -262,14 +262,21 @@ Deno.test("requestLlm uses Responses items through a function-call round", async
     ]);
 
     const firstInput = firstRequest.input as Array<Record<string, unknown>>;
-    strictEqual(firstInput.length, 1);
+    strictEqual(firstInput.length, 2);
+    deepStrictEqual(firstInput[1], {
+      type: "message",
+      role: "developer",
+      content: '<new-message id="1" />',
+    });
     deepStrictEqual(firstInput[0].content, [
       {
         type: "input_text",
         text: [
+          "<events>",
           '<message sender="User">',
           "  <content>Reply to message 42</content>",
           "</message>",
+          "</events>",
         ].join("\n"),
       },
       {
@@ -280,12 +287,13 @@ Deno.test("requestLlm uses Responses items through a function-call round", async
     ]);
 
     const secondInput = requests[1].input as Array<Record<string, unknown>>;
-    strictEqual(secondInput.length, 3);
-    strictEqual(secondInput[1].type, "function_call");
-    strictEqual(secondInput[2].type, "function_call_output");
-    strictEqual(secondInput[2].call_id, "call_reply");
+    strictEqual(secondInput.length, 4);
+    deepStrictEqual(secondInput.slice(0, firstInput.length), firstInput);
+    strictEqual(secondInput[2].type, "function_call");
+    strictEqual(secondInput[3].type, "function_call_output");
+    strictEqual(secondInput[3].call_id, "call_reply");
     ok(
-      String(secondInput[2].output).includes(
+      String(secondInput[3].output).includes(
         '<tool_response tool="set_reply_message_id">',
       ),
     );
@@ -420,7 +428,10 @@ Deno.test("read_image returns an image in the function-call output", async () =>
     strictEqual(requests.length, 2);
 
     const secondInput = requests[1].input as Array<Record<string, unknown>>;
-    const functionOutput = secondInput[2];
+    const functionOutput = secondInput.find(
+      (item) => item.type === "function_call_output",
+    );
+    ok(functionOutput);
     strictEqual(functionOutput.type, "function_call_output");
     deepStrictEqual(functionOutput.output, [
       {
@@ -519,11 +530,17 @@ Deno.test("read_image download failure is reported to the agent as unavailable",
     strictEqual(requests.length, 3);
 
     const failedInput = requests[1].input as Array<Record<string, unknown>>;
-    const failedOutput = failedInput[2];
+    const failedOutput = failedInput.find(
+      (item) => item.type === "function_call_output",
+    );
+    ok(failedOutput);
     strictEqual(Array.isArray(failedOutput.output), true);
 
     const recoveredInput = requests[2].input as Array<Record<string, unknown>>;
-    const recoveredOutput = recoveredInput[2];
+    const recoveredOutput = recoveredInput.find(
+      (item) => item.type === "function_call_output",
+    );
+    ok(recoveredOutput);
     strictEqual(recoveredOutput.type, "function_call_output");
     strictEqual(
       recoveredOutput.output,
@@ -901,7 +918,7 @@ Deno.test("failed tool follow-up preserves the complete context for the next tur
     const resumedInput = requests.at(-1)?.input as Array<
       Record<string, unknown>
     >;
-    strictEqual(resumedInput.length, 6);
+    strictEqual(resumedInput.length, 9);
     ok(JSON.stringify(resumedInput).includes("pineapple"));
     ok(JSON.stringify(resumedInput).includes("Reply to message 42"));
     const toolOutput = resumedInput.find(
@@ -1047,6 +1064,187 @@ Deno.test("generate_image caches media and returns reusable rich Markdown", asyn
     ]);
   } finally {
     globalThis.fetch = originalFetch;
+    await database.destroy();
+  }
+});
+
+Deno.test("memory snapshots and memo events preserve replay prefixes across tools and restarts", async () => {
+  setLlmDeploymentName("small", "test-model");
+  const database = await initDatabase()();
+  const { saveMemo, forgetMemo } = await import("./memos.ts");
+  const {
+    getLlmResponseMemory,
+    getLlmResponseInputItems,
+    saveLlmResponseInputItems,
+  } = await import("./llm-chat-responses.ts");
+  const old = await saveMemo(
+    database,
+    500,
+    "normal",
+    "chat",
+    7,
+    "Opening memory",
+  );
+  const originalFetch = globalThis.fetch;
+  const requests: Array<{
+    instructions: string;
+    input: Array<Record<string, unknown>>;
+  }> = [];
+  globalThis.fetch = (async (input, init) => {
+    requests.push(await new Request(input, init).json());
+    const index = requests.length;
+    const output: ResponseOutput[] =
+      index === 1
+        ? [
+            {
+              id: "fc_memory",
+              type: "function_call",
+              call_id: "call_memory",
+              name: "remember",
+              arguments: '{"memo":"Conversation memory","bucket":"chat"}',
+              status: "completed",
+            },
+          ]
+        : [
+            {
+              id: `msg_memory_${index}`,
+              type: "message",
+              role: "assistant",
+              status: "completed",
+              content: [{ type: "output_text", text: "Done", annotations: [] }],
+            },
+          ];
+    return new Response(
+      JSON.stringify(createApiResponse(`resp_memory_${index}`, output)),
+      {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      },
+    );
+  }) as typeof fetch;
+  try {
+    const options = {
+      database,
+      context: { chatId: 500, messageId: 10, userId: 7, userName: "Alice" },
+    };
+    const first = await requestLlm(
+      "Remember something",
+      ["remember"],
+      undefined,
+      options,
+    );
+    strictEqual(requests.length, 2);
+    ok(String(requests[0].input[0].content).startsWith("<memory>"));
+    ok(String(requests[0].input[0].content).includes("Opening memory"));
+    ok(String(requests[0].input[1].content).startsWith("<events>"));
+    ok(!requests[0].instructions.includes("<memory>" + "\n"));
+    ok(!requests[0].instructions.includes("<metadata>"));
+    ok(!requests[0].instructions.includes("https://t.me/c/500/"));
+    deepStrictEqual(
+      requests[1].input.slice(0, requests[0].input.length),
+      requests[0].input,
+    );
+    const delta = String(requests[1].input.at(-1)?.content);
+    ok(delta.includes("<events>"));
+    ok(delta.includes('action="upsert"'));
+    ok(delta.includes("Conversation memory"));
+    ok(!delta.includes("Opening memory"));
+
+    // Copy the persisted checkpoint to an uncached ID to exercise restart loading.
+    ok(first.response_id);
+    const savedInput = await getLlmResponseInputItems(
+      database,
+      first.response_id,
+    );
+    const savedMemory = await getLlmResponseMemory(database, first.response_id);
+    ok(savedInput);
+    ok(savedMemory);
+    await saveLlmResponseInputItems(database, {
+      responseId: "resp_memory_restart",
+      inputItems: savedInput,
+      memoryState: savedMemory,
+    });
+    await forgetMemo(database, 500, "normal", 7, old.id);
+    const second = await requestLlm(
+      "Continue",
+      ["remember"],
+      "resp_memory_restart",
+      options,
+    );
+    deepStrictEqual(
+      requests[2].input.slice(0, requests[1].input.length),
+      requests[1].input,
+    );
+    const removal = requests[2].input.find((item) =>
+      String(item.content).includes('action="remove"'),
+    );
+    ok(String(removal?.content).includes(`id="${old.id}"`));
+    strictEqual(requests[2].instructions, requests[0].instructions);
+    await requestLlm(
+      "Continue again",
+      ["remember"],
+      second.response_id,
+      options,
+    );
+    deepStrictEqual(
+      requests[3].input.slice(0, requests[2].input.length),
+      requests[2].input,
+    );
+    // No repeated memory snapshot or delta on an unchanged continuation.
+    strictEqual(requests[3].input.length, requests[2].input.length + 3);
+  } finally {
+    globalThis.fetch = originalFetch;
+    await database.destroy();
+  }
+});
+
+Deno.test("memo events deactivate another speaker's memories and restore their scope on return", async () => {
+  const { formatMemoryUpdate } = await import("./llm-memory.ts");
+  const { saveMemo } = await import("./memos.ts");
+  const database = await initDatabase()();
+  try {
+    const chatMemo = await saveMemo(
+      database,
+      501,
+      "normal",
+      "chat",
+      7,
+      "Shared fact",
+    );
+    const userMemo = await saveMemo(
+      database,
+      501,
+      "normal",
+      "user",
+      7,
+      'Alice prefers "tea"',
+    );
+    const alice = {
+      agentId: "normal" as const,
+      userId: 7,
+      userName: "Alice",
+      memos: [chatMemo, userMemo],
+    };
+    const bob = {
+      agentId: "normal" as const,
+      userId: 8,
+      userName: "Bob",
+      memos: [chatMemo],
+    };
+    strictEqual(formatMemoryUpdate(alice, structuredClone(alice)), undefined);
+    const toBob = formatMemoryUpdate(alice, bob);
+    ok(toBob?.includes(`<memo id="${userMemo.id}" action="remove" />`));
+    ok(toBob?.includes('user_id="8"'));
+    ok(!toBob?.includes("Shared fact"));
+    const toAlice = formatMemoryUpdate(bob, alice);
+    ok(
+      toAlice?.includes(
+        'action="upsert" bucket="user" agent="normal" user_id="7"',
+      ),
+    );
+    ok(toAlice?.includes("&quot;tea&quot;"));
+    ok(!toAlice?.includes("Shared fact"));
+  } finally {
     await database.destroy();
   }
 });

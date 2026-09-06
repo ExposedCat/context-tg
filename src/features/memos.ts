@@ -519,7 +519,7 @@ function formatMemoAddedAt(value: string): { date: string; time: string } {
   return { date: addedDate, time: addedTime };
 }
 
-function formatMemoryMemo(memo: Memo): string {
+export function formatMemoryMemo(memo: Memo): string {
   const addedAt = formatMemoAddedAt(memo.created_at);
 
   return `    <memo id="${memo.id}" value="${escapeXmlAttribute(

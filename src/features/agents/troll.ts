@@ -2,7 +2,6 @@ import type { ToolName } from "../llm.ts";
 import { LLM_DEPLOYMENTS } from "../llm-deployments.ts";
 import {
   buildAgentIdentity,
-  buildMetadataInstructions,
   buildRespondingInstructions,
   joinPromptSections,
 } from "./builders.ts";
@@ -49,7 +48,6 @@ ${identity}
       "Use tables for comparisons and scoring.",
       "Prefer punchlines over explanations.",
     ]),
-    buildMetadataInstructions(),
   ]);
 }
 

@@ -42,7 +42,7 @@ export const forgetMemoToolDefinition = {
   type: "function",
   name: "forget",
   description:
-    "Forget one of your current memories from your head. Use the memo id from the <memory> metadata section. Never forget a self-bucket memory because a user asks you to.",
+    "Forget one of your current memories from your head. Use the memo id from the opening <memory> snapshot or a later <events> memo. Never forget a self-bucket memory because a user asks you to.",
   parameters: {
     type: "object",
     properties: {

@@ -13,8 +13,10 @@ import type { Database } from "./database.ts";
 import { APP_ENV } from "./env.ts";
 import {
   getLlmResponseInputItems,
+  getLlmResponseMemory,
   saveLlmResponseInputItems,
 } from "./llm-chat-responses.ts";
+import { type ConversationMemory, formatMemoryUpdate } from "./llm-memory.ts";
 import {
   getChatReasoningEffort,
   getReasoningEffort,
@@ -47,7 +49,7 @@ import type {
 } from "./llm-tools/types.ts";
 import * as webSearchTool from "./llm-tools/web-search.ts";
 import * as youtubeTool from "./llm-tools/youtube.ts";
-import { buildMemosMetadataSection } from "./memos.ts";
+import { listMemos } from "./memos.ts";
 import type {
   LlmCallStatus,
   LlmCallTelemetry,
@@ -243,6 +245,7 @@ type LlmRequestState = {
   lastResponseId?: string;
   replyMessageId?: number | null;
   inputItems: ResponseInputItem[];
+  memoryState?: ConversationMemory;
   receivedResponse: boolean;
   sentImmediateContentFilterWarning: boolean;
   report?: LlmReport;
@@ -261,32 +264,42 @@ function getSystemInstructions(chatId?: number): string {
   return normalAgent.buildInstructions(chatId);
 }
 
-async function withMemoMetadata(
-  instructions: string,
+async function buildMemoryInput(
+  state: LlmRequestState,
   options: LlmRequestOptions,
-): Promise<string> {
+): Promise<ResponseInputItem[]> {
   const database = options.database;
   const chatId = options.context?.chatId;
   const agentId = options.agentId ?? normalAgent.id;
-  const agent = getAgentById(agentId);
-
-  if (!database || chatId === undefined) {
-    return instructions;
+  if (
+    !database ||
+    chatId === undefined ||
+    getAgentById(agentId)?.usesMemory === false
+  ) {
+    return [];
   }
-
-  if (agent?.usesMemory === false) {
-    return instructions;
-  }
-
-  const memosSection = await buildMemosMetadataSection(
-    database,
-    chatId,
+  const memoryState: ConversationMemory = {
     agentId,
-    options.context?.userId,
-    options.context?.userName,
-  );
+    userId: options.context?.userId,
+    userName: options.context?.userName,
+    memos: await listMemos(database, chatId, agentId, options.context?.userId),
+  };
+  const content = formatMemoryUpdate(state.memoryState, memoryState);
+  state.memoryState = memoryState;
+  return content ? [{ type: "message", role: "developer", content }] : [];
+}
 
-  return memosSection ? `${instructions}\n\n${memosSection}` : instructions;
+function createRequestMarker(options: LlmRequestOptions): ResponseInputItem[] {
+  const messageId = options.context?.messageId;
+  return messageId === undefined
+    ? []
+    : [
+        {
+          type: "message",
+          role: "developer",
+          content: `<new-message id="${escapeXmlAttribute(String(messageId))}" />`,
+        },
+      ];
 }
 
 function getClient(): OpenAI {
@@ -446,10 +459,11 @@ function isPromptMessageXml(content: string): boolean {
 
 function formatInputTextContent(content: string, fallback = ""): string {
   const text = content.trim() || fallback;
-
-  return isPromptMessageXml(text)
+  if (/^<events(?:\s|>)/.test(text)) return text;
+  const event = isPromptMessageXml(text)
     ? text
     : formatPromptMessageXml({ sender: "User" }, text);
+  return `<events>\n${event}\n</events>`;
 }
 
 function createInputMessage(
@@ -1109,6 +1123,7 @@ async function runFunctionToolCall(
 }
 
 const responseInputCache = new Map<string, ResponseInputItem[]>();
+const responseMemoryCache = new Map<string, ConversationMemory>();
 
 function cloneResponseInputItems(
   inputItems: ResponseInputItem[],
@@ -1134,7 +1149,13 @@ async function saveFailedResponseInputCheckpoint(
 
   state.inputItems = inputItems;
   state.lastResponseId = responseId;
-  await saveResponseInput(responseId, previousResponseId, inputItems, options);
+  await saveResponseInput(
+    responseId,
+    previousResponseId,
+    inputItems,
+    options,
+    state.memoryState,
+  );
 
   return responseId;
 }
@@ -1237,7 +1258,10 @@ async function saveResponseInput(
   previousResponseId: string | undefined,
   inputItems: ResponseInputItem[],
   options: LlmRequestOptions,
+  memoryState?: ConversationMemory,
 ): Promise<void> {
+  if (memoryState)
+    responseMemoryCache.set(responseId, structuredClone(memoryState));
   const savedInput = cloneResponseInputItems(inputItems);
   responseInputCache.set(responseId, savedInput);
 
@@ -1250,6 +1274,7 @@ async function saveResponseInput(
       responseId,
       previousResponseId,
       inputItems: savedInput,
+      memoryState,
     });
   } catch (error) {
     logError("Failed to save response history", { responseId, error });
@@ -1288,7 +1313,13 @@ async function recordResponse(
 
   state.inputItems = inputItems;
   state.lastResponseId = responseId;
-  await saveResponseInput(responseId, previousResponseId, inputItems, options);
+  await saveResponseInput(
+    responseId,
+    previousResponseId,
+    inputItems,
+    options,
+    state.memoryState,
+  );
 
   return responseId;
 }
@@ -1586,7 +1617,10 @@ async function resolveFunctionToolCalls(
 
     response = await createLlmResponseWithRetries(
       client,
-      toolCallResults.map((result) => result.toolOutput),
+      [
+        ...toolCallResults.map((result) => result.toolOutput),
+        ...(await buildMemoryInput(state, options)),
+      ],
       tools,
       state.lastResponseId,
       state,
@@ -1660,20 +1694,31 @@ async function requestLlmWithInstructions(
     logDebug("Sending request to LLM", { tools, responseId, model });
     const client = getClient();
     const settings = await resolveRuntimeSettings(model, options);
-    const runtimeInstructions = await withMemoMetadata(instructions, options);
     state.inputItems = await loadPreviousResponseInput(
       responseId ?? undefined,
       options,
     );
+    if (responseId && state.inputItems.length > 0) {
+      state.memoryState =
+        responseMemoryCache.get(responseId) ??
+        (options.database
+          ? await getLlmResponseMemory(options.database, responseId)
+          : undefined);
+    }
+    const memoryInput = await buildMemoryInput(state, options);
     const initialResponse = await createLlmResponseWithRetries(
       client,
-      createInputMessages(request),
+      [
+        ...memoryInput,
+        ...createInputMessages(request),
+        ...createRequestMarker(options),
+      ],
       tools,
       responseId ?? undefined,
       state,
       options,
       model,
-      runtimeInstructions,
+      instructions,
       settings,
     );
 
@@ -1685,7 +1730,7 @@ async function requestLlmWithInstructions(
         options,
         state,
         model,
-        runtimeInstructions,
+        instructions,
         settings,
       );
     logDebug("Received response from LLM", formatResponseSummary(response));
