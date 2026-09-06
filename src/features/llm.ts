@@ -647,14 +647,16 @@ function getLlmCallTelemetryPayload(
   const modelUsage = state.debug.responses.reduce(
     (total, response) => ({
       input_tokens: total.input_tokens + (response.usage?.input_tokens ?? 0),
+      cached_tokens: total.cached_tokens + (response.usage?.cached_tokens ?? 0),
       output_tokens: total.output_tokens + (response.usage?.output_tokens ?? 0),
     }),
-    { input_tokens: 0, output_tokens: 0 },
+    { input_tokens: 0, cached_tokens: 0, output_tokens: 0 },
   );
 
   return {
     chat_type: telemetry.chatType,
     input_tokens: modelUsage.input_tokens + state.toolUsage.input_tokens,
+    cached_tokens: modelUsage.cached_tokens + state.toolUsage.cached_tokens,
     output_tokens: modelUsage.output_tokens + state.toolUsage.output_tokens,
     tools: state.debug.tool_calls.map((call) => call.name),
     mode: telemetry.mode,
@@ -1074,6 +1076,7 @@ async function runFunctionToolCall(
         api,
         onUsage: (usage) => {
           state.toolUsage.input_tokens += usage.input_tokens;
+          state.toolUsage.cached_tokens += usage.cached_tokens;
           state.toolUsage.output_tokens += usage.output_tokens;
         },
       }),
@@ -1682,6 +1685,7 @@ async function requestLlmWithInstructions(
     hadToolErrors: false,
     toolUsage: {
       input_tokens: 0,
+      cached_tokens: 0,
       output_tokens: 0,
     },
     debug: {

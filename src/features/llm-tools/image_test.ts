@@ -1,5 +1,6 @@
 import { deepStrictEqual, match, ok, strictEqual } from "node:assert";
 import { type Api, InputFile } from "grammy";
+import type { LlmToolUsage } from "./types.ts";
 
 const TEST_ENV = {
   BOT_TOKEN: "test",
@@ -47,6 +48,7 @@ Deno.test("generate_image resolves saved ids and uploads all image inputs", asyn
   const originalFetch = globalThis.fetch;
   let cachedPhotoInput: unknown;
   let editRequestCount = 0;
+  const reportedUsage: LlmToolUsage[] = [];
   const api = {
     getFile: async (fileId: string) => {
       strictEqual(fileId, "saved-telegram-photo");
@@ -111,10 +113,13 @@ Deno.test("generate_image resolves saved ids and uploads all image inputs", asyn
       new Uint8Array([2]),
     );
 
-    return new Response(JSON.stringify({ data: [{ b64_json: "Aw==" }] }), {
-      status: 200,
-      headers: { "content-type": "application/json" },
-    });
+    return new Response(
+      JSON.stringify({
+        data: [{ b64_json: "Aw==" }],
+        usage: { input_tokens: 100, output_tokens: 200 },
+      }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
   }) as typeof fetch;
 
   try {
@@ -124,11 +129,14 @@ Deno.test("generate_image resolves saved ids and uploads all image inputs", asyn
         images: [savedImage.id, "https://images.example.com/reference.jpg"],
       },
       undefined,
-      { database, api },
+      { database, api, onUsage: (usage) => reportedUsage.push(usage) },
     );
 
     ok(typeof result === "object");
     strictEqual(editRequestCount, 1);
+    deepStrictEqual(reportedUsage, [
+      { input_tokens: 100, cached_tokens: 0, output_tokens: 200 },
+    ]);
     ok(cachedPhotoInput instanceof InputFile);
     match(result.generatedImageId ?? "", /^image_[a-f0-9]{32}$/);
     const output = JSON.parse(result.output) as {

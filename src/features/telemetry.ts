@@ -5,6 +5,8 @@ export type LlmCallStatus = "success" | "with_errors" | "failed";
 export type LlmCallTelemetryPayload = {
   chat_type: LlmCallChatType;
   input_tokens: number;
+  /** Cached input tokens, already included in input_tokens. */
+  cached_tokens: number;
   output_tokens: number;
   tools: string[];
   mode: LlmCallMode;

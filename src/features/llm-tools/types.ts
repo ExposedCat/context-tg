@@ -19,6 +19,7 @@ export type LlmImageInput = {
 
 export type LlmToolUsage = {
   input_tokens: number;
+  cached_tokens: number;
   output_tokens: number;
 };
 

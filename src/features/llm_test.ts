@@ -225,6 +225,7 @@ Deno.test("requestLlm uses Responses items through a function-call round", async
       {
         chat_type: "private",
         input_tokens: 20,
+        cached_tokens: 4,
         output_tokens: 10,
         tools: ["set_reply_message_id"],
         mode: "normal",
@@ -362,6 +363,7 @@ Deno.test("requestLlm telemetry repeats tool names and reports tool errors", asy
       {
         chat_type: "group",
         input_tokens: 20,
+        cached_tokens: 4,
         output_tokens: 10,
         tools: ["set_reply_message_id", "set_reply_message_id"],
         mode: "guest",
@@ -370,6 +372,61 @@ Deno.test("requestLlm telemetry repeats tool names and reports tool errors", asy
     ]);
   } finally {
     globalThis.fetch = originalFetch;
+  }
+});
+
+Deno.test("requestLlm telemetry defaults missing cached usage to zero", async (t) => {
+  setLlmDeploymentName("small", "test-model");
+  const response = createApiResponse("resp_no_cached_usage", [
+    {
+      id: "msg_final",
+      type: "message",
+      role: "assistant",
+      status: "completed",
+      content: [{ type: "output_text", text: "Done.", annotations: [] }],
+    },
+  ]);
+
+  for (const usage of [
+    { input_tokens: 10, output_tokens: 5 },
+    { input_tokens: 10, output_tokens: 5, input_tokens_details: {} },
+    { input_tokens: 10, output_tokens: 5, input_tokens_details: null },
+    undefined,
+  ]) {
+    await t.step(`usage: ${JSON.stringify(usage)}`, async () => {
+      const telemetryEvents: LlmCallTelemetryPayload[] = [];
+      const originalFetch = globalThis.fetch;
+      globalThis.fetch = (async () =>
+        new Response(JSON.stringify({ ...response, usage }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        })) as typeof fetch;
+
+      try {
+        await requestLlm("Hello", [], undefined, {
+          context: { chatId: 1, messageId: 1 },
+          telemetry: {
+            chatType: "private",
+            mode: "normal",
+            emit: (payload) => telemetryEvents.push(payload),
+          },
+        });
+
+        deepStrictEqual(telemetryEvents, [
+          {
+            chat_type: "private",
+            input_tokens: usage?.input_tokens ?? 0,
+            cached_tokens: 0,
+            output_tokens: usage?.output_tokens ?? 0,
+            tools: [],
+            mode: "normal",
+            status: "success",
+          },
+        ]);
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+    });
   }
 });
 
@@ -796,6 +853,7 @@ Deno.test("requestLlm stops after three empty response attempts", async () => {
       {
         chat_type: "private",
         input_tokens: 30,
+        cached_tokens: 6,
         output_tokens: 15,
         tools: [],
         mode: "normal",
@@ -965,6 +1023,7 @@ Deno.test("generate_image caches media and returns reusable rich Markdown", asyn
           ],
           usage: {
             input_tokens: 100,
+            input_tokens_details: { cached_tokens: 40 },
             output_tokens: 200,
             total_tokens: 300,
           },
@@ -1056,6 +1115,7 @@ Deno.test("generate_image caches media and returns reusable rich Markdown", asyn
       {
         chat_type: "group",
         input_tokens: 120,
+        cached_tokens: 44,
         output_tokens: 210,
         tools: ["generate_image"],
         mode: "normal",

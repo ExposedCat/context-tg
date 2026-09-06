@@ -8,6 +8,7 @@ import {
 import { LLM_DEPLOYMENTS } from "../llm-deployments.ts";
 import type { FunctionToolRunner, LlmToolUsage } from "./types.ts";
 import {
+  asRecord,
   getFiniteNumber,
   getJsonError,
   getString,
@@ -41,6 +42,8 @@ function getImageGenerationUsage(
 
   const usage = response.usage as Record<string, unknown>;
   const inputTokens = getFiniteNumber(usage.input_tokens);
+  const inputDetails = asRecord(usage.input_tokens_details);
+  const cachedTokens = getFiniteNumber(inputDetails?.cached_tokens);
   const outputTokens = getFiniteNumber(usage.output_tokens);
 
   if (inputTokens === undefined && outputTokens === undefined) {
@@ -49,6 +52,7 @@ function getImageGenerationUsage(
 
   return {
     input_tokens: inputTokens ?? 0,
+    cached_tokens: cachedTokens ?? 0,
     output_tokens: outputTokens ?? 0,
   };
 }
