@@ -1,5 +1,6 @@
 -- Existing dashboard variables: bucket, chat_type, mode, status, tools.
--- Only events carrying cached_tokens are included; older events cannot be split.
+-- Missing cached_tokens reads as 0 from the numeric Map, keeping older events.
+-- Historical input is counted as Uncached input; its actual cache split is unknown.
 WITH
     arrayFlatten([$chat_type]) AS selected_chat_types,
     arrayFlatten([$mode]) AS selected_modes,
@@ -44,7 +45,6 @@ WHERE resource_fingerprint GLOBAL IN (
   AND mapContains(attributes_string, 'mode')
   AND mapContains(attributes_string, 'status')
   AND mapContains(attributes_number, 'input_tokens')
-  AND mapContains(attributes_number, 'cached_tokens')
   AND mapContains(attributes_number, 'output_tokens')
   AND (
       '__all__' IN selected_chat_types
