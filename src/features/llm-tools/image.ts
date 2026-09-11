@@ -70,6 +70,12 @@ export const toolDefinition = {
         description:
           "A complete image generation prompt describing the subject, style, composition, and important visual details.",
       },
+      size: {
+        type: "string",
+        enum: ["small", "big"],
+        description:
+          "Prefer 'small' for most tasks as quick generations or simple edits. Use 'big' for work requested to be high quality, serious, important or complex",
+      },
       images: {
         type: "array",
         description:
@@ -92,9 +98,19 @@ function getImageApiUrl(operation: "generations" | "edits"): string {
   return `${baseUrl}/images/${operation}`;
 }
 
-export function isConfigured(): boolean {
+type ImageSize = "small" | "big";
+
+function getPrimaryDeploymentName(size: ImageSize): string {
+  return (
+    size === "big" ? LLM_DEPLOYMENTS.imageBig : LLM_DEPLOYMENTS.imageSmall
+  ).deploymentName;
+}
+
+export function isConfigured(size: ImageSize = "small"): boolean {
   return Boolean(
-    APP_ENV.LLM_BASE_URL && APP_ENV.LLM_IMAGE_MODEL && APP_ENV.LLM_API_KEY,
+    APP_ENV.LLM_BASE_URL &&
+      getPrimaryDeploymentName(size) &&
+      APP_ENV.LLM_API_KEY,
   );
 }
 
@@ -219,6 +235,7 @@ async function createInputImageFile(
 }
 
 async function createDefaultImageRequest(
+  model: string,
   prompt: string,
   inputImages: string[],
   signal?: AbortSignal,
@@ -233,7 +250,7 @@ async function createDefaultImageRequest(
       method: "POST",
       headers: { ...headers, "Content-Type": "application/json" },
       body: JSON.stringify({
-        model: APP_ENV.LLM_IMAGE_MODEL ?? "",
+        model,
         prompt,
         n: 1,
       }),
@@ -245,7 +262,7 @@ async function createDefaultImageRequest(
     inputImages.map((url, index) => createInputImageFile(url, index, signal)),
   );
   const form = new FormData();
-  form.append("model", APP_ENV.LLM_IMAGE_MODEL ?? "");
+  form.append("model", model);
   form.append("prompt", prompt);
   form.append("n", "1");
 
@@ -262,11 +279,17 @@ async function createDefaultImageRequest(
 }
 
 async function createImage(
+  model: string,
   prompt: string,
   inputImages: string[],
   signal?: AbortSignal,
 ) {
-  const response = await createDefaultImageRequest(prompt, inputImages, signal);
+  const response = await createDefaultImageRequest(
+    model,
+    prompt,
+    inputImages,
+    signal,
+  );
   const text = await response.text();
   let payload: ImageGenerationResponse;
 
@@ -369,6 +392,10 @@ async function createAlternateImage(
 export const execute: FunctionToolRunner = async (args, _context, options) => {
   const prompt = getString(args?.prompt);
   const imageReferences = getStringArray(args?.images);
+  const size = args?.size ?? "small";
+  if (size !== "small" && size !== "big") {
+    return getJsonError('Invalid image size: expected "small" or "big".');
+  }
 
   if (!prompt) {
     return getJsonError("Missing image prompt.");
@@ -402,11 +429,16 @@ export const execute: FunctionToolRunner = async (args, _context, options) => {
   let image: Awaited<ReturnType<typeof createImage>>;
 
   try {
-    if (!isConfigured()) {
+    if (!isConfigured(size)) {
       throw new Error("Default image generation is not configured.");
     }
 
-    image = await createImage(prompt, inputImages, options.signal);
+    image = await createImage(
+      getPrimaryDeploymentName(size),
+      prompt,
+      inputImages,
+      options.signal,
+    );
   } catch (error) {
     if (options.signal?.aborted) {
       throw error;

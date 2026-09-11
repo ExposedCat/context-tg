@@ -9,7 +9,6 @@ const TEST_ENV = {
   MEDIA_CACHE_CHAT_ID: "-10042",
   LLM_BASE_URL: "https://llm.test/v1",
   LLM_API_KEY: "test",
-  LLM_IMAGE_MODEL: "test-image",
   KEENABLE_API_KEY: "test",
   LLM_TEMPERATURE: "0.2",
   EMBEDDER_BASE_URL: "https://embedder.test/v1",
@@ -28,6 +27,10 @@ const [{ initDatabase }, { saveImageFileId }, { execute, toolDefinition }] =
     import("../images.ts"),
     import("./image.ts"),
   ]);
+
+const { LLM_DEPLOYMENTS } = await import("../llm-deployments.ts");
+LLM_DEPLOYMENTS.imageSmall.deploymentName = "test-image";
+LLM_DEPLOYMENTS.imageBig.deploymentName = "test-big-image";
 
 Deno.test("generate_image exposes ordered saved ids or URLs as inputs", () => {
   deepStrictEqual(toolDefinition.parameters.required, ["prompt"]);
@@ -232,6 +235,83 @@ Deno.test("generate_image fallback shares the main LLM endpoint and credentials"
   } finally {
     globalThis.fetch = originalFetch;
     LLM_DEPLOYMENTS.image.deploymentName = previousDeployment;
+    await database.destroy();
+  }
+});
+
+Deno.test("generate_image routes sizes and falls back for unavailable deployments", async () => {
+  deepStrictEqual(toolDefinition.parameters.properties.size.enum, [
+    "small",
+    "big",
+  ]);
+  const database = await initDatabase()();
+  const originalFetch = globalThis.fetch;
+  const previousFallback = LLM_DEPLOYMENTS.image.deploymentName;
+  const api = {
+    sendPhoto: async () => ({
+      photo: [{ file_id: "sized-image", width: 1024, height: 1024 }],
+    }),
+  } as unknown as Api;
+  LLM_DEPLOYMENTS.image.deploymentName = "fallback-image";
+  try {
+    for (const size of [undefined, "small", "big"] as const) {
+      const deployment =
+        size === "big" ? LLM_DEPLOYMENTS.imageBig : LLM_DEPLOYMENTS.imageSmall;
+      const previousName = deployment.deploymentName;
+      try {
+        for (const state of ["ready", "missing", "failed"] as const) {
+          deployment.deploymentName = state === "missing" ? "" : previousName;
+          const models: string[] = [];
+          globalThis.fetch = (async (input, init) => {
+            const request = new Request(input, init);
+            if (request.url.startsWith("data:"))
+              return await originalFetch(input, init);
+            strictEqual(request.url, "https://llm.test/v1/images/generations");
+            strictEqual(request.headers.get("authorization"), "Bearer test");
+            const body = await request.json();
+            models.push(body.model);
+            if (state === "failed" && models.length === 1) {
+              return Response.json(
+                { error: { message: "Unavailable" } },
+                { status: 503 },
+              );
+            }
+            return Response.json({ data: [{ b64_json: "Aw==" }] });
+          }) as typeof fetch;
+          const result = await execute(
+            { prompt: "Draw a tree", ...(size ? { size } : {}) },
+            undefined,
+            { database, api },
+          );
+          ok(typeof result === "object" && result.generatedImageId);
+          deepStrictEqual(
+            models,
+            state === "ready"
+              ? [previousName]
+              : state === "missing"
+                ? ["fallback-image"]
+                : [previousName, "fallback-image"],
+          );
+        }
+      } finally {
+        deployment.deploymentName = previousName;
+      }
+    }
+    globalThis.fetch = (() => {
+      throw new Error("Invalid size must not make a request");
+    }) as typeof fetch;
+    strictEqual(
+      await execute({ prompt: "Draw a tree", size: "medium" }, undefined, {
+        database,
+        api,
+      }),
+      JSON.stringify({
+        error: 'Invalid image size: expected "small" or "big".',
+      }),
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+    LLM_DEPLOYMENTS.image.deploymentName = previousFallback;
     await database.destroy();
   }
 });

@@ -58,7 +58,10 @@ Normal, guest-inline, scheduled, and repeating-message delivery all resolve the
 same mappings.
 
 Image generation uses the same `LLM_BASE_URL` and `LLM_API_KEY` as the main LLM.
-Set `LLM_IMAGE_MODEL` for the primary image model and use
-`/model image DEPLOYMENT_NAME` for the fallback deployment. Both use
+Set `/model image_small DEPLOYMENT_NAME` and `/model image_big DEPLOYMENT_NAME`
+for the primary image models, and `/model image DEPLOYMENT_NAME` for their shared
+fallback (shown as “Fallback” in settings). The optional `size` tool argument
+selects `small` (the default) or `big`; an unset or failed primary uses the fallback.
+`LLM_IMAGE_MODEL` is no longer used. Both use
 `/images/generations` under the shared base URL; primary image edits use
 `/images/edits`. Separate image endpoint and API key variables are no longer used.

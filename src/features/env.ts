@@ -45,7 +45,6 @@ export const APP_ENV = {
   LLM_BASE_URL: getRequiredEnv("LLM_BASE_URL"),
   LLM_API_KEY: getRequiredEnv("LLM_API_KEY"),
   KEENABLE_API_KEY: getRequiredEnv("KEENABLE_API_KEY"),
-  LLM_IMAGE_MODEL: getOptionalEnv("LLM_IMAGE_MODEL"),
   LLM_TEMPERATURE: getRequiredNumberEnv("LLM_TEMPERATURE"),
   EMBEDDER_BASE_URL: getRequiredEnv("EMBEDDER_BASE_URL"),
   EMBEDDER_API_KEY: getRequiredEnv("EMBEDDER_API_KEY"),

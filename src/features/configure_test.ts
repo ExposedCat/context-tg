@@ -115,6 +115,10 @@ Deno.test("rich configure navigation, persistence and authorization", async () =
       await click(`cfg:${page}`);
       match(html(), /data="cfg:menu">Back/);
     }
+    await click("cfg:models");
+    match(html(), /<td>Fallback<\/td>/);
+    match(html(), /<td>Image Small<\/td>/);
+    match(html(), /<td>Image Big<\/td>/);
     await setTrollingInterval(database, chat.id, 137);
     await click("cfg:trolling:off");
     ok(!html().includes("<code>"));
@@ -139,7 +143,14 @@ Deno.test("rich configure navigation, persistence and authorization", async () =
     await click("cfg:set:big:high");
     strictEqual(await getChatReasoningEffort(database, chat.id, "big"), "high");
     await click("cfg:set:all:low");
-    for (const kind of ["small", "big", "openminded", "image"] as const) {
+    for (const kind of [
+      "small",
+      "big",
+      "openminded",
+      "image",
+      "image_small",
+      "image_big",
+    ] as const) {
       strictEqual(await getChatReasoningEffort(database, chat.id, kind), "low");
     }
     await click("cfg:set:big:high", 2);

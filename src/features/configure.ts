@@ -82,7 +82,7 @@ export async function buildRichConfigureMessage(
       ? `<ul>${items.join("")}</ul>`
       : `<p>${t("configure-no-emoji")}</p>`;
   } else if (page === "models") {
-    html = `<table><tr><th>${t("configure-kind")}</th><th>${t("configure-deployment")}</th></tr>${LLM_DEPLOYMENT_OPTIONS.map((model) => `<tr><td>${escapeHtml(model.id)}</td><td>${escapeHtml(model.deploymentName || ctx.t("settings-model-not-set"))}</td></tr>`).join("")}</table><p>${t("configure-model-usage")}</p>`;
+    html = `<table><tr><th>${t("configure-kind")}</th><th>${t("configure-deployment")}</th></tr>${LLM_DEPLOYMENT_OPTIONS.map((model) => `<tr><td>${escapeHtml(model.id.startsWith("image") ? ctx.t(`settings-model-${model.id}`) : model.id)}</td><td>${escapeHtml(model.deploymentName || ctx.t("settings-model-not-set"))}</td></tr>`).join("")}</table><p>${t("configure-model-usage")}</p>`;
   } else if (page === "trolling" || page === "proactive") {
     const status =
       page === "trolling"
