@@ -289,12 +289,12 @@ async function createEmojiPack(
   });
 }
 
-async function removeEmojiPack(
+export async function removeEmojiPack(
   database: EmojiPacksDatabase,
   name: string,
   table: EmojiPacksTableName,
 ): Promise<boolean> {
-  return await database.transaction().execute(async (transaction) => {
+  const removed = await database.transaction().execute(async (transaction) => {
     const result = await transaction
       .deleteFrom(table)
       .where("name", "=", name)
@@ -320,6 +320,8 @@ async function removeEmojiPack(
 
     return true;
   });
+  if (removed) invalidateEmojiRegistry(database, table);
+  return removed;
 }
 
 function getEmojiAliases(emoji: string): string[] {
@@ -422,7 +424,6 @@ async function replyWithRemovePack(
     return;
   }
 
-  invalidateEmojiRegistry(ctx.database, table);
   await ctx.reply(`Removed ${name}.`);
 }
 

@@ -1,4 +1,4 @@
-command-configure-description = Chat-Einstellungen ändern
+command-settings-description = Chat-Einstellungen ändern
 command-debug-description = Debug-Modus ein- oder ausschalten
 command-packs-description = Emoji-Pakete anzeigen
 command-tasks-description = Letzte Aufgaben zeigen
@@ -90,3 +90,21 @@ settings-usage-usage =
     Beispiel: /usage {$options} LIMIT
 settings-usage-admin-only = Nur der Bot-Admin kann Nutzungslimits ändern.
 settings-usage-updated = Neues Limit für „{$category}“: {$quota}.
+
+configure-button = Konfigurieren
+configure-enabled = Aktiviert
+configure-disabled = Deaktiviert
+configure-emoji = Emoji
+configure-models = Modelle
+configure-trolling = Trolling
+configure-proactive = Proaktive Antworten
+configure-effort = Denkaufwand
+configure-remove = Entfernen
+configure-no-emoji = Keine Emoji-Pakete.
+configure-kind = Art
+configure-deployment = Deployment
+configure-model-usage = Verwende /model Art Deployment
+configure-trolling-description = Jede {$count}. Nachricht wird mit einer Wahrscheinlichkeit von 25 % getrollt.
+configure-proactive-description = Jede {$count}. Nachricht erhält mit einer Wahrscheinlichkeit von 25 % eine Antwort.
+configure-all = Alle konfigurieren
+configure-back = Zurück

@@ -32,7 +32,7 @@ const TELEGRAM_RATE_LIMIT_RETRY_DELAY_MS = 3000;
 const TELEGRAM_RATE_LIMIT_MAX_RETRIES = 5;
 const BOT_COMMAND_LOCALES = ["ru", "uk", "de"] as const;
 const BOT_COMMANDS = [
-  { command: "configure", descriptionKey: "command-configure-description" },
+  { command: "settings", descriptionKey: "command-settings-description" },
   { command: "debug", descriptionKey: "command-debug-description" },
   { command: "packs", descriptionKey: "command-packs-description" },
   { command: "tasks", descriptionKey: "command-tasks-description" },

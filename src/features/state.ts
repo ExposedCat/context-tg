@@ -2,6 +2,7 @@ import { Composer } from "grammy";
 import type { Context } from "../bot.ts";
 import { canConfigureChat, isBotAdmin } from "./authorization.ts";
 import { replyWithResumeTask } from "./chat.ts";
+import { configureComposer } from "./configure.ts";
 import {
   isLlmDeploymentId,
   LLM_DEPLOYMENT_OPTIONS,
@@ -449,25 +450,7 @@ stateComposer.command("model", async (ctx) => {
   );
 });
 
-stateComposer.command("configure", async (ctx) => {
-  if (!ctx.chat) {
-    return;
-  }
-
-  if (!(await canConfigureChat(ctx))) {
-    await ctx.reply(formatConfigureAdminWarning(ctx.t, "configure"));
-    return;
-  }
-
-  const botAdmin = isBotAdmin(ctx);
-
-  await ctx.reply(
-    formatConfigureMenu(ctx.t, "configure", botAdmin),
-    botAdmin
-      ? { reply_markup: buildConfigureKeyboard(ctx.t, "configure") }
-      : undefined,
-  );
-});
+stateComposer.use(configureComposer);
 
 stateComposer.hears(/^\/debug(?:@\w+)?(?:\s+(.+))?$/, async (ctx) => {
   if (!ctx.chat) {

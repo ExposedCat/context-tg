@@ -1,4 +1,4 @@
-command-configure-description = Change chat settings
+command-settings-description = Change chat settings
 command-debug-description = Turn debug details on or off
 command-packs-description = List emoji packs
 command-tasks-description = Show recent tasks
@@ -18,7 +18,7 @@ settings-value-minimal = Minimal
 settings-value-low = Low
 settings-value-medium = Medium
 settings-value-high = High
-settings-value-xhigh = Extra high
+settings-value-xhigh = X High
 settings-value-off = Off
 settings-value-on = On
 
@@ -90,3 +90,21 @@ settings-usage-usage =
     Try: /usage {$options} LIMIT
 settings-usage-admin-only = Only the bot admin can change usage limits.
 settings-usage-updated = {$category} limit is now {$quota}.
+
+configure-button = Configure
+configure-enabled = Enabled
+configure-disabled = Disabled
+configure-emoji = Emoji
+configure-models = Models
+configure-trolling = Trolling
+configure-proactive = Proactive replies
+configure-effort = Effort
+configure-remove = Remove
+configure-no-emoji = No emoji packs.
+configure-kind = Kind
+configure-deployment = Deployment
+configure-model-usage = Use /model Kind Deployment
+configure-trolling-description = Each {$count}-th message will get trolled with a 25% chance.
+configure-proactive-description = Each {$count}-th message will get a reply with a 25% chance.
+configure-all = Configure all
+configure-back = Back

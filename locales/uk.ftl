@@ -1,4 +1,4 @@
-command-configure-description = Змінити налаштування чату
+command-settings-description = Змінити налаштування чату
 command-debug-description = Увімкнути або вимкнути налагодження
 command-packs-description = Показати набори емодзі
 command-tasks-description = Показати останні завдання
@@ -92,3 +92,21 @@ settings-usage-usage =
     Приклад: /usage {$options} ЛІМІТ
 settings-usage-admin-only = Змінювати ліміти може лише адміністратор бота.
 settings-usage-updated = «{$category}»: новий ліміт — {$quota}.
+
+configure-button = Налаштувати
+configure-enabled = Увімкнено
+configure-disabled = Вимкнено
+configure-emoji = Емодзі
+configure-models = Моделі
+configure-trolling = Тролінг
+configure-proactive = Проактивні відповіді
+configure-effort = Зусилля
+configure-remove = Видалити
+configure-no-emoji = Немає наборів емодзі.
+configure-kind = Тип
+configure-deployment = Розгортання
+configure-model-usage = Використовуйте /model Тип Розгортання
+configure-trolling-description = Кожне {$count}-те повідомлення буде затролено з імовірністю 25%.
+configure-proactive-description = Кожне {$count}-те повідомлення отримає відповідь з імовірністю 25%.
+configure-all = Налаштувати всі
+configure-back = Назад
