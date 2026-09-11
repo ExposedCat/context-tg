@@ -84,34 +84,24 @@ export const toolDefinition = {
 } as const;
 
 function getImageApiUrl(operation: "generations" | "edits"): string {
-  if (!APP_ENV.LLM_IMAGE_BASE_URL) {
-    throw new Error("LLM_IMAGE_BASE_URL is not set.");
+  if (!APP_ENV.LLM_BASE_URL) {
+    throw new Error("LLM_BASE_URL is not set.");
   }
 
-  const baseUrl = APP_ENV.LLM_IMAGE_BASE_URL.replace(/\/+$/, "");
+  const baseUrl = APP_ENV.LLM_BASE_URL.replace(/\/+$/, "");
   return `${baseUrl}/images/${operation}`;
-}
-
-function getAzureAltImageGenerationUrl(): string {
-  if (!APP_ENV.AZURE_ALT_IMAGE_BASE_URL) {
-    throw new Error("AZURE_ALT_IMAGE_BASE_URL is not set.");
-  }
-
-  return APP_ENV.AZURE_ALT_IMAGE_BASE_URL;
 }
 
 export function isConfigured(): boolean {
   return Boolean(
-    APP_ENV.LLM_IMAGE_BASE_URL &&
-      APP_ENV.LLM_IMAGE_MODEL &&
-      APP_ENV.LLM_IMAGE_API_KEY,
+    APP_ENV.LLM_BASE_URL && APP_ENV.LLM_IMAGE_MODEL && APP_ENV.LLM_API_KEY,
   );
 }
 
 export function isAlternateConfigured(): boolean {
   return Boolean(
-    APP_ENV.AZURE_ALT_IMAGE_BASE_URL &&
-      APP_ENV.AZURE_ALT_IMAGE_KEY &&
+    APP_ENV.LLM_BASE_URL &&
+      APP_ENV.LLM_API_KEY &&
       LLM_DEPLOYMENTS.image.deploymentName,
   );
 }
@@ -234,7 +224,7 @@ async function createDefaultImageRequest(
   signal?: AbortSignal,
 ): Promise<Response> {
   const headers = {
-    Authorization: `Bearer ${APP_ENV.LLM_IMAGE_API_KEY ?? ""}`,
+    Authorization: `Bearer ${APP_ENV.LLM_API_KEY}`,
     Accept: "application/json",
   };
 
@@ -318,10 +308,10 @@ async function createAlternateImage(
   inputImages: string[],
   signal?: AbortSignal,
 ) {
-  const response = await fetch(getAzureAltImageGenerationUrl(), {
+  const response = await fetch(getImageApiUrl("generations"), {
     method: "POST",
     headers: {
-      Authorization: `Bearer ${APP_ENV.AZURE_ALT_IMAGE_KEY ?? ""}`,
+      Authorization: `Bearer ${APP_ENV.LLM_API_KEY}`,
       "Content-Type": "application/json",
       Accept: "application/json",
     },

@@ -9,9 +9,7 @@ const TEST_ENV = {
   MEDIA_CACHE_CHAT_ID: "-10042",
   LLM_BASE_URL: "https://llm.test/v1",
   LLM_API_KEY: "test",
-  LLM_IMAGE_BASE_URL: "https://images.test/v1",
   LLM_IMAGE_MODEL: "test-image",
-  LLM_IMAGE_API_KEY: "test",
   KEENABLE_API_KEY: "test",
   LLM_TEMPERATURE: "0.2",
   EMBEDDER_BASE_URL: "https://embedder.test/v1",
@@ -86,7 +84,7 @@ Deno.test("generate_image resolves saved ids and uploads all image inputs", asyn
       });
     }
 
-    strictEqual(request.url, "https://images.test/v1/images/edits");
+    strictEqual(request.url, "https://llm.test/v1/images/edits");
     strictEqual(request.method, "POST");
     strictEqual(request.headers.get("authorization"), "Bearer test");
     ok(request.headers.get("content-type")?.startsWith("multipart/form-data"));
@@ -183,6 +181,57 @@ Deno.test("generate_image rejects an unknown saved input id", async () => {
     strictEqual(requested, false);
   } finally {
     globalThis.fetch = originalFetch;
+    await database.destroy();
+  }
+});
+
+Deno.test("generate_image fallback shares the main LLM endpoint and credentials", async () => {
+  const { LLM_DEPLOYMENTS } = await import("../llm-deployments.ts");
+  const previousDeployment = LLM_DEPLOYMENTS.image.deploymentName;
+  LLM_DEPLOYMENTS.image.deploymentName = "alternate-image";
+  const database = await initDatabase()();
+  const originalFetch = globalThis.fetch;
+  const models: string[] = [];
+  const api = {
+    sendPhoto: async () => ({
+      photo: [{ file_id: "fallback-image", width: 1024, height: 1024 }],
+    }),
+  } as unknown as Api;
+
+  globalThis.fetch = (async (input, init) => {
+    const request = new Request(input, init);
+    if (request.url.startsWith("data:")) {
+      return await originalFetch(input, init);
+    }
+    strictEqual(request.url, "https://llm.test/v1/images/generations");
+    strictEqual(request.headers.get("authorization"), "Bearer test");
+    const body = await request.json();
+    models.push(body.model);
+    strictEqual(body.prompt, "Draw a tree");
+    if (models.length === 1) {
+      return Response.json(
+        { error: { message: "Primary unavailable" } },
+        {
+          status: 503,
+        },
+      );
+    }
+    strictEqual(body.width, 1024);
+    strictEqual(body.height, 1024);
+    return Response.json({ data: [{ b64_json: "Aw==" }] });
+  }) as typeof fetch;
+
+  try {
+    const result = await execute({ prompt: "Draw a tree" }, undefined, {
+      database,
+      api,
+    });
+    deepStrictEqual(models, ["test-image", "alternate-image"]);
+    ok(typeof result === "object");
+    match(result.generatedImageId ?? "", /^image_[a-f0-9]{32}$/);
+  } finally {
+    globalThis.fetch = originalFetch;
+    LLM_DEPLOYMENTS.image.deploymentName = previousDeployment;
     await database.destroy();
   }
 });

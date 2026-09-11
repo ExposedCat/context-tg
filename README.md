@@ -56,3 +56,9 @@ slideshows. Before sending, the bot resolves every referenced ID from SQLite
 and supplies its Telegram file ID through the rich message `media` field.
 Normal, guest-inline, scheduled, and repeating-message delivery all resolve the
 same mappings.
+
+Image generation uses the same `LLM_BASE_URL` and `LLM_API_KEY` as the main LLM.
+Set `LLM_IMAGE_MODEL` for the primary image model and use
+`/model image DEPLOYMENT_NAME` for the fallback deployment. Both use
+`/images/generations` under the shared base URL; primary image edits use
+`/images/edits`. Separate image endpoint and API key variables are no longer used.
