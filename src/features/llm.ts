@@ -55,6 +55,7 @@ import type {
   LlmCallTelemetry,
   LlmCallTelemetryPayload,
 } from "./telemetry.ts";
+import type { CreditCharge } from "./usage.ts";
 
 export type { LlmReport } from "./llm-tools/reports.ts";
 export type { LlmImageInput, LlmToolContext } from "./llm-tools/types.ts";
@@ -117,6 +118,7 @@ export type LlmProgress = {
 };
 
 export type LlmRequestOptions = {
+  chargeCredits?: CreditCharge;
   database?: Database;
   api?: Api;
   context?: LlmToolContext;
@@ -1059,6 +1061,7 @@ async function runFunctionToolCall(
   api?: Api,
   signal?: AbortSignal,
   agentId: AgentId = normalAgent.id,
+  chargeCredits?: CreditCharge,
 ): Promise<FunctionToolCallResult> {
   throwIfAborted(signal);
   const args = parseJsonObject(call.arguments);
@@ -1067,6 +1070,9 @@ async function runFunctionToolCall(
 
   let result: FunctionToolResult;
   try {
+    await chargeCredits?.("tool", call.name);
+    if (call.name === "web_search")
+      await chargeCredits?.("web_search", call.name);
     result = normalizeFunctionToolResult(
       await runner(args, context, {
         signal,
@@ -1074,6 +1080,7 @@ async function runFunctionToolCall(
         agentId,
         client,
         api,
+        chargeCredits,
         onUsage: (usage) => {
           state.toolUsage.input_tokens += usage.input_tokens;
           state.toolUsage.cached_tokens += usage.cached_tokens;
@@ -1610,6 +1617,7 @@ async function resolveFunctionToolCalls(
           options.api,
           options.signal,
           options.agentId ?? normalAgent.id,
+          options.chargeCredits,
         ),
       ),
     );

@@ -2,6 +2,7 @@ import type OpenAI from "@openai/openai";
 import type { Api } from "grammy";
 import type { AgentId } from "../agents/index.ts";
 import type { Database } from "../database.ts";
+import type { CreditCharge } from "../usage.ts";
 
 export type LlmToolContext = {
   chatId: number;
@@ -43,6 +44,7 @@ export type FunctionToolRunner = (
     agentId?: AgentId;
     client?: OpenAI;
     api?: Api;
+    chargeCredits?: CreditCharge;
     onUsage?: (usage: LlmToolUsage) => void;
   },
 ) => FunctionToolResult | string | Promise<FunctionToolResult | string>;

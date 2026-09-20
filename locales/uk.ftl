@@ -85,15 +85,15 @@ settings-proactive-updated =
     }
 
 settings-usage-title = Статистика за {$date}
-settings-usage-category-text-responses = Текстові відповіді
-settings-usage-category-tool-usages = Виклики інструментів
-settings-usage-category-image-responses = Відповіді із зображеннями
-settings-usage-line = {$category}: {$used}/{$quota}
-settings-usage-usage =
-    Приклад: /usage
-    Приклад: /usage {$options} ЛІМІТ
+settings-usage-line = Використано кредитів: {$used} / {$quota}
+settings-usage-usage = /usage · /usage +N · /usage -N · /usage +unlimited · /usage -unlimited
 settings-usage-admin-only = Змінювати ліміти може лише адміністратор бота.
-settings-usage-updated = «{$category}»: новий ліміт — {$quota}.
+settings-usage-prices =
+    Запит · 1 кредит
+    Виклик інструмента · 1 кредит
+    Вебпошук · +1 кредит
+    Генерація зображення · +5 кредитів за спробу (включно з повторами)
+    Скидання щодня о 00:00 UTC.
 
 configure-button = Налаштувати
 configure-enabled = Увімкнено

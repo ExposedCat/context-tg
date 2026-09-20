@@ -433,6 +433,7 @@ export const execute: FunctionToolRunner = async (args, _context, options) => {
       throw new Error("Default image generation is not configured.");
     }
 
+    await options.chargeCredits?.("image_attempt", "generate_image");
     image = await createImage(
       getPrimaryDeploymentName(size),
       prompt,
@@ -450,6 +451,7 @@ export const execute: FunctionToolRunner = async (args, _context, options) => {
         throw new Error("Alternate image generation is not configured.");
       }
 
+      await options.chargeCredits?.("image_attempt", "generate_image");
       image = await createAlternateImage(prompt, inputImages, options.signal);
     } catch (alternateError) {
       if (options.signal?.aborted) {

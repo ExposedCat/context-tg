@@ -77,15 +77,11 @@ import {
   type Thread,
 } from "./threads.ts";
 import {
-  consumeUsage,
-  getUsageStatus,
+  createCreditCharge,
+  getUsageOwner,
   handleUsageCommand,
   hasUsageRemaining,
   parseGuestUsageCommand,
-  recordUsage,
-  refundUsage,
-  type UsageConsumeResult,
-  type UsageKey,
 } from "./usage.ts";
 
 type LlmContextMessage = {
@@ -1590,45 +1586,11 @@ function formatModelFailureResponse(
   return parts.join("\n\n");
 }
 
-function formatQuotaExceededResponse(
-  key: UsageKey,
-  status: Pick<UsageConsumeResult, "used" | "quota">,
-): string {
-  return `Quota exceeded: ${key} ${status.used}/${status.quota}`;
-}
-
 function formatGuestModelFailureResponse(error: unknown): string {
   return [
     "Failed to generate response",
     formatMarkdownBlockquote(getErrorDetails(error)),
   ].join("\n\n");
-}
-
-function filterToolsForUsage(
-  tools: ToolName[],
-  options: {
-    toolUsageRemaining: boolean;
-    imageUsageRemaining: boolean;
-  },
-): ToolName[] {
-  return tools.filter((tool) => {
-    if (!options.toolUsageRemaining) {
-      return false;
-    }
-
-    if (
-      (tool === "send_report" || tool === "send_trading_report") &&
-      !options.imageUsageRemaining
-    ) {
-      return false;
-    }
-
-    if (tool === "generate_image" && !options.imageUsageRemaining) {
-      return false;
-    }
-
-    return true;
-  });
 }
 
 function isAbortError(error: unknown): boolean {
@@ -2078,6 +2040,7 @@ async function sendRecoveredErrorResponse(
 }
 
 type HandleChatRequestOptions = {
+  silentQuota?: boolean;
   reply?: TextMessage;
   replyContext?: LlmContextMessage;
   requestMessages?: LlmRequestSourceMessage[];
@@ -2108,14 +2071,14 @@ async function handleChatRequest(
     options.threadId ??
     message.message_thread_id ??
     message.message_id;
-  const textUsage = await consumeUsage(ctx.database, chatId, "text_responses");
-
-  if (!textUsage.ok) {
-    await ctx.reply(formatQuotaExceededResponse("text_responses", textUsage), {
-      reply_parameters: {
-        message_id: message.message_id,
-      },
-    });
+  const chargeCredits = createCreditCharge(ctx, false);
+  try {
+    await chargeCredits("request");
+  } catch (error) {
+    if (!options.silentQuota)
+      await ctx.reply(getErrorDetails(error), {
+        reply_parameters: { message_id: message.message_id },
+      });
     return;
   }
 
@@ -2126,7 +2089,6 @@ async function handleChatRequest(
   let taskCreated = false;
   let taskStatus: Exclude<TaskStatus, "working"> = "finished";
   let responseSent = false;
-  let imageUsageConsumedCount = 0;
   let progressResponseId: string | undefined;
   let activeAgent: AgentDefinition = normalAgent;
   const taskAbortController = createTaskAbortController(taskKey);
@@ -2155,27 +2117,14 @@ async function handleChatRequest(
         ? thread.response_id
         : undefined;
     progressResponseId = responseId;
-    const toolUsage = await getUsageStatus(ctx.database, chatId, "tool_usages");
-
-    if (requestedTools.length > 0 && toolUsage.used >= toolUsage.quota) {
-      throw new Error(formatQuotaExceededResponse("tool_usages", toolUsage));
-    }
-
-    const imageUsageRemaining = await hasUsageRemaining(
-      ctx.database,
-      chatId,
-      "image_responses",
-    );
-    const agentTools = filterToolsForUsage(requestedTools, {
-      toolUsageRemaining: toolUsage.used < toolUsage.quota,
-      imageUsageRemaining,
-    });
+    const agentTools = requestedTools;
     const toolContext = getLlmToolContext(chatId, message);
     const slowResponseReaction = createSlowResponseReactionTracker(ctx);
     const llmResponse = await (async () => {
       try {
         return await withTypingAction(ctx, async () => {
           const requestOptions: LlmRequestOptions = {
+            chargeCredits,
             database: ctx.database,
             api: ctx.api,
             context: toolContext,
@@ -2245,33 +2194,6 @@ async function handleChatRequest(
       }
     })();
 
-    await recordUsage(
-      ctx.database,
-      chatId,
-      "tool_usages",
-      llmResponse.tool_call_count,
-    );
-
-    const imageAttachmentCount =
-      llmResponse.generatedImageIds.length + (llmResponse.report ? 1 : 0);
-
-    if (imageAttachmentCount > 0) {
-      const imageUsage = await consumeUsage(
-        ctx.database,
-        chatId,
-        "image_responses",
-        imageAttachmentCount,
-      );
-
-      if (!imageUsage.ok) {
-        throw new Error(
-          formatQuotaExceededResponse("image_responses", imageUsage),
-        );
-      }
-
-      imageUsageConsumedCount = imageAttachmentCount;
-    }
-
     const sentMessages: Array<{ message_id: number }> = [];
     const formattedResponse = formatLlmResponse(llmResponse, {
       debug: await getChatDebugMode(ctx.database, chatId),
@@ -2340,25 +2262,8 @@ async function handleChatRequest(
       resumableResponseId,
       taskCreated,
     );
-    const refundUnusedUsage = async () => {
-      if (responseSent) {
-        return;
-      }
-
-      await refundUsage(ctx.database, chatId, "text_responses");
-
-      if (imageUsageConsumedCount > 0) {
-        await refundUsage(
-          ctx.database,
-          chatId,
-          "image_responses",
-          imageUsageConsumedCount,
-        );
-      }
-    };
 
     if (taskStatus === "canceled") {
-      await refundUnusedUsage();
       const canceledResponse = resumable
         ? `Canceled. Resume: ${getResumeCommand(message.message_id)}`
         : "Canceled.";
@@ -2401,22 +2306,6 @@ async function handleChatRequest(
 
         if (unavailableRichMessagePhoto) {
           taskStatus = "finished";
-
-          if (imageUsageConsumedCount > 0) {
-            try {
-              await refundUsage(
-                ctx.database,
-                chatId,
-                "image_responses",
-                imageUsageConsumedCount,
-              );
-              imageUsageConsumedCount = 0;
-            } catch (refundError) {
-              logError("Failed to refund unavailable image usage", {
-                error: refundError,
-              });
-            }
-          }
         }
 
         responseSent = true;
@@ -2429,8 +2318,6 @@ async function handleChatRequest(
         });
       }
     }
-
-    await refundUnusedUsage();
 
     const azureDownMessage = getAzureDownMessage(responseError);
     const sentMessage = azureDownMessage
@@ -2588,19 +2475,13 @@ async function handleGuestChatRequest(
   }
 
   const chatId = ctx.chat.id;
-  const textUsage = await consumeUsage(ctx.database, chatId, "text_responses");
-
-  if (!textUsage.ok) {
-    await sendGuestMarkdownResponse(
-      ctx,
-      message,
-      formatQuotaExceededResponse("text_responses", textUsage),
-    );
+  const chargeCredits = createCreditCharge(ctx, true);
+  try {
+    await chargeCredits("request");
+  } catch (error) {
+    await sendGuestMarkdownResponse(ctx, message, getErrorDetails(error));
     return;
   }
-
-  let responseSent = false;
-  let imageUsageConsumedCount = 0;
 
   try {
     const reply = getActualReply(message);
@@ -2614,21 +2495,7 @@ async function handleGuestChatRequest(
       message.message_thread_id ??
       message.message_id;
     const responseId = getThreadResponseId(thread);
-    const toolUsage = await getUsageStatus(ctx.database, chatId, "tool_usages");
-
-    if (guestAgent.tools.length > 0 && toolUsage.used >= toolUsage.quota) {
-      throw new Error(formatQuotaExceededResponse("tool_usages", toolUsage));
-    }
-
-    const imageUsageRemaining = await hasUsageRemaining(
-      ctx.database,
-      chatId,
-      "image_responses",
-    );
-    const agentTools = filterToolsForUsage(guestAgent.tools, {
-      toolUsageRemaining: toolUsage.used < toolUsage.quota,
-      imageUsageRemaining,
-    });
+    const agentTools = guestAgent.tools;
     const toolContext = getLlmToolContext(chatId, message);
     const request = responseId
       ? await buildLlmRequestInput(
@@ -2659,6 +2526,7 @@ async function handleGuestChatRequest(
       agentTools,
       responseId,
       {
+        chargeCredits,
         database: ctx.database,
         api: ctx.api,
         context: toolContext,
@@ -2672,32 +2540,6 @@ async function handleGuestChatRequest(
       guestAgent.buildInstructions(chatId),
       guestAgent.MODEL,
     );
-
-    await recordUsage(
-      ctx.database,
-      chatId,
-      "tool_usages",
-      llmResponse.tool_call_count,
-    );
-
-    const imageAttachmentCount = llmResponse.generatedImageIds.length;
-
-    if (imageAttachmentCount > 0) {
-      const imageUsage = await consumeUsage(
-        ctx.database,
-        chatId,
-        "image_responses",
-        imageAttachmentCount,
-      );
-
-      if (!imageUsage.ok) {
-        throw new Error(
-          formatQuotaExceededResponse("image_responses", imageUsage),
-        );
-      }
-
-      imageUsageConsumedCount = imageAttachmentCount;
-    }
 
     let delivery: GuestResponseDelivery;
 
@@ -2745,18 +2587,8 @@ async function handleGuestChatRequest(
         };
         delivery = await sendGuestLlmResponse(ctx, message, llmResponse);
       }
-
-      if (imageUsageConsumedCount > 0) {
-        await refundUsage(
-          ctx.database,
-          chatId,
-          "image_responses",
-          imageUsageConsumedCount,
-        );
-        imageUsageConsumedCount = 0;
-      }
     }
-    responseSent = true;
+
     await saveGuestChatResponseThread(
       ctx,
       chatId,
@@ -2767,19 +2599,6 @@ async function handleGuestChatRequest(
     );
   } catch (error) {
     logError("Error handling guest message:", error);
-
-    if (!responseSent) {
-      await refundUsage(ctx.database, chatId, "text_responses");
-
-      if (imageUsageConsumedCount > 0) {
-        await refundUsage(
-          ctx.database,
-          chatId,
-          "image_responses",
-          imageUsageConsumedCount,
-        );
-      }
-    }
 
     await sendGuestMarkdownResponse(
       ctx,
@@ -2850,6 +2669,7 @@ export async function maybeSendProactiveAgentResponse(
   message: ProactiveTriggerMessage,
   chatId: number,
 ): Promise<void> {
+  if (!(await hasUsageRemaining(ctx.database, chatId))) return;
   const textMessage = message as TextMessage;
 
   if (shouldSkipProactiveAgentResponse(ctx, textMessage)) {
@@ -2878,6 +2698,7 @@ export async function maybeSendProactiveAgentResponse(
   }
 
   await handleChatRequest(ctx, textMessage, PROACTIVE_TASK_TEXT, {
+    silentQuota: true,
     requestMessages: buildProactiveRequestMessages(messages),
     taskText: PROACTIVE_TASK_TEXT,
     threadId,
@@ -2971,7 +2792,7 @@ chatComposer.on("guest_message", async (ctx, next) => {
   if (usageArgs !== undefined) {
     const response = await handleUsageCommand(
       ctx.database,
-      ctx.chat.id,
+      getUsageOwner(ctx.chat.id, true, ctx.from?.id),
       usageArgs,
       isBotAdmin(ctx),
       ctx.t,

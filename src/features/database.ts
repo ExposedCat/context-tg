@@ -51,8 +51,8 @@ export type DatabaseSchema = {
   tasks: TasksTable;
   scheduled_messages: ScheduledMessagesTable;
   cron_messages: CronMessagesTable;
-  chat_usage_limits: ChatUsageLimitsTable;
-  chat_usage: ChatUsageTable;
+  credit_limits: ChatUsageLimitsTable;
+  credit_usage: ChatUsageTable;
   chat_proactive_responses: ChatProactiveResponsesTable;
   chat_trolling: ChatTrollingTable;
   emoji_packs: EmojiPacksTable;

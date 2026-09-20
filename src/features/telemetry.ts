@@ -14,6 +14,15 @@ export type LlmCallTelemetryPayload = {
 };
 
 export type BotTelemetryEvents = {
+  credit_usage: {
+    credits: number;
+    credit_kind: string;
+    usage_owner: number;
+    usage_limit: "limited" | "unlimited";
+    chat_type: LlmCallChatType;
+    mode: LlmCallMode;
+    tools: string[];
+  };
   llm_call: LlmCallTelemetryPayload;
 };
 

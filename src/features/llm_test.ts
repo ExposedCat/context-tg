@@ -988,7 +988,9 @@ Deno.test("failed tool follow-up preserves the complete context for the next tur
 
 Deno.test("generate_image caches media and returns reusable rich Markdown", async () => {
   setLlmDeploymentName("small", "test-model");
+  const creditCharges: string[] = [];
   const database = await initDatabase()();
+  setLlmDeploymentName("image_small", "test-image");
   const originalFetch = globalThis.fetch;
   const llmRequests: Array<Record<string, unknown>> = [];
   const telemetryEvents: LlmCallTelemetryPayload[] = [];
@@ -1008,8 +1010,10 @@ Deno.test("generate_image caches media and returns reusable rich Markdown", asyn
 
   globalThis.fetch = (async (input, init) => {
     const request = new Request(input, init);
+    if (request.url.startsWith("data:"))
+      return await originalFetch(input, init);
 
-    if (request.url === "https://images.test/v1/images/generations") {
+    if (request.url === "https://llm.test/v1/images/generations") {
       return new Response(
         JSON.stringify({
           data: [
@@ -1081,6 +1085,9 @@ Deno.test("generate_image caches media and returns reusable rich Markdown", asyn
       ["generate_image"],
       undefined,
       {
+        chargeCredits: async (kind) => {
+          creditCharges.push(kind);
+        },
         api,
         database,
         context: { chatId: 1, messageId: 1 },
@@ -1092,6 +1099,7 @@ Deno.test("generate_image caches media and returns reusable rich Markdown", asyn
       },
     );
 
+    deepStrictEqual(creditCharges, ["tool", "image_attempt"]);
     strictEqual(llmRequests.length, 2);
     ok(cachedPhotoInput instanceof InputFile);
     strictEqual(response.generatedImageIds.length, 1);
@@ -1303,5 +1311,67 @@ Deno.test("memo events deactivate another speaker's memories and restore their s
     ok(!toAlice?.includes("Shared fact"));
   } finally {
     await database.destroy();
+  }
+});
+
+Deno.test("web search adds a surcharge and denied tools never execute", async () => {
+  setLlmDeploymentName("small", "test-model");
+  const originalFetch = globalThis.fetch;
+  try {
+    for (const denied of [false, true]) {
+      let requests = 0;
+      const charges: string[] = [];
+      globalThis.fetch = (async (input, init) => {
+        const request = new Request(input, init);
+        strictEqual(new URL(request.url).pathname, "/v1/responses");
+        requests++;
+        return Response.json(
+          createApiResponse(
+            `credits_${requests}`,
+            requests === 1
+              ? [
+                  {
+                    id: "credit_tool",
+                    type: "function_call",
+                    call_id: "credit_call",
+                    name: denied ? "set_reply_message_id" : "web_search",
+                    arguments: denied ? '{"message_id":42}' : "{}",
+                    status: "completed",
+                  },
+                ]
+              : [
+                  {
+                    id: "credit_final",
+                    type: "message",
+                    role: "assistant",
+                    status: "completed",
+                    content: [
+                      { type: "output_text", text: "Done.", annotations: [] },
+                    ],
+                  },
+                ],
+          ),
+        );
+      }) as typeof fetch;
+      const result = await requestLlm(
+        "Use the tool",
+        [denied ? "set_reply_message_id" : "web_search"],
+        undefined,
+        {
+          context: { chatId: 1, messageId: 1 },
+          chargeCredits: async (kind) => {
+            charges.push(kind);
+            if (denied) throw new Error("No credits left");
+          },
+        },
+      );
+      deepStrictEqual(charges, denied ? ["tool"] : ["tool", "web_search"]);
+      if (denied) {
+        strictEqual(result.replyMessageId, undefined);
+        ok(result.errors.length > 0);
+      }
+    }
+  } finally {
+    globalThis.fetch = originalFetch;
   }
 });

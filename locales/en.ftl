@@ -83,15 +83,15 @@ settings-proactive-updated =
     }
 
 settings-usage-title = Usage for {$date}
-settings-usage-category-text-responses = Text responses
-settings-usage-category-tool-usages = Tool uses
-settings-usage-category-image-responses = Image responses
-settings-usage-line = {$category}: {$used}/{$quota}
-settings-usage-usage =
-    Try: /usage
-    Try: /usage {$options} LIMIT
+settings-usage-line = Credits used: {$used} / {$quota}
+settings-usage-usage = /usage · /usage +N · /usage -N · /usage +unlimited · /usage -unlimited
 settings-usage-admin-only = Only the bot admin can change usage limits.
-settings-usage-updated = {$category} limit is now {$quota}.
+settings-usage-prices =
+    Request · 1 credit
+    Tool use · 1 credit
+    Web search · +1 credit
+    Image generation · +5 credits per attempt (retries count)
+    Resets daily at 00:00 UTC.
 
 configure-button = Configure
 configure-enabled = Enabled

@@ -138,3 +138,36 @@ Deno.test("guest rich messages include saved image media mappings", async () => 
     await database.destroy();
   }
 });
+
+Deno.test("exhausted balances skip proactive and troll work before context lookup", async () => {
+  const { maybeSendProactiveAgentResponse } = await import("./chat.ts");
+  const { maybeSendPeriodicTroll } = await import("./trolling.ts");
+  const { consumeUsage } = await import("./usage.ts");
+  const database = await initDatabase()();
+  try {
+    await consumeUsage(database, -100, 50);
+    const ctx = { database } as import("../bot.ts").Context;
+    await maybeSendProactiveAgentResponse(ctx, { message_id: 1 }, -100);
+    await maybeSendPeriodicTroll(
+      ctx,
+      { message_id: 1 },
+      { id: 2, first_name: "Test" },
+      -100,
+    );
+    strictEqual(
+      (await database.selectFrom("chat_trolling").selectAll().execute()).length,
+      0,
+    );
+    strictEqual(
+      (
+        await database
+          .selectFrom("chat_proactive_responses")
+          .selectAll()
+          .execute()
+      ).length,
+      0,
+    );
+  } finally {
+    await database.destroy();
+  }
+});

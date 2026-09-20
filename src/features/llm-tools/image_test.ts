@@ -1,4 +1,4 @@
-import { deepStrictEqual, match, ok, strictEqual } from "node:assert";
+import { deepStrictEqual, match, ok, rejects, strictEqual } from "node:assert";
 import { type Api, InputFile } from "grammy";
 import type { LlmToolUsage } from "./types.ts";
 
@@ -195,6 +195,7 @@ Deno.test("generate_image fallback shares the main LLM endpoint and credentials"
   const database = await initDatabase()();
   const originalFetch = globalThis.fetch;
   const models: string[] = [];
+  const charges: string[] = [];
   const api = {
     sendPhoto: async () => ({
       photo: [{ file_id: "fallback-image", width: 1024, height: 1024 }],
@@ -228,7 +229,11 @@ Deno.test("generate_image fallback shares the main LLM endpoint and credentials"
     const result = await execute({ prompt: "Draw a tree" }, undefined, {
       database,
       api,
+      chargeCredits: async (kind) => {
+        charges.push(kind);
+      },
     });
+    deepStrictEqual(charges, ["image_attempt", "image_attempt"]);
     deepStrictEqual(models, ["test-image", "alternate-image"]);
     ok(typeof result === "object");
     match(result.generatedImageId ?? "", /^image_[a-f0-9]{32}$/);
@@ -312,6 +317,41 @@ Deno.test("generate_image routes sizes and falls back for unavailable deployment
   } finally {
     globalThis.fetch = originalFetch;
     LLM_DEPLOYMENTS.image.deploymentName = previousFallback;
+    await database.destroy();
+  }
+});
+
+Deno.test("image fallback stops before its API call when credits are exhausted", async () => {
+  const database = await initDatabase()();
+  const previous = LLM_DEPLOYMENTS.image.deploymentName;
+  LLM_DEPLOYMENTS.image.deploymentName = "fallback-image";
+  const originalFetch = globalThis.fetch;
+  let attempts = 0;
+  let charges = 0;
+  globalThis.fetch = (async () => {
+    attempts++;
+    return Response.json({ error: { message: "Try again" } }, { status: 503 });
+  }) as typeof fetch;
+  try {
+    await rejects(
+      () =>
+        Promise.resolve(
+          execute({ prompt: "Draw a tree" }, undefined, {
+            database,
+            api: {} as Api,
+            chargeCredits: async () => {
+              charges++;
+              if (charges > 1) throw new Error("No credits left");
+            },
+          }),
+        ),
+      /No credits left/,
+    );
+    strictEqual(attempts, 1);
+    strictEqual(charges, 2);
+  } finally {
+    globalThis.fetch = originalFetch;
+    LLM_DEPLOYMENTS.image.deploymentName = previous;
     await database.destroy();
   }
 });

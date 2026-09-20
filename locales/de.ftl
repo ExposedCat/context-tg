@@ -83,15 +83,15 @@ settings-proactive-updated =
     }
 
 settings-usage-title = Nutzung am {$date}
-settings-usage-category-text-responses = Textantworten
-settings-usage-category-tool-usages = Werkzeugaufrufe
-settings-usage-category-image-responses = Bildantworten
-settings-usage-line = {$category}: {$used}/{$quota}
-settings-usage-usage =
-    Beispiel: /usage
-    Beispiel: /usage {$options} LIMIT
+settings-usage-line = Verbrauchte Credits: {$used} / {$quota}
+settings-usage-usage = /usage · /usage +N · /usage -N · /usage +unlimited · /usage -unlimited
 settings-usage-admin-only = Nur der Bot-Admin kann Nutzungslimits ändern.
-settings-usage-updated = Neues Limit für „{$category}“: {$quota}.
+settings-usage-prices =
+    Anfrage · 1 Credit
+    Werkzeugaufruf · 1 Credit
+    Websuche · +1 Credit
+    Bilderzeugung · +5 Credits pro Versuch (auch Wiederholungen)
+    Täglicher Neustart um 00:00 UTC.
 
 configure-button = Konfigurieren
 configure-enabled = Aktiviert

@@ -1,9 +1,13 @@
--- Panel: LLM calls by chat type. Series label comes from the __name__ column.
--- Existing dashboard variables: bucket, chat_type, mode, status, tools.
+-- Panel: Credits consumed by mode. Series label comes from the __name__ column.
+-- Add a custom variable usage_limit: __all__ (default), unlimited, limited.
+-- Filters reflect the billed balance's limit at consumption time (including users).
+-- Set chat_type=group and mode=normal to chart only group balances.
+-- Credit events intentionally have no LLM status: failed attempts remain paid.
+-- Existing dashboard variables: bucket, chat_type, mode, tools.
 WITH
     arrayFlatten([$chat_type]) AS selected_chat_types,
     arrayFlatten([$mode]) AS selected_modes,
-    arrayFlatten([$status]) AS selected_statuses,
+    arrayFlatten([$usage_limit]) AS selected_usage_limits,
     arrayFlatten([$tools]) AS selected_tools,
     if(
         mapContains(attributes_string, 'tools'),
@@ -21,8 +25,8 @@ WITH
     )
 SELECT
     dateTrunc($bucket, fromUnixTimestamp64Nano(timestamp)) AS ts,
-    attributes_string['chat_type'] AS __name__,
-    toFloat64(count()) AS value
+    attributes_string['mode'] AS __name__,
+    toFloat64(sum(attributes_number['credits'])) AS value
 FROM signoz_logs.distributed_logs_v2
 WHERE resource_fingerprint GLOBAL IN (
     SELECT fingerprint FROM __resource_filter
@@ -32,7 +36,8 @@ WHERE resource_fingerprint GLOBAL IN (
   AND scope_name = 'grammyjs-opentelemetry'
   AND mapContains(attributes_string, 'chat_type')
   AND mapContains(attributes_string, 'mode')
-  AND mapContains(attributes_string, 'status')
+  AND mapContains(attributes_number, 'credits')
+  AND mapContains(attributes_string, 'credit_kind')
   AND (
       '__all__' IN selected_chat_types
       OR attributes_string['chat_type'] IN selected_chat_types
@@ -42,8 +47,8 @@ WHERE resource_fingerprint GLOBAL IN (
       OR attributes_string['mode'] IN selected_modes
   )
   AND (
-      '__all__' IN selected_statuses
-      OR attributes_string['status'] IN selected_statuses
+      '__all__' IN selected_usage_limits
+      OR attributes_string['usage_limit'] IN selected_usage_limits
   )
   AND (
       '__all__' IN selected_tools
@@ -55,6 +60,6 @@ WHERE resource_fingerprint GLOBAL IN (
   )
 GROUP BY
     dateTrunc($bucket, fromUnixTimestamp64Nano(timestamp)),
-    attributes_string['chat_type']
+    attributes_string['mode']
 ORDER BY ts ASC, __name__ ASC
-SETTINGS log_comment = 'signoz-writing-clickhouse-queries skill | 2026-09-06';
+SETTINGS log_comment = 'signoz-writing-clickhouse-queries skill | 2026-09-20';

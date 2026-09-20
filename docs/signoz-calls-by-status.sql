@@ -1,4 +1,4 @@
--- Panel: LLM calls by status. Legend: {{__name__}}.
+-- Panel: LLM calls by status. Series label comes from the __name__ column.
 -- Existing dashboard variables: bucket, chat_type, mode, status, tools.
 WITH
     arrayFlatten([$chat_type]) AS selected_chat_types,

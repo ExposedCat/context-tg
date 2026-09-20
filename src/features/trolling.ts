@@ -12,6 +12,7 @@ import {
 } from "./llm-prompt.ts";
 import type { MessageMetadata } from "./messages.ts";
 import { createLlmCallTelemetry } from "./telemetry.ts";
+import { createCreditCharge, hasUsageRemaining } from "./usage.ts";
 
 type Sender = {
   id: number;
@@ -235,6 +236,7 @@ export async function maybeSendPeriodicTroll(
   sender: Sender,
   chatId: number,
 ): Promise<void> {
+  if (!(await hasUsageRemaining(ctx.database, chatId))) return;
   const { messageCount, enabled, intervalMessageCount } =
     await incrementTrollingMessageCount(ctx.database, chatId);
 
@@ -252,6 +254,12 @@ export async function maybeSendPeriodicTroll(
     return;
   }
 
+  const chargeCredits = createCreditCharge(ctx);
+  try {
+    await chargeCredits("request");
+  } catch {
+    return;
+  }
   const response = await requestLlm(
     buildTrollingRequest(formatSenderName(sender), messages),
     [],

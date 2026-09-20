@@ -1,106 +1,136 @@
-import type { Insertable, Selectable } from "@kysely/kysely";
+import { sql } from "@kysely/kysely";
 import type { TranslateFunction } from "grammy-i18n";
+import type { Context } from "../bot.ts";
 import type { Database } from "./database.ts";
-
-export type UsageKey = "text_responses" | "tool_usages" | "image_responses";
 
 export type ChatUsageLimitsTable = {
   chat_id: number;
-  key: UsageKey;
   quota: number;
+  unlimited: number;
 };
-
 export type ChatUsageTable = {
   chat_id: number;
   usage_date: string;
-  key: UsageKey;
   used: number;
 };
-
-type ChatUsageLimit = Selectable<ChatUsageLimitsTable>;
-type ChatUsage = Selectable<ChatUsageTable>;
-type CreateChatUsageLimit = Insertable<ChatUsageLimitsTable>;
-type CreateChatUsage = Insertable<ChatUsageTable>;
-
-export type UsageStatus = {
-  key: UsageKey;
-  used: number;
-  quota: number;
-};
-
-export type UsageConsumeResult = UsageStatus & {
-  ok: boolean;
-};
-
-export const USAGE_KEYS = [
-  "text_responses",
-  "tool_usages",
-  "image_responses",
-] as const satisfies readonly UsageKey[];
-
-export const DEFAULT_USAGE_LIMITS = {
-  text_responses: 15,
-  tool_usages: 20,
-  image_responses: 3,
-} as const satisfies Record<UsageKey, number>;
-
-const USAGE_LABEL_KEYS = {
-  text_responses: "settings-usage-category-text-responses",
-  tool_usages: "settings-usage-category-tool-usages",
-  image_responses: "settings-usage-category-image-responses",
-} as const satisfies Record<UsageKey, string>;
-
-const USAGE_KEY_ALIASES: Record<string, UsageKey> = {
-  text: "text_responses",
-  texts: "text_responses",
-  text_response: "text_responses",
-  text_responses: "text_responses",
-  tool: "tool_usages",
-  tools: "tool_usages",
-  tool_usage: "tool_usages",
-  tool_usages: "tool_usages",
-  image: "image_responses",
-  images: "image_responses",
-  image_response: "image_responses",
-  image_responses: "image_responses",
-} as const satisfies Record<string, UsageKey>;
+export type UsageStatus = { used: number; quota: number; unlimited: boolean };
+export type CreditKind = "request" | "tool" | "web_search" | "image_attempt";
+export type CreditCharge = (kind: CreditKind, tool?: string) => Promise<void>;
+export const CREDIT_PRICES = {
+  request: 1,
+  tool: 1,
+  web_search: 1,
+  image_attempt: 5,
+} as const;
 
 export async function migrateUsage(database: Database) {
+  // New accounting starts fresh; legacy per-kind history stays untouched.
   await database.schema
-    .createTable("chat_usage_limits")
+    .createTable("credit_limits")
     .ifNotExists()
-    .addColumn("chat_id", "integer", (column) => column.notNull())
-    .addColumn("key", "text", (column) => column.notNull())
-    .addColumn("quota", "integer", (column) => column.notNull())
-    .addPrimaryKeyConstraint("chat_usage_limits_primary_key", [
-      "chat_id",
-      "key",
-    ])
+    .addColumn("chat_id", "integer", (c) => c.primaryKey())
+    .addColumn("quota", "integer", (c) => c.notNull())
+    .addColumn("unlimited", "integer", (c) => c.notNull().defaultTo(0))
     .execute();
-
   await database.schema
-    .createTable("chat_usage")
+    .createTable("credit_usage")
     .ifNotExists()
-    .addColumn("chat_id", "integer", (column) => column.notNull())
-    .addColumn("usage_date", "text", (column) => column.notNull())
-    .addColumn("key", "text", (column) => column.notNull())
-    .addColumn("used", "integer", (column) => column.notNull().defaultTo(0))
-    .addPrimaryKeyConstraint("chat_usage_primary_key", [
-      "chat_id",
-      "usage_date",
-      "key",
-    ])
+    .addColumn("chat_id", "integer", (c) => c.notNull())
+    .addColumn("usage_date", "text", (c) => c.notNull())
+    .addColumn("used", "integer", (c) => c.notNull().defaultTo(0))
+    .addPrimaryKeyConstraint("credit_usage_pk", ["chat_id", "usage_date"])
     .execute();
 }
-
 export function getUsageDate(date = new Date()): string {
   return date.toISOString().slice(0, 10);
 }
-
-export function parseUsageKey(value: string): UsageKey | undefined {
-  return USAGE_KEY_ALIASES[value.toLocaleLowerCase()];
+export function defaultQuota(chatId: number): number {
+  return chatId < 0 ? 50 : 20;
 }
-
+export function getUsageOwner(
+  chatId: number,
+  guest: boolean,
+  userId?: number,
+): number {
+  if (!guest || chatId > 0) return chatId;
+  if (!userId) throw new Error("Guest usage requires a user ID.");
+  return userId;
+}
+export async function getUsageStatus(
+  database: Database,
+  chatId: number,
+  date = getUsageDate(),
+): Promise<UsageStatus> {
+  const [limit, usage] = await Promise.all([
+    database
+      .selectFrom("credit_limits")
+      .selectAll()
+      .where("chat_id", "=", chatId)
+      .executeTakeFirst(),
+    database
+      .selectFrom("credit_usage")
+      .selectAll()
+      .where("chat_id", "=", chatId)
+      .where("usage_date", "=", date)
+      .executeTakeFirst(),
+  ]);
+  return {
+    used: usage?.used ?? 0,
+    quota: limit?.quota ?? defaultQuota(chatId),
+    unlimited: limit?.unlimited === 1,
+  };
+}
+export async function hasUsageRemaining(
+  database: Database,
+  chatId: number,
+): Promise<boolean> {
+  const s = await getUsageStatus(database, chatId);
+  return s.unlimited || s.used < s.quota;
+}
+export async function consumeUsage(
+  database: Database,
+  chatId: number,
+  amount = 1,
+) {
+  if (!Number.isSafeInteger(amount) || amount <= 0)
+    throw new Error("Invalid credit amount.");
+  const date = getUsageDate();
+  // Conditional UPSERT keeps parallel tool calls from overspending the same balance.
+  const limit = sql<number>`coalesce((select quota from credit_limits where chat_id = ${chatId}), ${defaultQuota(chatId)})`;
+  const unlimited = sql<number>`coalesce((select unlimited from credit_limits where chat_id = ${chatId}), 0)`;
+  const result = await sql<{
+    used: number;
+  }>`insert into credit_usage (chat_id, usage_date, used)
+    select ${chatId}, ${date}, ${amount} where ${unlimited} = 1 or ${amount} <= ${limit}
+    on conflict (chat_id, usage_date) do update set used = credit_usage.used + ${amount}
+    where ${unlimited} = 1 or credit_usage.used + ${amount} <= ${limit}
+    returning used`.execute(database);
+  return {
+    ...(await getUsageStatus(database, chatId, date)),
+    ok: result.rows.length > 0,
+  };
+}
+export function createCreditCharge(ctx: Context, guest = false): CreditCharge {
+  if (!ctx.chat) throw new Error("Credit usage requires a chat.");
+  const owner = getUsageOwner(ctx.chat.id, guest, ctx.from?.id);
+  return async (kind, tool) => {
+    const amount = CREDIT_PRICES[kind];
+    const status = await consumeUsage(ctx.database, owner, amount);
+    if (!status.ok)
+      throw new Error(
+        `Not enough credits: ${status.used}/${status.quota} used today.`,
+      );
+    ctx.telemetry.event("credit_usage", {
+      credits: amount,
+      credit_kind: kind,
+      usage_owner: owner,
+      usage_limit: status.unlimited ? "unlimited" : "limited",
+      chat_type: ctx.chat?.type === "private" ? "private" : "group",
+      mode: guest ? "guest" : "normal",
+      tools: tool ? [tool] : [],
+    });
+  };
+}
 export function parseGuestUsageCommand(
   text: string,
   botUsername: string,
@@ -123,207 +153,6 @@ export function parseGuestUsageCommand(
   return args.join(" ");
 }
 
-export async function getUsageSnapshot(
-  database: Database,
-  chatId: number,
-  usageDate = getUsageDate(),
-): Promise<UsageStatus[]> {
-  const [limitRows, usageRows] = await Promise.all([
-    database
-      .selectFrom("chat_usage_limits")
-      .selectAll()
-      .where("chat_id", "=", chatId)
-      .execute(),
-    database
-      .selectFrom("chat_usage")
-      .selectAll()
-      .where("chat_id", "=", chatId)
-      .where("usage_date", "=", usageDate)
-      .execute(),
-  ]);
-  const limits = new Map<UsageKey, ChatUsageLimit>(
-    limitRows.map((row) => [row.key, row]),
-  );
-  const usage = new Map<UsageKey, ChatUsage>(
-    usageRows.map((row) => [row.key, row]),
-  );
-
-  return USAGE_KEYS.map((key) => ({
-    key,
-    used: usage.get(key)?.used ?? 0,
-    quota: limits.get(key)?.quota ?? DEFAULT_USAGE_LIMITS[key],
-  }));
-}
-
-export async function getUsageStatus(
-  database: Database,
-  chatId: number,
-  key: UsageKey,
-  usageDate = getUsageDate(),
-): Promise<UsageStatus> {
-  const snapshot = await getUsageSnapshot(database, chatId, usageDate);
-  const status = snapshot.find((item) => item.key === key);
-
-  if (!status) {
-    throw new Error(`Unknown usage key: ${key}`);
-  }
-
-  return status;
-}
-
-export async function hasUsageRemaining(
-  database: Database,
-  chatId: number,
-  key: UsageKey,
-): Promise<boolean> {
-  const status = await getUsageStatus(database, chatId, key);
-  return status.used < status.quota;
-}
-
-export async function consumeUsage(
-  database: Database,
-  chatId: number,
-  key: UsageKey,
-  amount = 1,
-): Promise<UsageConsumeResult> {
-  if (amount <= 0) {
-    return { ...(await getUsageStatus(database, chatId, key)), ok: true };
-  }
-
-  const status = await getUsageStatus(database, chatId, key);
-
-  if (status.used + amount > status.quota) {
-    return { ...status, ok: false };
-  }
-
-  await recordUsage(database, chatId, key, amount);
-
-  return { ...status, used: status.used + amount, ok: true };
-}
-
-export async function recordUsage(
-  database: Database,
-  chatId: number,
-  key: UsageKey,
-  amount = 1,
-): Promise<void> {
-  if (amount <= 0) {
-    return;
-  }
-
-  const usageDate = getUsageDate();
-  const row: CreateChatUsage = {
-    chat_id: chatId,
-    usage_date: usageDate,
-    key,
-    used: amount,
-  };
-  const current = await database
-    .selectFrom("chat_usage")
-    .select("used")
-    .where("chat_id", "=", chatId)
-    .where("usage_date", "=", usageDate)
-    .where("key", "=", key)
-    .executeTakeFirst();
-
-  if (!current) {
-    await database.insertInto("chat_usage").values(row).execute();
-    return;
-  }
-
-  await database
-    .updateTable("chat_usage")
-    .set({ used: current.used + amount })
-    .where("chat_id", "=", chatId)
-    .where("usage_date", "=", usageDate)
-    .where("key", "=", key)
-    .execute();
-}
-
-export async function refundUsage(
-  database: Database,
-  chatId: number,
-  key: UsageKey,
-  amount = 1,
-): Promise<void> {
-  if (amount <= 0) {
-    return;
-  }
-
-  const usageDate = getUsageDate();
-  const current = await database
-    .selectFrom("chat_usage")
-    .select("used")
-    .where("chat_id", "=", chatId)
-    .where("usage_date", "=", usageDate)
-    .where("key", "=", key)
-    .executeTakeFirst();
-
-  if (!current) {
-    return;
-  }
-
-  await database
-    .updateTable("chat_usage")
-    .set({ used: Math.max(0, current.used - amount) })
-    .where("chat_id", "=", chatId)
-    .where("usage_date", "=", usageDate)
-    .where("key", "=", key)
-    .execute();
-}
-
-export async function setUsageQuota(
-  database: Database,
-  chatId: number,
-  key: UsageKey,
-  quota: number,
-): Promise<UsageStatus> {
-  const normalizedQuota = Math.trunc(quota);
-
-  if (!Number.isFinite(normalizedQuota) || normalizedQuota < 0) {
-    throw new Error("Quota must be a non-negative integer.");
-  }
-
-  const row: CreateChatUsageLimit = {
-    chat_id: chatId,
-    key,
-    quota: normalizedQuota,
-  };
-
-  await database
-    .insertInto("chat_usage_limits")
-    .values(row)
-    .onConflict((conflict) =>
-      conflict.columns(["chat_id", "key"]).doUpdateSet({ quota: row.quota }),
-    )
-    .execute();
-
-  return await getUsageStatus(database, chatId, key);
-}
-
-export function formatUsageSnapshot(
-  translate: TranslateFunction,
-  snapshot: UsageStatus[],
-  usageDate = getUsageDate(),
-): string {
-  return [
-    translate("settings-usage-title", { date: usageDate }),
-    ...snapshot.map((item) =>
-      translate("settings-usage-line", {
-        category: translate(USAGE_LABEL_KEYS[item.key]),
-        used: item.used,
-        quota: item.quota,
-      }),
-    ),
-  ].join("\n");
-}
-
-export function getUsageCommandUsage(translate: TranslateFunction): string {
-  return translate("settings-usage-usage", {
-    options: USAGE_KEYS.join("|"),
-  });
-}
-
 export async function handleUsageCommand(
   database: Database,
   chatId: number,
@@ -331,31 +160,46 @@ export async function handleUsageCommand(
   canSetQuota: boolean,
   translate: TranslateFunction,
 ): Promise<string> {
-  const trimmedArgs = args.trim();
-
-  if (!trimmedArgs) {
-    const usageDate = getUsageDate();
-    const snapshot = await getUsageSnapshot(database, chatId, usageDate);
-
-    return formatUsageSnapshot(translate, snapshot, usageDate);
+  const arg = args.trim().toLowerCase();
+  if (arg) {
+    if (!canSetQuota) return translate("settings-usage-admin-only");
+    if (!/^[+-](?:[0-9]+|unlimited)$/.test(arg))
+      return translate("settings-usage-usage");
+    const current = await getUsageStatus(database, chatId);
+    const isToggle = arg.endsWith("unlimited");
+    const delta = isToggle ? 0 : Number(arg);
+    const quota = Math.max(0, current.quota + delta);
+    if (!Number.isSafeInteger(delta) || !Number.isSafeInteger(quota))
+      return translate("settings-usage-usage");
+    await database
+      .insertInto("credit_limits")
+      .values({
+        chat_id: chatId,
+        quota,
+        unlimited: isToggle
+          ? Number(arg[0] === "+")
+          : Number(current.unlimited),
+      })
+      .onConflict((c) =>
+        c.column("chat_id").doUpdateSet((eb) => ({
+          quota: isToggle
+            ? eb.ref("credit_limits.quota")
+            : sql<number>`max(0, credit_limits.quota + ${delta})`,
+          unlimited: isToggle
+            ? Number(arg[0] === "+")
+            : eb.ref("credit_limits.unlimited"),
+        })),
+      )
+      .execute();
   }
-
-  if (!canSetQuota) {
-    return translate("settings-usage-admin-only");
-  }
-
-  const [rawKey, rawQuota, ...extraParts] = trimmedArgs.split(/\s+/);
-  const key = rawKey ? parseUsageKey(rawKey) : undefined;
-  const quota = rawQuota ? Number(rawQuota) : Number.NaN;
-
-  if (!key || extraParts.length > 0 || !Number.isInteger(quota) || quota < 0) {
-    return getUsageCommandUsage(translate);
-  }
-
-  const status = await setUsageQuota(database, chatId, key, quota);
-
-  return translate("settings-usage-updated", {
-    category: translate(USAGE_LABEL_KEYS[status.key]),
-    quota: status.quota,
-  });
+  const s = await getUsageStatus(database, chatId);
+  return [
+    translate("settings-usage-title", { date: getUsageDate() }),
+    translate("settings-usage-line", {
+      used: s.used,
+      quota: s.unlimited ? "∞" : s.quota,
+    }),
+    "",
+    translate("settings-usage-prices"),
+  ].join("\n");
 }
