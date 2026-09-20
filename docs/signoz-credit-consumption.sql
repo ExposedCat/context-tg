@@ -1,5 +1,6 @@
 -- Panel: Credits consumed by mode. Series label comes from the __name__ column.
--- Add a custom variable usage_limit: __all__ (default), unlimited, limited.
+-- Custom variable usage_limit values: __all__,unlimited,limited (select __all__).
+-- Empty usage_limit selections also include all balances.
 -- Filters reflect the billed balance's limit at consumption time (including users).
 -- Set chat_type=group and mode=normal to chart only group balances.
 -- Credit events intentionally have no LLM status: failed attempts remain paid.
@@ -7,7 +8,8 @@
 WITH
     arrayFlatten([$chat_type]) AS selected_chat_types,
     arrayFlatten([$mode]) AS selected_modes,
-    arrayFlatten([$usage_limit]) AS selected_usage_limits,
+    arrayFilter(value -> notEmpty(ifNull(value, '')), arrayFlatten([$usage_limit]))
+        AS selected_usage_limits,
     arrayFlatten([$tools]) AS selected_tools,
     if(
         mapContains(attributes_string, 'tools'),
@@ -47,7 +49,8 @@ WHERE resource_fingerprint GLOBAL IN (
       OR attributes_string['mode'] IN selected_modes
   )
   AND (
-      '__all__' IN selected_usage_limits
+      empty(selected_usage_limits)
+      OR '__all__' IN selected_usage_limits
       OR attributes_string['usage_limit'] IN selected_usage_limits
   )
   AND (

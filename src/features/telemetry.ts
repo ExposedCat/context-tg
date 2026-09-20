@@ -14,6 +14,11 @@ export type LlmCallTelemetryPayload = {
 };
 
 export type BotTelemetryEvents = {
+  message_checked: {
+    chat_type: LlmCallChatType;
+    mode: LlmCallMode;
+    mentioned: boolean;
+  };
   credit_usage: {
     credits: number;
     credit_kind: string;

@@ -2773,6 +2773,14 @@ chatComposer.on("guest_message", async (ctx, next) => {
   }
 
   const incomingMessage = ctx.guestMessage as TextMessage;
+  const incomingText = getMessageText(incomingMessage);
+  ctx.telemetry.event("message_checked", {
+    chat_type: ctx.chat.type === "private" ? "private" : "group",
+    mode: "guest",
+    mentioned: incomingText
+      ? isAddressed(incomingText, ctx.me.username)
+      : false,
+  });
   const mediaGroupMessages = await collectMediaGroupMessages(
     ctx.chat.id,
     incomingMessage,
@@ -2823,6 +2831,15 @@ chatComposer.on("message", async (ctx, next) => {
   }
 
   const incomingMessage = ctx.message as TextMessage;
+  const incomingText = getMessageText(incomingMessage);
+  // Count every incoming message before mention filtering or album selection.
+  ctx.telemetry.event("message_checked", {
+    chat_type: ctx.chat.type === "private" ? "private" : "group",
+    mode: "normal",
+    mentioned: incomingText
+      ? isAddressed(incomingText, ctx.me.username)
+      : false,
+  });
   const mediaGroupMessages = await collectMediaGroupMessages(
     ctx.chat.id,
     incomingMessage,

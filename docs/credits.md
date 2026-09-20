@@ -24,7 +24,11 @@ Each successful debit emits a `credit_usage` OTel event containing numeric
 These are consumption events rather than LLM success events, so failed attempts
 are included. Use [the chart query](signoz-credit-consumption.sql) with the usual
 `bucket`, `chat_type`, `mode`, `tools` variables and a new `usage_limit` variable
-whose default is `__all__`; alternatives are `unlimited` and `limited`.
+of type **Custom**. Enter `__all__,unlimited,limited` as its comma-separated
+values (without quotes), save it, and select `__all__` in the dashboard dropdown.
+The variable name is `usage_limit`, without a dollar sign. Custom dropdowns
+use this explicit list; they are not populated from telemetry. Empty selections
+also mean all balances in the query.
 The filter uses the balance's setting at charge time, not its present setting.
 
 Set the panel legend to `{{__name__}}` in the panel editor, not in the SQL.

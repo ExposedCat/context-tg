@@ -1,4 +1,6 @@
 import { deepStrictEqual, ok, strictEqual } from "node:assert";
+import { Api, Context as GrammyContext } from "grammy";
+import type { Context } from "../bot.ts";
 
 const TEST_ENV = {
   BOT_TOKEN: "test",
@@ -21,6 +23,7 @@ for (const [name, value] of Object.entries(TEST_ENV)) {
 const [
   {
     buildGuestRichMessage,
+    chatComposer,
     formatLlmToolError,
     getAzureDownMessage,
     getErrorRecoveryPrompt,
@@ -34,6 +37,57 @@ const [
   import("./database.ts"),
   import("./images.ts"),
 ]);
+
+Deno.test("messages dropped for missing mentions still emit analytics once", async () => {
+  const ctx = new GrammyContext(
+    {
+      update_id: 1,
+      message: {
+        message_id: 1,
+        date: 0,
+        from: { id: 1, is_bot: false, first_name: "User" },
+        chat: { id: -1, type: "supergroup", title: "Test" },
+        text: "Just chatting without addressing the bot",
+      },
+    },
+    new Api("test"),
+    {
+      id: 42,
+      is_bot: true,
+      first_name: "Test",
+      username: "test_bot",
+      can_join_groups: true,
+      can_read_all_group_messages: true,
+      supports_inline_queries: false,
+      can_connect_to_business: false,
+      has_main_web_app: false,
+      has_topics_enabled: false,
+      allows_users_to_create_topics: false,
+      can_manage_bots: false,
+      supports_join_request_queries: false,
+    },
+  ) as Context;
+  const events: unknown[] = [];
+  ctx.telemetry = {
+    event: (name, payload) => {
+      events.push({ name, payload });
+    },
+  } as Context["telemetry"];
+  let nextCalls = 0;
+
+  await chatComposer.middleware()(ctx, () => {
+    nextCalls++;
+    return Promise.resolve();
+  });
+
+  deepStrictEqual(events, [
+    {
+      name: "message_checked",
+      payload: { chat_type: "group", mode: "normal", mentioned: false },
+    },
+  ]);
+  strictEqual(nextCalls, 1);
+});
 
 Deno.test("tool errors hide details unless debug is enabled", () => {
   const error = {
