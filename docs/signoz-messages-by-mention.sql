@@ -1,7 +1,7 @@
--- Panel: Incoming messages checked for mentions, split by mentioned boolean.
+-- Panel: Total incoming messages checked for mentions, filtered by mentioned.
 -- Existing dashboard variables: bucket, chat_type, mode.
 -- Add a multi-select mentioned variable: __all__ (default), true, false.
--- __all__ includes both series; sum them for total incoming message volume.
+-- __all__ (or selecting both true and false) counts both in a single series.
 -- One event per incoming message reaching the chat handler, before album selection.
 -- mentioned uses the existing leading bot username / agent name matcher.
 -- false includes ignored messages, but also direct replies and guest messages
@@ -23,7 +23,6 @@ WITH
     )
 SELECT
     dateTrunc($bucket, fromUnixTimestamp64Nano(timestamp)) AS ts,
-    mention_label AS __name__,
     toFloat64(count()) AS value
 FROM signoz_logs.distributed_logs_v2
 WHERE resource_fingerprint GLOBAL IN (
@@ -48,7 +47,6 @@ WHERE resource_fingerprint GLOBAL IN (
       OR mention_label IN selected_mentions
   )
 GROUP BY
-    dateTrunc($bucket, fromUnixTimestamp64Nano(timestamp)),
-    mention_label
-ORDER BY ts ASC, __name__ ASC
-SETTINGS log_comment = 'signoz-writing-clickhouse-queries skill | 2026-09-20';
+    dateTrunc($bucket, fromUnixTimestamp64Nano(timestamp))
+ORDER BY ts ASC
+SETTINGS log_comment = 'signoz-writing-clickhouse-queries skill | 2026-09-21';
