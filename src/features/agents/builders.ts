@@ -1,5 +1,5 @@
 export function formatAgentNames(names: readonly string[]): string {
-  return names.map((name) => JSON.stringify(name)).join(", ");
+  return names.length > 0 ? JSON.stringify(names[0]) : "";
 }
 
 export function joinPromptSections(
