@@ -9,7 +9,6 @@ import {
   consumeUsage,
   createCreditCharge,
   getUsageDate,
-  getUsageOwner,
   getUsageStatus,
   handleUsageCommand,
   hasUsageRemaining,
@@ -122,11 +121,7 @@ Deno.test("admin credit adjustments preserve spend and finite limits across unli
   }
 });
 
-Deno.test("normal groups use group credits; guest and DM usage share the user's balance", async () => {
-  strictEqual(getUsageOwner(-1, false, 2), -1);
-  strictEqual(getUsageOwner(-1, true, 2), 2);
-  strictEqual(getUsageOwner(2, false, 2), 2);
-  strictEqual(getUsageOwner(2, true, 99), 2); // Admin in somebody else's DM.
+Deno.test("guest requests spend group credits and obey the group's usage adjustments", async () => {
   const db = await database();
   const events: Array<{ name: string; payload: Record<string, unknown> }> = [];
   const ctx = {
@@ -144,19 +139,22 @@ Deno.test("normal groups use group credits; guest and DM usage share the user's 
     await charge("tool", "generate_image");
     await charge("image_attempt", "generate_image");
     await charge("image_attempt", "generate_image");
-    strictEqual((await getUsageStatus(db, 2)).used, 12);
-    strictEqual((await getUsageStatus(db, -1)).used, 0);
-    await handleUsageCommand(db, 2, "-20", true, t);
+    strictEqual((await getUsageStatus(db, -1)).used, 12);
+    strictEqual((await getUsageStatus(db, 2)).used, 0);
+    await handleUsageCommand(db, -1, "-50", true, t);
     await rejects(() => charge("tool", "web_search"));
     strictEqual(events.length, 4);
-    await handleUsageCommand(db, 2, "+unlimited", true, t);
+    await handleUsageCommand(db, -1, "+50", true, t);
     await charge("request");
-    strictEqual(events[4].payload.usage_limit, "unlimited");
-    strictEqual(events[4].payload.usage_owner, 2);
-    strictEqual(events[4].name, "credit_usage");
+    strictEqual((await getUsageStatus(db, -1)).used, 13);
+    await handleUsageCommand(db, -1, "+unlimited", true, t);
+    await charge("request");
+    strictEqual(events[5].payload.usage_limit, "unlimited");
+    strictEqual(events[5].payload.usage_owner, -1);
+    strictEqual(events[5].name, "credit_usage");
     strictEqual(
       events.reduce((sum, e) => sum + Number(e.payload.credits), 0),
-      13,
+      14,
     );
   } finally {
     await db.destroy();

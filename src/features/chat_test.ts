@@ -1,5 +1,6 @@
 import { deepStrictEqual, ok, strictEqual } from "node:assert";
 import { Api, Context as GrammyContext } from "grammy";
+import { I18n } from "grammy-i18n";
 import type { Context } from "../bot.ts";
 
 const TEST_ENV = {
@@ -103,8 +104,9 @@ Deno.test("tool errors hide details unless debug is enabled", () => {
 });
 
 Deno.test("guest usage commands report and adjust group credits without changing personal credits", async () => {
-  const { getUsageStatus } = await import("./usage.ts");
+  const { createCreditCharge, getUsageStatus } = await import("./usage.ts");
   const database = await initDatabase()();
+  const i18n = new I18n({ directory: "locales", defaultLocale: "en" });
   try {
     for (const [args, expectedQuota] of [
       ["+10", 60],
@@ -132,10 +134,13 @@ Deno.test("guest usage commands report and adjust group credits without changing
       ) as Context;
       ctx.database = database;
       ctx.telemetry = { event: () => {} } as Context["telemetry"];
-      ctx.t = (key, values) =>
-        key === "settings-usage-prices"
-          ? "Request · 1 credit\nTool use · 1 credit\nResets daily at 00:00 UTC."
-          : `${key}:${JSON.stringify(values)}`;
+      ctx.t = (key, values) => i18n.t("en", key, values);
+      if (args === "+10") {
+        const charge = createCreditCharge(ctx, true);
+        await charge("request");
+        await charge("tool", "generate_image");
+        await charge("image_attempt", "generate_image");
+      }
       const responses: Array<Parameters<Context["answerGuestQuery"]>[0]> = [];
       ctx.answerGuestQuery = (result) => {
         responses.push(result);
@@ -154,16 +159,19 @@ Deno.test("guest usage commands report and adjust group credits without changing
       const response = responses[0];
       ok(response.type === "article");
       deepStrictEqual(response.input_message_content, {
-        message_text: [
-          ctx.t("settings-usage-title", {
-            date: new Date().toISOString().slice(0, 10),
-          }),
-          ctx.t("settings-usage-line", { used: 0, quota: expectedQuota }),
-          "",
-          "Request · 1 credit",
-          "Tool use · 1 credit",
-          "Resets daily at 00:00 UTC.",
-        ].join("\n"),
+        rich_message: {
+          blocks: [
+            ctx.t("settings-usage-title", {
+              date: new Date().toISOString().slice(0, 10),
+            }),
+            ctx.t("settings-usage-line", { used: 7, quota: expectedQuota }),
+            "Request · 1 credit",
+            "Tool use · 1 credit",
+            "Web search · +1 credit",
+            "Image generation · +5 credits per attempt (retries count)",
+            "Resets daily at 00:00 UTC.",
+          ].map((text) => ({ type: "paragraph", text })),
+        },
       });
     }
   } finally {

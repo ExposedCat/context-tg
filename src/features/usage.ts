@@ -47,15 +47,6 @@ export function getUsageDate(date = new Date()): string {
 export function defaultQuota(chatId: number): number {
   return chatId < 0 ? 50 : 20;
 }
-export function getUsageOwner(
-  chatId: number,
-  guest: boolean,
-  userId?: number,
-): number {
-  if (!guest || chatId > 0) return chatId;
-  if (!userId) throw new Error("Guest usage requires a user ID.");
-  return userId;
-}
 export async function getUsageStatus(
   database: Database,
   chatId: number,
@@ -112,7 +103,7 @@ export async function consumeUsage(
 }
 export function createCreditCharge(ctx: Context, guest = false): CreditCharge {
   if (!ctx.chat) throw new Error("Credit usage requires a chat.");
-  const owner = getUsageOwner(ctx.chat.id, guest, ctx.from?.id);
+  const owner = ctx.chat.id;
   return async (kind, tool) => {
     const amount = CREDIT_PRICES[kind];
     const status = await consumeUsage(ctx.database, owner, amount);

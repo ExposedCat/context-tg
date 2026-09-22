@@ -1,10 +1,13 @@
 # Usage credits
 
 Balances reset at 00:00 UTC: groups receive 50 credits/day; users receive 20.
-Normal group requests spend only the group balance. Bot DMs and guest requests
-share a user balance. `/usage` commands, including guest commands, address the
+Group requests, including guest requests, spend the group balance. Requests in
+private chats spend that chat owner's balance. `/usage` commands address the
 current chat's balance: the group balance in groups and the chat owner's balance
 in private chats.
+
+Guest spend recorded under the previous personal-balance policy stays on those
+personal balances; only new guest requests use the group balance.
 
 A request costs 1 credit. Each tool invocation costs 1 more; web search adds 1,
 and each image API attempt adds 5 (including the alternate-model retry).

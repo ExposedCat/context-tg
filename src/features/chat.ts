@@ -1821,7 +1821,14 @@ async function sendGuestTextResponse(
       id: `guest-${message.message_id}`,
       title: "Laylo",
       description: formatGuestResultDescription(text),
-      input_message_content: { message_text: text },
+      input_message_content: {
+        rich_message: {
+          blocks: text
+            .split(/\r?\n/)
+            .filter((line) => line.trim())
+            .map((line) => ({ type: "paragraph", text: line })),
+        },
+      },
     });
   } catch (error) {
     logError("Failed to answer guest query:", error);
