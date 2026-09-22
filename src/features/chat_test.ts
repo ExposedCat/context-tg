@@ -132,8 +132,11 @@ Deno.test("guest usage commands report and adjust group credits without changing
       ) as Context;
       ctx.database = database;
       ctx.telemetry = { event: () => {} } as Context["telemetry"];
-      ctx.t = (key, values) => `${key}:${JSON.stringify(values)}`;
-      const responses: unknown[] = [];
+      ctx.t = (key, values) =>
+        key === "settings-usage-prices"
+          ? "Request · 1 credit\nTool use · 1 credit\nResets daily at 00:00 UTC."
+          : `${key}:${JSON.stringify(values)}`;
+      const responses: Array<Parameters<Context["answerGuestQuery"]>[0]> = [];
       ctx.answerGuestQuery = (result) => {
         responses.push(result);
         return Promise.resolve({ inline_message_id: "test" });
@@ -148,7 +151,20 @@ Deno.test("guest usage commands report and adjust group credits without changing
         unlimited: false,
       });
       strictEqual(responses.length, 1);
-      ok(JSON.stringify(responses[0]).includes(`\\"quota\\":${expectedQuota}`));
+      const response = responses[0];
+      ok(response.type === "article");
+      deepStrictEqual(response.input_message_content, {
+        message_text: [
+          ctx.t("settings-usage-title", {
+            date: new Date().toISOString().slice(0, 10),
+          }),
+          ctx.t("settings-usage-line", { used: 0, quota: expectedQuota }),
+          "",
+          "Request · 1 credit",
+          "Tool use · 1 credit",
+          "Resets daily at 00:00 UTC.",
+        ].join("\n"),
+      });
     }
   } finally {
     await database.destroy();

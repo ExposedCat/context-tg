@@ -1810,6 +1810,25 @@ async function sendGuestMarkdownResponse(
   }
 }
 
+async function sendGuestTextResponse(
+  ctx: Context,
+  message: TextMessage,
+  text: string,
+): Promise<void> {
+  try {
+    await ctx.answerGuestQuery({
+      type: "article",
+      id: `guest-${message.message_id}`,
+      title: "Laylo",
+      description: formatGuestResultDescription(text),
+      input_message_content: { message_text: text },
+    });
+  } catch (error) {
+    logError("Failed to answer guest query:", error);
+    await ctx.reply(text, getReplyDeliveryOptions(message, undefined));
+  }
+}
+
 function getResumeCommand(messageId: number): string {
   return `/resume_${messageId}`;
 }
@@ -2805,7 +2824,7 @@ chatComposer.on("guest_message", async (ctx, next) => {
       ctx.t,
     );
 
-    await sendGuestMarkdownResponse(ctx, message, response);
+    await sendGuestTextResponse(ctx, message, response);
     return;
   }
 
