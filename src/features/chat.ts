@@ -78,7 +78,6 @@ import {
 } from "./threads.ts";
 import {
   createCreditCharge,
-  getUsageOwner,
   handleUsageCommand,
   hasUsageRemaining,
   parseGuestUsageCommand,
@@ -2800,7 +2799,7 @@ chatComposer.on("guest_message", async (ctx, next) => {
   if (usageArgs !== undefined) {
     const response = await handleUsageCommand(
       ctx.database,
-      getUsageOwner(ctx.chat.id, true, ctx.from?.id),
+      ctx.chat.id,
       usageArgs,
       isBotAdmin(ctx),
       ctx.t,

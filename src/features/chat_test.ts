@@ -102,6 +102,59 @@ Deno.test("tool errors hide details unless debug is enabled", () => {
   );
 });
 
+Deno.test("guest usage commands report and adjust group credits without changing personal credits", async () => {
+  const { getUsageStatus } = await import("./usage.ts");
+  const database = await initDatabase()();
+  try {
+    for (const [args, expectedQuota] of [
+      ["+10", 60],
+      ["-20", 40],
+      ["", 40],
+    ] as const) {
+      const ctx = new GrammyContext(
+        {
+          update_id: 1,
+          guest_message: {
+            message_id: 1,
+            date: 0,
+            from: { id: 1, is_bot: false, first_name: "Admin" },
+            chat: { id: -1, type: "supergroup", title: "Test" },
+            text: `@test_bot /usage ${args}`,
+          },
+        },
+        new Api("test"),
+        {
+          id: 42,
+          is_bot: true,
+          first_name: "Test",
+          username: "test_bot",
+        } as Context["me"],
+      ) as Context;
+      ctx.database = database;
+      ctx.telemetry = { event: () => {} } as Context["telemetry"];
+      ctx.t = (key, values) => `${key}:${JSON.stringify(values)}`;
+      const responses: unknown[] = [];
+      ctx.answerGuestQuery = (result) => {
+        responses.push(result);
+        return Promise.resolve({ inline_message_id: "test" });
+      };
+      await chatComposer.middleware()(ctx, () => {
+        throw new Error("Usage command should be handled");
+      });
+      strictEqual((await getUsageStatus(database, -1)).quota, expectedQuota);
+      deepStrictEqual(await getUsageStatus(database, 1), {
+        used: 0,
+        quota: 20,
+        unlimited: false,
+      });
+      strictEqual(responses.length, 1);
+      ok(JSON.stringify(responses[0]).includes(`\\"quota\\":${expectedQuota}`));
+    }
+  } finally {
+    await database.destroy();
+  }
+});
+
 Deno.test("Azure upstream outages use a plain custom-emoji message", () => {
   deepStrictEqual(
     getAzureDownMessage(

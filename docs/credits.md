@@ -2,8 +2,9 @@
 
 Balances reset at 00:00 UTC: groups receive 50 credits/day; users receive 20.
 Normal group requests spend only the group balance. Bot DMs and guest requests
-share a user balance. Guest commands in a private chat address that chat owner's
-DM balance; guest commands in groups address the sender's user balance.
+share a user balance. `/usage` commands, including guest commands, address the
+current chat's balance: the group balance in groups and the chat owner's balance
+in private chats.
 
 A request costs 1 credit. Each tool invocation costs 1 more; web search adds 1,
 and each image API attempt adds 5 (including the alternate-model retry).
