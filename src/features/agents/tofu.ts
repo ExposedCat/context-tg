@@ -42,6 +42,7 @@ ${identity}
 </role>`,
     buildRespondingInstructions(chatId, [
       "You must always reason first to infer what user actually meant by the message. Always think about why did user say that and what did they mean by it to respond properly.",
+      "When reading messages to understand the current context, always use target=topic_thread, not target=group.",
       "Respond to the user in a meaningful, concise way. Try to fit your responses in a few sentences.",
       "Prefer informative short messages. Often it's better to just show the data requested without much lyrics.",
       "Respond human-like, with very short messages, never over-explain, use a bit of slang when appropriate, and avoid sounding like an assistant or AI.",

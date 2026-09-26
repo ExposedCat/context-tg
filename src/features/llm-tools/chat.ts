@@ -20,7 +20,7 @@ export const searchChatToolDefinition = {
   type: "function",
   name: "search_chat",
   description:
-    "Search remembered messages in the current Telegram chat or forum topic using semantic and lexical matching. Returns a JSON array of relevant conversation windows, with each matched anchor surrounded by nearby messages and its reply parent when available. Telegram photos and image documents are represented as reusable tg://photo or tg://document Markdown, followed by their caption when present; inspect one by passing its exact ID to read_image. Messages from the same album share media_group_id. Telegram stickers are represented as [sticker EMOJI]. The sender_id and date filters are optional; only use them when the user explicitly needs a sender or date range filter. Prefer using only queries.",
+    "Search remembered messages using semantic and lexical matching. Prefer target=topic_thread for the current forum topic; use target=group to search all topics in the group. Infer the intended scope from context; if unclear, briefly ask whether the user means this topic or the entire group. Returns a JSON array of relevant conversation windows, with each matched anchor surrounded by nearby messages and its reply parent when available. Telegram photos and image documents are represented as reusable tg://photo or tg://document Markdown, followed by their caption when present; inspect one by passing its exact ID to read_image. Messages from the same album share media_group_id. Telegram stickers are represented as [sticker EMOJI]. The sender_id and date filters are optional; only use them when the user explicitly needs a sender or date range filter. Prefer using only queries and target.",
   parameters: {
     type: "object",
     properties: {
@@ -31,6 +31,12 @@ export const searchChatToolDefinition = {
         items: {
           type: "string",
         },
+      },
+      target: {
+        type: "string",
+        enum: ["topic_thread", "group"],
+        description:
+          "topic_thread searches the current forum topic; group searches the entire current group, including all topics.",
       },
       exact_phrases: {
         type: "array",
@@ -56,7 +62,7 @@ export const searchChatToolDefinition = {
           "Optional Telegram sender id. Only use when the user explicitly gives or requires a sender id filter.",
       },
     },
-    required: ["queries"],
+    required: ["queries", "target"],
     additionalProperties: false,
   },
   strict: false,
@@ -66,7 +72,7 @@ export const readLastMessagesToolDefinition = {
   type: "function",
   name: "read_last_messages",
   description:
-    "Read recent remembered text messages from the current Telegram chat. Returns a JSON array of message objects. Only quote messages when you are asked to do so. If you are tasked to do a summary or help with ongoing discussion, you must read messages as an extra context, do not just list or recite entire discussion unless explicitly requested to do so.",
+    "Read recent remembered text messages. Prefer target=topic_thread for the current forum topic, especially when reading for context; use target=group for all topics in the group. Infer the intended scope from context; if unclear, briefly ask whether the user means this topic or the entire group. Returns a JSON array of message objects. Only quote messages when you are asked to do so. If you are tasked to do a summary or help with ongoing discussion, you must read messages as extra context, do not just list or recite entire discussion unless explicitly requested to do so.",
   parameters: {
     type: "object",
     properties: {
@@ -77,8 +83,14 @@ export const readLastMessagesToolDefinition = {
         minimum: 1,
         maximum: MAX_LAST_MESSAGES_COUNT,
       },
+      target: {
+        type: "string",
+        enum: ["topic_thread", "group"],
+        description:
+          "topic_thread reads the current forum topic; group reads the entire current group, including all topics.",
+      },
     },
-    required: ["count"],
+    required: ["count", "target"],
     additionalProperties: false,
   },
   strict: true,
@@ -133,6 +145,13 @@ function parseMessageId(value: unknown): number | undefined {
 function parseRadius(value: unknown): number {
   const radius = getFiniteNumber(value);
   return Math.max(1, Math.min(10, Math.floor(radius ?? 1)));
+}
+
+function getTargetThreadId(
+  target: unknown,
+  threadId: number | undefined,
+): number | undefined {
+  return target === "group" ? undefined : threadId;
 }
 
 function formatMessageData(
@@ -237,7 +256,7 @@ export const executeSearchChat: FunctionToolRunner = async (args, context) => {
     from: getOptionalDate(args?.from),
     to: getOptionalDate(args?.to),
     chatId: context.chatId,
-    threadId: context.threadId,
+    threadId: getTargetThreadId(args?.target, context.threadId),
     senderId: getFiniteNumber(args?.sender_id),
     limit: 6,
   });
@@ -292,7 +311,7 @@ export const executeReadLastMessages: FunctionToolRunner = async (
   const messages = await readLastMessages(parseCount(args?.count), {
     chatId: context.chatId,
     ...(anchorMessageId !== undefined ? { messageId: anchorMessageId } : {}),
-    threadId: context.threadId,
+    threadId: getTargetThreadId(args?.target, context.threadId),
   });
 
   return formatMessagesJson(messages);
