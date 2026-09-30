@@ -67,7 +67,11 @@ import {
   hasResumableTask,
   type TaskStatus,
 } from "./tasks.ts";
-import { disabledLinkPreviewOptions as linkPreviewOptions } from "./telegram.ts";
+import {
+  getMessageTopicId,
+  isImplicitTopicReply,
+  disabledLinkPreviewOptions as linkPreviewOptions,
+} from "./telegram.ts";
 import { createLlmCallTelemetry } from "./telemetry.ts";
 import {
   createThread,
@@ -112,6 +116,7 @@ type LlmContextMessage = {
 
 type TextMessage = LlmContextMessage & {
   message_id: number;
+  chat?: TelegramChat;
   message_thread_id?: number;
   is_topic_message?: boolean;
   quote?: {
@@ -157,6 +162,7 @@ type TelegramUser = {
 
 type TelegramChat = {
   id?: number;
+  type?: string;
   first_name?: string;
   last_name?: string;
   title?: string;
@@ -687,27 +693,10 @@ function isDirectReplyToBot(
   return reply?.from?.id === botId;
 }
 
-function isImplicitForumTopicReply(
-  message: TextMessage,
-  reply: TextMessage | undefined,
-): boolean {
-  return (
-    message.message_thread_id !== undefined &&
-    reply?.message_id === message.message_thread_id
-  );
-}
-
 function getActualReply(message: TextMessage): TextMessage | undefined {
   const reply = message.reply_to_message;
 
-  return isImplicitForumTopicReply(message, reply) ? undefined : reply;
-}
-
-function getForumThreadId(
-  message: TextMessage,
-  reply: TextMessage | undefined,
-): number | undefined {
-  return message.message_thread_id ?? reply?.message_thread_id;
+  return isImplicitTopicReply(message, reply) ? undefined : reply;
 }
 
 function getQuoteReplyContextText(message: TextMessage): string | undefined {
@@ -872,7 +861,7 @@ function getLlmToolContext(
     userId: message.from?.id,
     userName: getTelegramUserName(message.from),
     replyMessageId: reply?.message_id,
-    threadId: getForumThreadId(message, reply),
+    threadId: getMessageTopicId(message, reply),
   };
 }
 
@@ -1605,7 +1594,7 @@ function getReplyDeliveryOptions(
   const targetMessageId =
     replyMessageId === undefined ? message.message_id : replyMessageId;
 
-  const threadId = getForumThreadId(message, getActualReply(message));
+  const threadId = getMessageTopicId(message, getActualReply(message));
   return {
     ...(threadId !== undefined ? { message_thread_id: threadId } : {}),
     ...(targetMessageId === null
@@ -2168,7 +2157,7 @@ async function handleChatRequest(
     const agentName = trigger?.name ?? thread?.agent_name ?? agent.name[0];
     activeAgent = agent;
     activeAgentName = agentName;
-    const topicId = getForumThreadId(message, reply);
+    const topicId = getMessageTopicId(message, reply);
     if (options.nameThread && topicId !== undefined) {
       threadNaming = safelyNamePrivateThread(
         ctx,
@@ -2566,7 +2555,7 @@ async function handleGuestChatRequest(
       : undefined;
     const threadId =
       thread?.thread_id ??
-      getForumThreadId(message, reply) ??
+      getMessageTopicId(message, reply) ??
       message.message_thread_id ??
       message.message_id;
     const responseId = getThreadResponseId(thread);
@@ -2762,7 +2751,7 @@ export async function maybeSendProactiveAgentResponse(
   }
 
   const reply = getActualReply(textMessage);
-  const threadId = getForumThreadId(textMessage, reply);
+  const threadId = getMessageTopicId(textMessage, reply);
   const messages = await readLastMessages(PROACTIVE_CONTEXT_MESSAGE_COUNT, {
     chatId,
     messageId: message.message_id,
@@ -2908,7 +2897,7 @@ chatComposer.on("message", async (ctx, next) => {
 
   const incomingMessage = ctx.message as TextMessage;
   const incomingText = getMessageText(incomingMessage);
-  const topicId = getForumThreadId(
+  const topicId = getMessageTopicId(
     incomingMessage,
     getActualReply(incomingMessage),
   );

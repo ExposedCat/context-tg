@@ -6,15 +6,18 @@ import type { Database } from "./database.ts";
 import { APP_ENV } from "./env.ts";
 import { formatImageMarkdown, saveImageFileId } from "./images.ts";
 import { startsWithCommandPrefix } from "./message-filter.ts";
+import { getMessageTopicId, isImplicitTopicReply } from "./telegram.ts";
 
 export type RememberedMessage = {
   message_id: number;
+  chat?: { type: string };
   message_thread_id?: number;
   media_group_id?: string;
   is_topic_message?: boolean;
   reply_to_message?: {
     message_id: number;
     message_thread_id?: number;
+    is_topic_message?: boolean;
   };
   date: number;
   text?: string;
@@ -381,18 +384,13 @@ async function embed(texts: string[]): Promise<number[][]> {
 }
 
 function getMessageThreadId(message: RememberedMessage): number | undefined {
-  return (
-    message.message_thread_id ?? message.reply_to_message?.message_thread_id
-  );
+  return getMessageTopicId(message, message.reply_to_message);
 }
 
 function getReplyToMessageId(message: RememberedMessage): number | undefined {
   const replyMessageId = message.reply_to_message?.message_id;
 
-  if (
-    message.message_thread_id !== undefined &&
-    replyMessageId === message.message_thread_id
-  ) {
+  if (isImplicitTopicReply(message, message.reply_to_message)) {
     return undefined;
   }
 

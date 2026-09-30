@@ -207,6 +207,255 @@ Deno.test("trigger aliases persist through replies and update on explicit trigge
   }
 });
 
+Deno.test("group replies retain their parent and history scope while forum topics stay isolated", async () => {
+  const { getThread } = await import("./threads.ts");
+  const { setLlmDeploymentName } = await import("./llm-deployments.ts");
+  const database = await initDatabase()();
+  const originalFetch = globalThis.fetch;
+  const chat = { id: -1, type: "supergroup", title: "Test" } as const;
+  const bot = {
+    id: 42,
+    is_bot: true,
+    first_name: "Bot",
+    username: "test_bot",
+  } as Context["me"];
+  const user = { id: 1, is_bot: false, first_name: "User" };
+  const api = new Api("test");
+  const deliveries: unknown[] = [];
+  const requests: Array<{ input: unknown }> = [];
+  const scrolls: Array<{ filter: { must: unknown[] } }> = [];
+  let sentMessageId = 100;
+  let callHistoryTool = true;
+  api.sendChatAction = async () => true;
+  api.sendRichMessage = async (_chatId, _text, options) => {
+    deliveries.push(options);
+    return {
+      message_id: ++sentMessageId,
+      date: 0,
+      chat,
+      from: bot,
+      rich_message: { blocks: [{ type: "paragraph", text: "Done." }] },
+    };
+  };
+  globalThis.fetch = (async (input, init) => {
+    const url = String(input);
+    const payload = init?.body ? JSON.parse(String(init.body)) : undefined;
+    if (url.startsWith(TEST_ENV.QDRANT_URL)) {
+      if (url.endsWith("/points/scroll")) {
+        scrolls.push(payload);
+        // Honor the filter: an ordinary reply-chain ID is not a topic.
+        const scope = payload.filter.must.find(
+          (part: { key: string }) => part.key === "thread_id",
+        );
+        const text =
+          scope === undefined
+            ? "Earlier group discussion"
+            : scope.match.value === 70
+              ? "Earlier forum discussion"
+              : undefined;
+        return Response.json({
+          result: {
+            points: text
+              ? [
+                  {
+                    id: "history",
+                    payload: {
+                      text,
+                      date: new Date(0).toISOString(),
+                      date_timestamp: 0,
+                      sender_name: "User",
+                      sender_id: 1,
+                      chat_id: chat.id,
+                      message_id: 5,
+                      ...(scope ? { thread_id: scope.match.value } : {}),
+                    },
+                  },
+                ]
+              : [],
+          },
+        });
+      }
+      return Response.json({ result: { payload_schema: {} } });
+    }
+    strictEqual(url, `${TEST_ENV.LLM_BASE_URL}/responses`);
+    requests.push(payload);
+    const output = callHistoryTool
+      ? [
+          {
+            type: "function_call",
+            id: `fc_${requests.length}`,
+            call_id: `call_${requests.length}`,
+            name: "read_last_messages",
+            arguments: '{"count":10,"target":"topic_thread"}',
+          },
+        ]
+      : [
+          {
+            type: "message",
+            role: "assistant",
+            status: "completed",
+            content: [{ type: "output_text", text: "Done.", annotations: [] }],
+          },
+        ];
+    callHistoryTool = !callHistoryTool;
+    return Response.json({
+      id: `resp_group_${requests.length}`,
+      object: "response",
+      created_at: 1,
+      status: "completed",
+      output,
+    });
+  }) as typeof fetch;
+
+  try {
+    setLlmDeploymentName("small", "test-model");
+    const cases = [
+      {
+        id: 20,
+        topic: 7,
+        replyId: 7,
+        replyBot: false,
+        text: "laylo explain this discussion",
+        anchor: 7,
+        scope: undefined,
+        previous: null,
+      },
+      {
+        id: 21,
+        topic: 7,
+        replyTopic: 7,
+        replyId: 101,
+        replyBot: true,
+        text: "continue",
+        anchor: 101,
+        scope: undefined,
+        previous: "resp_group_2",
+      },
+      {
+        id: 22,
+        replyTopic: 7,
+        replyId: 7,
+        replyBot: false,
+        text: "laylo another question",
+        anchor: 7,
+        scope: undefined,
+        previous: null,
+      },
+      {
+        id: 23,
+        topic: 8,
+        replyId: 8,
+        replyBot: true,
+        text: "explain this reply",
+        anchor: 8,
+        scope: undefined,
+        previous: null,
+      },
+      {
+        id: 80,
+        topic: 70,
+        forum: true,
+        replyId: 70,
+        replyBot: false,
+        text: "laylo explain this topic",
+        anchor: undefined,
+        scope: 70,
+        previous: null,
+      },
+      {
+        id: 81,
+        replyTopic: 70,
+        replyForum: true,
+        replyId: 105,
+        replyBot: true,
+        text: "laylo explain this forum reply",
+        anchor: 105,
+        scope: 70,
+        previous: "resp_group_10",
+      },
+    ];
+    for (const [index, test] of cases.entries()) {
+      const reply = {
+        message_id: test.replyId,
+        date: 0,
+        chat,
+        from: test.replyBot ? bot : user,
+        text: `Parent ${test.replyId}`,
+        message_thread_id: test.replyTopic,
+        is_topic_message: test.replyForum,
+        reply_to_message: undefined,
+      };
+      const ctx = new GrammyContext(
+        {
+          update_id: test.id,
+          message: {
+            message_id: test.id,
+            date: 0,
+            chat,
+            from: user,
+            text: test.text,
+            message_thread_id: test.topic,
+            is_topic_message: test.forum,
+            reply_to_message: reply,
+          },
+        },
+        api,
+        bot,
+      ) as Context;
+      ctx.database = database;
+      ctx.telemetry = { event: () => {} } as Context["telemetry"];
+      await chatComposer.middleware()(ctx, async () => {
+        throw new Error("Group request should be handled");
+      });
+      strictEqual(deliveries.length, index + 1);
+      const requestText = JSON.stringify(requests[index * 2].input);
+      if (test.anchor !== undefined)
+        ok(requestText.includes(`Parent ${test.replyId}`) || test.previous);
+      else ok(!requestText.includes(`Parent ${test.replyId}`));
+      deepStrictEqual(scrolls[index].filter.must, [
+        { key: "chat_id", match: { value: chat.id } },
+        ...(test.scope !== undefined
+          ? [{ key: "thread_id", match: { value: test.scope } }]
+          : []),
+        ...(test.anchor !== undefined
+          ? [{ key: "message_id", range: { lte: test.anchor } }]
+          : []),
+      ]);
+      ok(
+        JSON.stringify(requests[index * 2 + 1].input).includes(
+          test.scope === undefined
+            ? "Earlier group discussion"
+            : "Earlier forum discussion",
+        ),
+      );
+      const history = await database
+        .selectFrom("llm_chat_responses")
+        .selectAll()
+        .where("response_id", "=", `resp_group_${index * 2 + 1}`)
+        .executeTakeFirstOrThrow();
+      strictEqual(history.previous_response_id, test.previous);
+      const thread = await getThread(database, {
+        chat_id: chat.id,
+        message_id: test.id,
+      });
+      ok(thread);
+      const delivery = deliveries[index] as {
+        message_thread_id?: number;
+        reply_parameters: unknown;
+      };
+      strictEqual(delivery.message_thread_id, test.scope);
+      deepStrictEqual(delivery.reply_parameters, {
+        message_id: test.id,
+        allow_sending_without_reply: true,
+      });
+    }
+  } finally {
+    globalThis.fetch = originalFetch;
+    setLlmDeploymentName("small", "");
+    await database.destroy();
+  }
+});
+
 Deno.test("DMs continue without mentions with or without topic IDs and preserve explicit reply branches", async () => {
   const { getThread, migrateThreads } = await import("./threads.ts");
   const { maybeSendProactiveAgentResponse } = await import("./chat.ts");

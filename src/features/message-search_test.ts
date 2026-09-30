@@ -125,6 +125,113 @@ Deno.test("slash commands are indexed and reindexed without triggering automatic
   }
 });
 
+Deno.test("indexing preserves ordinary group reply parents and scopes only real topics", async () => {
+  const originalFetch = globalThis.fetch;
+  const indexed: MessageMetadata[] = [];
+  globalThis.fetch = (async (input, init) => {
+    const url = String(input);
+    const body = init?.body ? JSON.parse(String(init.body)) : undefined;
+    if (url === `${TEST_ENV.EMBEDDER_BASE_URL}/embeddings`) {
+      return Response.json({ data: [{ index: 0, embedding: [1, 0] }] });
+    }
+    ok(url.startsWith(TEST_ENV.QDRANT_URL), `Unexpected request: ${url}`);
+    if (url.endsWith("/points")) indexed.push(body.points[0].payload);
+    return Response.json({ result: { payload_schema: {} } });
+  }) as typeof fetch;
+  setIndexedTextMessageHandler(async () => {});
+  try {
+    const cases = [
+      { private: false, topic: 7, replyId: 7, expectedReply: 7, edited: false },
+      { private: false, topic: 7, replyId: 8, expectedReply: 8, edited: true },
+      {
+        private: false,
+        replyTopic: 7,
+        replyId: 7,
+        expectedReply: 7,
+        edited: false,
+      },
+      {
+        private: false,
+        forum: true,
+        topic: 7,
+        replyId: 7,
+        expectedTopic: 7,
+        edited: false,
+      },
+      {
+        private: false,
+        forum: true,
+        topic: 7,
+        replyId: 8,
+        expectedTopic: 7,
+        expectedReply: 8,
+        edited: true,
+      },
+      {
+        private: false,
+        replyForum: true,
+        replyTopic: 7,
+        replyId: 8,
+        expectedTopic: 7,
+        expectedReply: 8,
+        edited: false,
+      },
+      { private: true, topic: 7, replyId: 7, expectedTopic: 7, edited: false },
+      {
+        private: true,
+        topic: 7,
+        replyId: 8,
+        expectedTopic: 7,
+        expectedReply: 8,
+        edited: false,
+      },
+    ];
+    for (const [index, test] of cases.entries()) {
+      const chat = test.private
+        ? ({ id: 1, type: "private", first_name: "User" } as const)
+        : ({ id: -1, type: "supergroup", title: "Test" } as const);
+      const message = {
+        message_id: index + 20,
+        date: 1,
+        edit_date: 1,
+        chat,
+        from: { id: 1, is_bot: false, first_name: "User" },
+        text: "Discussion",
+        message_thread_id: test.topic,
+        is_topic_message: test.forum,
+        reply_to_message: {
+          message_id: test.replyId,
+          message_thread_id: test.replyTopic,
+          is_topic_message: test.replyForum,
+          date: 0,
+          chat,
+          text: "Parent",
+          reply_to_message: undefined,
+        },
+      };
+      const ctx = new GrammyContext(
+        {
+          update_id: index + 1,
+          ...(test.edited ? { edited_message: message } : { message }),
+        },
+        new Api("test"),
+        {} as Context["me"],
+      ) as Context;
+      await messagesComposer.middleware()(ctx, async () => {});
+      for (let attempt = 0; attempt < 100; attempt++) {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        if (indexed.length === index + 1) break;
+      }
+      strictEqual(indexed.length, index + 1);
+      strictEqual(indexed[index].reply_to_message_id, test.expectedReply);
+      strictEqual(indexed[index].thread_id, test.expectedTopic);
+    }
+  } finally {
+    globalThis.fetch = originalFetch;
+    setIndexedTextMessageHandler(async () => {});
+  }
+});
+
 function createMessage(
   messageId: number,
   overrides: Partial<MessageMetadata> = {},
