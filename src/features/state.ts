@@ -244,19 +244,6 @@ function formatModelDisplayName(translate: Context["t"], id: string): string {
   }
 }
 
-function formatModelCommandStatus(translate: Context["t"]): string {
-  return [
-    translate("settings-model-status-title"),
-    ...LLM_DEPLOYMENT_OPTIONS.map(
-      (deployment) =>
-        `${formatModelDisplayName(translate, deployment.id)} - ${
-          deployment.deploymentName || translate("settings-model-not-set")
-        }`,
-    ),
-    getModelCommandUsage(translate),
-  ].join("\n");
-}
-
 function buildSettingsKeyboard(
   translate: Context["t"],
   options: readonly string[],
@@ -416,15 +403,14 @@ stateComposer.command("usage", async (ctx) => {
 });
 
 stateComposer.command("model", async (ctx) => {
-  if (!isBotAdmin(ctx)) {
-    await ctx.reply(ctx.t("settings-model-admin-only"));
-    return;
-  }
-
   const args = typeof ctx.match === "string" ? ctx.match.trim() : "";
 
   if (!args) {
-    await ctx.reply(formatModelCommandStatus(ctx.t));
+    return;
+  }
+
+  if (!isBotAdmin(ctx)) {
+    await ctx.reply(ctx.t("settings-model-admin-only"));
     return;
   }
 
