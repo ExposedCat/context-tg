@@ -1,4 +1,7 @@
 import { deepStrictEqual, ok, strictEqual } from "node:assert";
+import { Api, Context as GrammyContext } from "grammy";
+import type { MessageEntity } from "grammy/types";
+import type { Context } from "../bot.ts";
 
 const TEST_ENV = {
   BOT_TOKEN: "test",
@@ -25,6 +28,8 @@ const [
     containsExactPhrase,
     formatRememberedMessageContent,
     fuseRankedMessageLists,
+    messagesComposer,
+    setIndexedTextMessageHandler,
   },
   { formatMessageContextJson },
   { initDatabase },
@@ -37,6 +42,88 @@ const [
 
 type MessageMetadata = import("./messages.ts").MessageMetadata;
 type MessageSearchResult = import("./messages.ts").MessageSearchResult;
+
+Deno.test("slash commands are indexed and reindexed without triggering automatic responses", async () => {
+  const originalFetch = globalThis.fetch;
+  const indexed: MessageMetadata[] = [];
+  const triggered: number[] = [];
+  const embedded: string[] = [];
+  globalThis.fetch = (async (input, init) => {
+    const url = String(input);
+    const body = init?.body ? JSON.parse(String(init.body)) : undefined;
+    if (url === `${TEST_ENV.EMBEDDER_BASE_URL}/embeddings`) {
+      embedded.push(...body.input);
+      return Response.json({ data: [{ index: 0, embedding: [1, 0] }] });
+    }
+    ok(url.startsWith(TEST_ENV.QDRANT_URL), `Unexpected request: ${url}`);
+    if (url.endsWith("/points")) {
+      indexed.push(body.points[0].payload);
+    }
+    return Response.json({ result: { payload_schema: {} } });
+  }) as typeof fetch;
+  setIndexedTextMessageHandler(async (_ctx, message) => {
+    triggered.push(message.message_id);
+  });
+
+  try {
+    const cases: Array<{
+      text?: string;
+      caption?: string;
+      entities?: MessageEntity[];
+      caption_entities?: MessageEntity[];
+      edited?: boolean;
+    }> = [
+      { text: "/unknown laylo" },
+      {
+        text: "/settings@test_bot",
+        entities: [{ type: "bot_command", offset: 0, length: 18 }],
+      },
+      { text: "  /unknown @test_bot" },
+      {
+        caption: "/unknown laylo",
+        caption_entities: [{ type: "bot_command", offset: 0, length: 8 }],
+      },
+      { text: "/edited laylo", edited: true },
+      { text: "Ordinary conversation" },
+    ];
+    let nextCalls = 0;
+    for (const [index, entry] of cases.entries()) {
+      const message = {
+        message_id: index + 1,
+        date: 1,
+        edit_date: 1,
+        from: { id: 1, is_bot: false, first_name: "User" },
+        chat: { id: -1, type: "supergroup", title: "Test" } as const,
+        ...entry,
+      };
+      const ctx = new GrammyContext(
+        {
+          update_id: index + 1,
+          ...(entry.edited ? { edited_message: message } : { message }),
+        },
+        new Api("test"),
+        {} as Context["me"],
+      ) as Context;
+      await messagesComposer.middleware()(ctx, async () => {
+        // A downstream command handler may consume the update.
+        nextCalls++;
+      });
+      // Indexing runs in the background; wait for the mocked upsert to finish.
+      for (let attempt = 0; attempt < 100; attempt++) {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        if (indexed.length === index + 1) break;
+      }
+      strictEqual(indexed.length, index + 1);
+      strictEqual(indexed[index].text, entry.text ?? entry.caption);
+    }
+    strictEqual(nextCalls, cases.length);
+    strictEqual(embedded.length, cases.length);
+    deepStrictEqual(triggered, [6]);
+  } finally {
+    globalThis.fetch = originalFetch;
+    setIndexedTextMessageHandler(async () => {});
+  }
+});
 
 function createMessage(
   messageId: number,

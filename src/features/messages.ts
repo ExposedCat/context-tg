@@ -597,13 +597,6 @@ function shouldSkipIndexing(message: RememberedMessage): boolean {
     return true;
   }
 
-  if (
-    hasCommandEntity(message) ||
-    startsWithCommandPrefix(getMessageText(message))
-  ) {
-    return true;
-  }
-
   return (
     !hasImageAttachment(message) && getIndexableText(message) === undefined
   );
@@ -961,21 +954,21 @@ messagesComposer.on("message", async (ctx, next) => {
       return;
     }
 
+    const message = ctx.message as RememberedMessage;
     const indexed = await handleIndexMessage(
       ctx.database,
-      ctx.message as RememberedMessage,
+      message,
       ctx.from,
       ctx.chat.id,
       "indexed",
     );
 
-    if (indexed) {
-      await indexedTextMessageHandler?.(
-        ctx,
-        ctx.message as RememberedMessage,
-        ctx.from,
-        ctx.chat.id,
-      );
+    if (
+      indexed &&
+      !hasCommandEntity(message) &&
+      !startsWithCommandPrefix(getMessageText(message))
+    ) {
+      await indexedTextMessageHandler?.(ctx, message, ctx.from, ctx.chat.id);
     }
   })();
 });

@@ -123,9 +123,9 @@ export function initBot(token: string, database: Database) {
 
   bot.use(i18n);
 
+  bot.use(messagesComposer);
   bot.use(emojiPacksComposer);
   bot.use(stateComposer);
-  bot.use(messagesComposer);
   bot.use(chatComposer);
 
   bot.catch((error) => logError("Grammy error", { error }));
