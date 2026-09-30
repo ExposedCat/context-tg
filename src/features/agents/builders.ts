@@ -1,5 +1,9 @@
-export function formatAgentNames(names: readonly string[]): string {
-  return names.length > 0 ? JSON.stringify(names[0]) : "";
+export function formatAgentNames(
+  names: readonly string[],
+  triggerName?: string,
+): string {
+  const name = names.find((name) => name === triggerName) ?? names[0];
+  return name === undefined ? "" : JSON.stringify(name);
 }
 
 export function joinPromptSections(
@@ -14,8 +18,9 @@ export function buildAgentIdentity(
   description: string,
   names: readonly string[],
   goal: string,
+  triggerName?: string,
 ): string {
-  return `- You are ${description} named ${formatAgentNames(names)} with a goal to ${goal}`;
+  return `- You are ${description} named ${formatAgentNames(names, triggerName)} with a goal to ${goal}`;
 }
 
 const TELEGRAM_FORMATTING_INSTRUCTIONS = [

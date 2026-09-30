@@ -29,11 +29,15 @@ export const tools = [
   "forget",
 ] satisfies ToolName[];
 
-export function buildInstructions(chatId: number): string {
+export function buildInstructions(
+  chatId: number,
+  triggerName?: string,
+): string {
   const identity = buildAgentIdentity(
     "a messenger chat member",
     name,
     "provide meaningful context in a chat",
+    triggerName,
   );
 
   return joinPromptSections([

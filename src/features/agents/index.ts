@@ -54,13 +54,25 @@ export function resolveMessageAgent(
   text: string,
   ownUsername: string,
 ): AgentDefinition | undefined {
+  return resolveMessageAgentTrigger(text, ownUsername)?.agent;
+}
+
+export function resolveMessageAgentTrigger(
+  text: string,
+  ownUsername: string,
+): { agent: AgentDefinition; name: string } | undefined {
   if (startsWithBotMention(text, ownUsername)) {
-    return normalAgent;
+    return { agent: normalAgent, name: normalAgent.name[0] };
   }
 
-  return AGENTS.find((agent) =>
-    agent.name.some((agentName) => startsWithName(text, agentName)),
-  );
+  for (const agent of AGENTS) {
+    const name = agent.name.find((name) => startsWithName(text, name));
+    if (name !== undefined) {
+      return { agent, name };
+    }
+  }
+
+  return undefined;
 }
 
 export function stripMessageAgentName(

@@ -90,6 +90,123 @@ Deno.test("messages dropped for missing mentions still emit analytics once", asy
   strictEqual(nextCalls, 1);
 });
 
+Deno.test("trigger aliases persist through replies and update on explicit triggers", async () => {
+  const { getThread, migrateThreads } = await import("./threads.ts");
+  const { setLlmDeploymentName } = await import("./llm-deployments.ts");
+  const database = await initDatabase()();
+  const originalFetch = globalThis.fetch;
+  const instructions: string[] = [];
+  const chat = { id: -1, type: "supergroup", title: "Test" } as const;
+  const bot = {
+    id: 42,
+    is_bot: true,
+    first_name: "Test",
+    username: "test_bot",
+  } as Context["me"];
+  const api = new Api("test");
+  let sentMessageId = 100;
+  api.sendRichMessage = async () => ({
+    message_id: ++sentMessageId,
+    date: 0,
+    chat,
+    from: bot,
+    rich_message: { blocks: [{ type: "paragraph", text: "Done." }] },
+  });
+  api.sendChatAction = () => Promise.resolve(true);
+  globalThis.fetch = (async (_input, init) => {
+    const payload = JSON.parse(String(init?.body));
+    instructions.push(payload.instructions);
+    return new Response(
+      JSON.stringify({
+        id: `resp_alias_${instructions.length}`,
+        object: "response",
+        created_at: 1,
+        status: "completed",
+        output: [
+          {
+            id: `msg_alias_${instructions.length}`,
+            type: "message",
+            role: "assistant",
+            status: "completed",
+            content: [{ type: "output_text", text: "Done.", annotations: [] }],
+          },
+        ],
+      }),
+      { headers: { "content-type": "application/json" } },
+    );
+  }) as typeof fetch;
+
+  try {
+    // Simulate upgrading a database created before aliases were stored.
+    await database.schema
+      .alterTable("threads")
+      .dropColumn("agent_name")
+      .execute();
+    await migrateThreads(database);
+    await migrateThreads(database);
+    setLlmDeploymentName("small", "test-model");
+    const cases = [
+      { text: "ЛЕЙЛО: hello", name: "лейло", agent: "normal" },
+      { text: "continue", name: "лейло", agent: "normal" },
+      { text: "laylo hello", name: "laylo", agent: "normal" },
+      { text: "тофу лейло hello", name: "тофу лейло", agent: "tofu" },
+      { text: "continue", name: "тофу лейло", agent: "tofu" },
+      { text: "@test_bot hello", name: "laylo", agent: "normal" },
+    ];
+    for (const [index, { text, name, agent }] of cases.entries()) {
+      const ctx = new GrammyContext(
+        {
+          update_id: index + 1,
+          message: {
+            message_id: index + 1,
+            date: 0,
+            from: { id: 1, is_bot: false, first_name: "User" },
+            chat,
+            text,
+            ...(index > 0
+              ? {
+                  reply_to_message: {
+                    message_id: sentMessageId,
+                    date: 0,
+                    from: bot,
+                    chat,
+                    text: "Done.",
+                    reply_to_message: undefined,
+                  },
+                }
+              : {}),
+          },
+        },
+        api,
+        bot,
+      ) as Context;
+      ctx.database = database;
+      ctx.telemetry = { event: () => {} } as Context["telemetry"];
+      await chatComposer.middleware()(ctx, () => {
+        throw new Error("Named trigger or reply should be handled");
+      });
+      strictEqual(instructions.length, index + 1);
+      ok(
+        instructions[index].includes(
+          `named ${JSON.stringify(name)} with a goal`,
+        ),
+      );
+      for (const messageId of [index + 1, sentMessageId]) {
+        const thread = await getThread(database, {
+          chat_id: chat.id,
+          message_id: messageId,
+        });
+        strictEqual(thread?.agent_name, name);
+        strictEqual(thread?.agent_id, agent);
+      }
+    }
+  } finally {
+    globalThis.fetch = originalFetch;
+    setLlmDeploymentName("small", "");
+    await database.destroy();
+  }
+});
+
 Deno.test("tool errors hide details unless debug is enabled", () => {
   const error = {
     tool: "generate_image",

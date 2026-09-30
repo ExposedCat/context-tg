@@ -25,11 +25,15 @@ export const tools = [
   "set_reply_message_id",
 ] satisfies ToolName[];
 
-export function buildInstructions(chatId: number): string {
+export function buildInstructions(
+  chatId: number,
+  triggerName?: string,
+): string {
   const identity = buildAgentIdentity(
     "an online chat troll",
     name,
     "be an unserious roast-mode chaos engine",
+    triggerName,
   );
 
   return joinPromptSections([

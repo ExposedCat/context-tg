@@ -15,6 +15,7 @@ import {
   guestAgent,
   normalAgent,
   resolveMessageAgent,
+  resolveMessageAgentTrigger,
   stripMessageAgentName,
 } from "./agents/index.ts";
 import { isBotAdmin } from "./authorization.ts";
@@ -1894,6 +1895,7 @@ async function saveResumableTaskThread(
   message: TextMessage,
   threadId: number,
   agent: AgentDefinition,
+  agentName: string,
   responseId: string | undefined,
   taskCreated: boolean,
 ): Promise<boolean> {
@@ -1908,6 +1910,7 @@ async function saveResumableTaskThread(
       thread_id: threadId,
       response_id: responseId,
       agent_id: agent.id,
+      agent_name: agentName,
     });
     return true;
   } catch (error) {
@@ -1922,6 +1925,7 @@ async function saveContinuationMessageThread(
   messageId: number,
   threadId: number,
   agent: AgentDefinition,
+  agentName: string,
   responseId: string | undefined,
 ): Promise<void> {
   if (!responseId) {
@@ -1935,6 +1939,7 @@ async function saveContinuationMessageThread(
       thread_id: threadId,
       response_id: responseId,
       agent_id: agent.id,
+      agent_name: agentName,
     });
   } catch (error) {
     logError("Failed to link continuation message to thread:", {
@@ -1951,6 +1956,7 @@ async function saveRecoveredResponseThread(
   message: TextMessage,
   threadId: number,
   agent: AgentDefinition,
+  agentName: string,
   llmResponse: LlmResponse,
   sentMessages: Array<{ message_id: number }>,
   saveOriginalMessageThread: boolean,
@@ -1967,6 +1973,7 @@ async function saveRecoveredResponseThread(
         thread_id: threadId,
         response_id: llmResponse.response_id,
         agent_id: agent.id,
+        agent_name: agentName,
       });
     }
 
@@ -1977,6 +1984,7 @@ async function saveRecoveredResponseThread(
         thread_id: threadId,
         response_id: llmResponse.response_id,
         agent_id: agent.id,
+        agent_name: agentName,
       });
     }
   } catch (error) {
@@ -1994,6 +2002,7 @@ async function sendRecoveredErrorResponse(
   taskText: string,
   threadId: number,
   agent: AgentDefinition,
+  agentName: string,
   error: unknown,
   responseId: string | undefined,
   signal: AbortSignal,
@@ -2018,7 +2027,7 @@ async function sendRecoveredErrorResponse(
             ctx.telemetry.event,
           ),
         },
-        agent.buildInstructions(chatId),
+        agent.buildInstructions(chatId, agentName),
         agent.MODEL,
       ),
   );
@@ -2058,6 +2067,7 @@ async function sendRecoveredErrorResponse(
     message,
     threadId,
     agent,
+    agentName,
     llmResponse,
     sentMessages,
     saveOriginalMessageThread,
@@ -2116,6 +2126,7 @@ async function handleChatRequest(
   let responseSent = false;
   let progressResponseId: string | undefined;
   let activeAgent: AgentDefinition = normalAgent;
+  let activeAgentName = normalAgent.name[0];
   const taskAbortController = createTaskAbortController(taskKey);
 
   try {
@@ -2131,10 +2142,13 @@ async function handleChatRequest(
   }
 
   try {
-    const explicitAgent = resolveMessageAgent(text, ctx.me.username);
+    const trigger = resolveMessageAgentTrigger(text, ctx.me.username);
+    const explicitAgent = trigger?.agent;
     const threadAgent = getAgentById(thread?.agent_id) ?? normalAgent;
     const agent: AgentDefinition = explicitAgent ?? threadAgent;
+    const agentName = trigger?.name ?? thread?.agent_name ?? agent.name[0];
     activeAgent = agent;
+    activeAgentName = agentName;
     const requestedTools = options.tools ?? agent.tools;
     const responseId =
       thread?.response_id &&
@@ -2187,7 +2201,7 @@ async function handleChatRequest(
               agentTools,
               responseId,
               requestOptions,
-              agent.buildInstructions(chatId),
+              agent.buildInstructions(chatId, agentName),
               agent.MODEL,
             );
           }
@@ -2210,7 +2224,7 @@ async function handleChatRequest(
             agentTools,
             undefined,
             requestOptions,
-            agent.buildInstructions(chatId),
+            agent.buildInstructions(chatId, agentName),
             agent.MODEL,
           );
         });
@@ -2257,6 +2271,7 @@ async function handleChatRequest(
       thread_id: threadId,
       response_id: llmResponse.response_id,
       agent_id: agent.id,
+      agent_name: agentName,
     });
 
     for (const sentMessage of sentMessages) {
@@ -2266,6 +2281,7 @@ async function handleChatRequest(
         thread_id: threadId,
         response_id: llmResponse.response_id,
         agent_id: agent.id,
+        agent_name: agentName,
       });
     }
   } catch (error) {
@@ -2284,6 +2300,7 @@ async function handleChatRequest(
       message,
       threadId,
       activeAgent,
+      activeAgentName,
       resumableResponseId,
       taskCreated,
     );
@@ -2305,6 +2322,7 @@ async function handleChatRequest(
         sentMessage.message_id,
         threadId,
         activeAgent,
+        activeAgentName,
         resumableResponseId,
       );
       return;
@@ -2323,6 +2341,7 @@ async function handleChatRequest(
           options.taskText ?? stripMessageAgentName(text, ctx.me.username),
           threadId,
           activeAgent,
+          activeAgentName,
           error,
           resumableResponseId,
           taskAbortController.signal,
@@ -2366,6 +2385,7 @@ async function handleChatRequest(
       sentMessage.message_id,
       threadId,
       activeAgent,
+      activeAgentName,
       resumableResponseId,
     );
     await options.onUnhandledError?.();

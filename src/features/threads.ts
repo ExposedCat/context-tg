@@ -6,6 +6,11 @@ export type ThreadsTable = {
   chat_id: number;
   message_id: number;
   thread_id: number;
+  agent_name: ColumnType<
+    string | null,
+    string | null | undefined,
+    string | null
+  >;
   agent_id: ColumnType<
     AgentId | null,
     AgentId | null | undefined,
@@ -59,6 +64,7 @@ export async function migrateThreads(database: Database) {
     .addColumn("message_id", "integer", (column) => column.notNull())
     .addColumn("thread_id", "integer", (column) => column.notNull())
     .addColumn("agent_id", "text")
+    .addColumn("agent_name", "text")
     .addColumn("response_id", "text")
     .addPrimaryKeyConstraint("threads_primary_key", ["chat_id", "message_id"])
     .execute();
@@ -82,6 +88,15 @@ export async function migrateThreads(database: Database) {
     await database.schema
       .alterTable("threads")
       .addColumn("agent_id", "text")
+      .execute();
+  } catch {
+    // Column already exists on fresh or previously migrated databases.
+  }
+
+  try {
+    await database.schema
+      .alterTable("threads")
+      .addColumn("agent_name", "text")
       .execute();
   } catch {
     // Column already exists on fresh or previously migrated databases.
@@ -125,6 +140,7 @@ export async function createThread(
   const row: Thread = {
     ...thread,
     agent_id: thread.agent_id ?? null,
+    agent_name: thread.agent_name ?? null,
     response_id: thread.response_id ?? null,
   };
 
@@ -140,6 +156,7 @@ export async function saveThread(
   const row: Thread = {
     ...thread,
     agent_id: thread.agent_id ?? null,
+    agent_name: thread.agent_name ?? null,
     response_id: thread.response_id ?? null,
   };
 
@@ -149,6 +166,7 @@ export async function saveThread(
     .onConflict((conflict) =>
       conflict.columns(["chat_id", "message_id"]).doUpdateSet({
         agent_id: row.agent_id,
+        agent_name: row.agent_name,
         response_id: row.response_id,
       }),
     )

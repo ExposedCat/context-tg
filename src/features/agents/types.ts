@@ -10,5 +10,5 @@ export type AgentDefinition = {
   MODEL: AgentModel;
   tools: ToolName[];
   usesMemory?: boolean;
-  buildInstructions: (chatId: number) => string;
+  buildInstructions: (chatId: number, triggerName?: string) => string;
 };
