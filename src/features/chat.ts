@@ -72,6 +72,7 @@ import {
   createThread,
   type GuestResponseThread,
   getGuestResponseThreadByDate,
+  getLatestTopicThread,
   getThread,
   saveGuestResponseThread,
   saveThread,
@@ -651,6 +652,7 @@ function selectNormalMediaGroupMessage(
   messages: TextMessage[],
   ownUsername: string,
   botId: number,
+  privateTopic: boolean,
 ): TextMessage | undefined {
   const groupHasImages = hasMessagesImageAttachments(messages);
 
@@ -661,14 +663,14 @@ function selectNormalMediaGroupMessage(
     const directReply = isDirectReplyToBot(reply, botId);
     const requestText =
       text ??
-      (directReply && groupHasImages
+      ((directReply || privateTopic) && groupHasImages
         ? "Please respond to the attached image."
         : undefined);
 
     return (
       Boolean(requestText) &&
       !startsWithCommandPrefix(text) &&
-      (addressed || directReply)
+      (addressed || directReply || privateTopic)
     );
   });
 }
@@ -689,7 +691,6 @@ function isImplicitForumTopicReply(
   reply: TextMessage | undefined,
 ): boolean {
   return (
-    message.is_topic_message === true &&
     message.message_thread_id !== undefined &&
     reply?.message_id === message.message_thread_id
   );
@@ -705,15 +706,7 @@ function getForumThreadId(
   message: TextMessage,
   reply: TextMessage | undefined,
 ): number | undefined {
-  if (message.is_topic_message === true) {
-    return message.message_thread_id ?? reply?.message_thread_id;
-  }
-
-  if (reply?.is_topic_message === true) {
-    return reply.message_thread_id;
-  }
-
-  return undefined;
+  return message.message_thread_id ?? reply?.message_thread_id;
 }
 
 function getQuoteReplyContextText(message: TextMessage): string | undefined {
@@ -963,9 +956,7 @@ async function sendLlmWarning(
     await ctx.reply(`Warn: ${sanitizeLlmHtml(details)}`, {
       ...linkPreviewOptions,
       parse_mode: "HTML",
-      reply_parameters: {
-        message_id: message.message_id,
-      },
+      ...getReplyDeliveryOptions(message, undefined),
     });
   } catch (error) {
     logError("Failed to send LLM warning:", error);
@@ -1613,14 +1604,18 @@ function getReplyDeliveryOptions(
   const targetMessageId =
     replyMessageId === undefined ? message.message_id : replyMessageId;
 
-  return targetMessageId === null
-    ? { message_thread_id: message.message_thread_id }
-    : {
-        reply_parameters: {
-          message_id: targetMessageId,
-          allow_sending_without_reply: true,
-        },
-      };
+  const threadId = getForumThreadId(message, getActualReply(message));
+  return {
+    ...(threadId !== undefined ? { message_thread_id: threadId } : {}),
+    ...(targetMessageId === null
+      ? {}
+      : {
+          reply_parameters: {
+            message_id: targetMessageId,
+            allow_sending_without_reply: true,
+          },
+        }),
+  };
 }
 
 async function sendReportResponse(
@@ -2112,7 +2107,7 @@ async function handleChatRequest(
   } catch (error) {
     if (!options.silentQuota)
       await ctx.reply(getErrorDetails(error), {
-        reply_parameters: { message_id: message.message_id },
+        ...getReplyDeliveryOptions(message, undefined),
       });
     return;
   }
@@ -2312,9 +2307,7 @@ async function handleChatRequest(
 
       const sentMessage = await ctx.reply(canceledResponse, {
         ...linkPreviewOptions,
-        reply_parameters: {
-          message_id: message.message_id,
-        },
+        ...getReplyDeliveryOptions(message, undefined),
       });
       await saveContinuationMessageThread(
         ctx,
@@ -2367,6 +2360,7 @@ async function handleChatRequest(
     const sentMessage = azureDownMessage
       ? await ctx.reply(azureDownMessage.text, {
           ...linkPreviewOptions,
+          ...getReplyDeliveryOptions(message, null),
           entities: azureDownMessage.entities,
         })
       : await ctx.reply(
@@ -2376,6 +2370,7 @@ async function handleChatRequest(
           ),
           {
             ...linkPreviewOptions,
+            ...getReplyDeliveryOptions(message, null),
             parse_mode: "HTML",
           },
         );
@@ -2703,6 +2698,8 @@ function shouldSkipProactiveAgentResponse(
 
   return (
     !text ||
+    (ctx.chat?.type === "private" &&
+      getForumThreadId(message, reply) !== undefined) ||
     startsWithCommandPrefix(text) ||
     isAddressed(text, ctx.me.username) ||
     isDirectReplyToBot(reply, ctx.me.id)
@@ -2877,6 +2874,11 @@ chatComposer.on("message", async (ctx, next) => {
 
   const incomingMessage = ctx.message as TextMessage;
   const incomingText = getMessageText(incomingMessage);
+  const topicId = getForumThreadId(
+    incomingMessage,
+    getActualReply(incomingMessage),
+  );
+  const privateTopic = ctx.chat.type === "private" && topicId !== undefined;
   // Count every incoming message before mention filtering or album selection.
   ctx.telemetry.event("message_checked", {
     chat_type: ctx.chat.type === "private" ? "private" : "group",
@@ -2893,6 +2895,7 @@ chatComposer.on("message", async (ctx, next) => {
     mediaGroupMessages,
     ctx.me.username,
     ctx.me.id,
+    privateTopic,
   );
 
   if (!message || message.message_id !== incomingMessage.message_id) {
@@ -2905,12 +2908,19 @@ chatComposer.on("message", async (ctx, next) => {
   const replyContext = getReplyContext(message, reply);
   const isDirectBotReply = isDirectReplyToBot(reply, ctx.me.id);
   const addressed = text ? isAddressed(text, ctx.me.username) : false;
-  const thread = reply
+  let thread = reply
     ? await getThread(ctx.database, {
         chat_id: ctx.chat.id,
         message_id: reply.message_id,
       })
     : undefined;
+  if (!thread && privateTopic && topicId !== undefined) {
+    thread = await getLatestTopicThread(ctx.database, {
+      chatId: ctx.chat.id,
+      threadId: topicId,
+      beforeMessageId: message.message_id,
+    });
+  }
   const repliedTask =
     reply && !thread
       ? await getTask(ctx.database, {
@@ -2920,14 +2930,15 @@ chatComposer.on("message", async (ctx, next) => {
       : undefined;
   const requestText =
     text ??
-    (isDirectBotReply && hasMessagesImageAttachments(mediaGroupMessages)
+    ((isDirectBotReply || privateTopic) &&
+    hasMessagesImageAttachments(mediaGroupMessages)
       ? "Please respond to the attached image."
       : undefined);
 
   if (
     !requestText ||
     startsWithCommandPrefix(text) ||
-    (!addressed && !isDirectBotReply)
+    (!addressed && !isDirectBotReply && !privateTopic)
   ) {
     await next();
     return;
@@ -2937,7 +2948,7 @@ chatComposer.on("message", async (ctx, next) => {
     reply,
     replyContext,
     thread,
-    threadId: repliedTask?.thread_id ?? message.message_thread_id,
+    threadId: repliedTask?.thread_id ?? getForumThreadId(message, reply),
     imageMessages: mediaGroupMessages,
     onUnhandledError: next,
   });

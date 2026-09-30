@@ -103,6 +103,13 @@ export async function migrateThreads(database: Database) {
   }
 
   await database.schema
+    .createIndex("threads_topic_message_index")
+    .ifNotExists()
+    .on("threads")
+    .columns(["chat_id", "thread_id", "message_id"])
+    .execute();
+
+  await database.schema
     .createTable("guest_response_threads")
     .ifNotExists()
     .addColumn("chat_id", "integer", (column) => column.notNull())
@@ -130,6 +137,29 @@ export async function getThread(
     .selectAll()
     .where("chat_id", "=", chat_id)
     .where("message_id", "=", message_id)
+    .executeTakeFirst();
+}
+
+export async function getLatestTopicThread(
+  database: Database,
+  {
+    chatId,
+    threadId,
+    beforeMessageId,
+  }: {
+    chatId: number;
+    threadId: number;
+    beforeMessageId: number;
+  },
+): Promise<Thread | undefined> {
+  return await database
+    .selectFrom("threads")
+    .selectAll()
+    .where("chat_id", "=", chatId)
+    .where("thread_id", "=", threadId)
+    .where("message_id", "<", beforeMessageId)
+    .where("response_id", "is not", null)
+    .orderBy("message_id", "desc")
     .executeTakeFirst();
 }
 

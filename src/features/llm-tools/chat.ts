@@ -20,7 +20,7 @@ export const searchChatToolDefinition = {
   type: "function",
   name: "search_chat",
   description:
-    "Search remembered messages using semantic and lexical matching. Prefer target=topic_thread for the current forum topic; use target=group to search all topics in the group. Infer the intended scope from context; if unclear, briefly ask whether the user means this topic or the entire group. Returns a JSON array of relevant conversation windows, with each matched anchor surrounded by nearby messages and its reply parent when available. Telegram photos and image documents are represented as reusable tg://photo or tg://document Markdown, followed by their caption when present; inspect one by passing its exact ID to read_image. Messages from the same album share media_group_id. Telegram stickers are represented as [sticker EMOJI]. The sender_id and date filters are optional; only use them when the user explicitly needs a sender or date range filter. Prefer using only queries and target.",
+    "Search remembered messages using semantic and lexical matching. Prefer target=topic_thread for the current topic in a group or threaded private chat; use target=group to search all topics in the current chat. Infer the intended scope from context; if unclear, briefly ask whether the user means this topic or the entire chat. Returns a JSON array of relevant conversation windows, with each matched anchor surrounded by nearby messages and its reply parent when available. Telegram photos and image documents are represented as reusable tg://photo or tg://document Markdown, followed by their caption when present; inspect one by passing its exact ID to read_image. Messages from the same album share media_group_id. Telegram stickers are represented as [sticker EMOJI]. The sender_id and date filters are optional; only use them when the user explicitly needs a sender or date range filter. Prefer using only queries and target.",
   parameters: {
     type: "object",
     properties: {
@@ -36,7 +36,7 @@ export const searchChatToolDefinition = {
         type: "string",
         enum: ["topic_thread", "group"],
         description:
-          "topic_thread searches the current forum topic; group searches the entire current group, including all topics.",
+          "topic_thread searches the current topic in a group or threaded private chat; group searches the entire current chat, including all topics.",
       },
       exact_phrases: {
         type: "array",
@@ -72,7 +72,7 @@ export const readLastMessagesToolDefinition = {
   type: "function",
   name: "read_last_messages",
   description:
-    "Read recent remembered text messages. Prefer target=topic_thread for the current forum topic, especially when reading for context; use target=group for all topics in the group. Infer the intended scope from context; if unclear, briefly ask whether the user means this topic or the entire group. Returns a JSON array of message objects. Only quote messages when you are asked to do so. If you are tasked to do a summary or help with ongoing discussion, you must read messages as extra context, do not just list or recite entire discussion unless explicitly requested to do so.",
+    "Read recent remembered text messages. Prefer target=topic_thread for the current topic in a group or threaded private chat, especially when reading for context; use target=group for all topics in the current chat. Infer the intended scope from context; if unclear, briefly ask whether the user means this topic or the entire chat. Returns a JSON array of message objects. Only quote messages when you are asked to do so. If you are tasked to do a summary or help with ongoing discussion, you must read messages as extra context, do not just list or recite entire discussion unless explicitly requested to do so.",
   parameters: {
     type: "object",
     properties: {
@@ -87,7 +87,7 @@ export const readLastMessagesToolDefinition = {
         type: "string",
         enum: ["topic_thread", "group"],
         description:
-          "topic_thread reads the current forum topic; group reads the entire current group, including all topics.",
+          "topic_thread reads the current topic in a group or threaded private chat; group reads the entire current chat, including all topics.",
       },
     },
     required: ["count", "target"],

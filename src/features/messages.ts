@@ -390,7 +390,7 @@ function getReplyToMessageId(message: RememberedMessage): number | undefined {
   const replyMessageId = message.reply_to_message?.message_id;
 
   if (
-    message.is_topic_message === true &&
+    message.message_thread_id !== undefined &&
     replyMessageId === message.message_thread_id
   ) {
     return undefined;

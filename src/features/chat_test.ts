@@ -207,6 +207,242 @@ Deno.test("trigger aliases persist through replies and update on explicit trigge
   }
 });
 
+Deno.test("threaded DMs continue per topic without mentions and preserve explicit reply branches", async () => {
+  const { getThread, migrateThreads } = await import("./threads.ts");
+  const { setLlmDeploymentName } = await import("./llm-deployments.ts");
+  const database = await initDatabase()();
+  const originalFetch = globalThis.fetch;
+  const requests: Array<{ input: unknown; instructions: string }> = [];
+  const deliveries: unknown[] = [];
+  const typing: unknown[] = [];
+  const bot = {
+    id: 42,
+    is_bot: true,
+    first_name: "Test",
+    username: "test_bot",
+    has_topics_enabled: true,
+  } as Context["me"];
+  const api = new Api("test");
+  let currentMessageId = 0;
+  const chat = { id: 1, type: "private", first_name: "User" } as const;
+  let sendWithoutReply = false;
+  api.sendRichMessage = async (_chatId, _message, options) => {
+    deliveries.push(options);
+    return {
+      message_id: currentMessageId + 1,
+      date: 0,
+      chat,
+      from: bot,
+      rich_message: { blocks: [{ type: "paragraph", text: "Done." }] },
+    };
+  };
+  api.sendChatAction = async (_chatId, _action, options) => {
+    typing.push(options);
+    return true;
+  };
+  globalThis.fetch = (async (_input, init) => {
+    const payload = JSON.parse(String(init?.body));
+    requests.push(payload);
+    const id = `resp_dm_${requests.length}`;
+    const output = sendWithoutReply
+      ? [
+          {
+            type: "function_call",
+            id: "fc_dm_reply",
+            call_id: "call_dm_reply",
+            name: "set_reply_message_id",
+            arguments: '{"message_id":null}',
+          },
+        ]
+      : [
+          {
+            id: `msg_dm_${requests.length}`,
+            type: "message",
+            role: "assistant",
+            status: "completed",
+            content: [{ type: "output_text", text: "Done.", annotations: [] }],
+          },
+        ];
+    sendWithoutReply = false;
+    return new Response(
+      JSON.stringify({
+        id,
+        object: "response",
+        created_at: 1,
+        status: "completed",
+        output,
+      }),
+      { headers: { "content-type": "application/json" } },
+    );
+  }) as typeof fetch;
+
+  try {
+    setLlmDeploymentName("small", "test-model");
+    const cases = [
+      {
+        id: 10,
+        topic: 7,
+        text: "тофу лейло alpha secret",
+        previous: null,
+        agent: "tofu",
+        name: "тофу лейло",
+      },
+      {
+        id: 20,
+        topic: 8,
+        text: "beta secret",
+        previous: null,
+        agent: "normal",
+        name: "laylo",
+        noReply: true,
+      },
+      {
+        id: 30,
+        topic: 7,
+        text: "continue alpha",
+        previous: "resp_dm_1",
+        agent: "tofu",
+        name: "тофу лейло",
+        rootReply: true,
+      },
+      {
+        id: 40,
+        topic: 7,
+        text: "branch alpha",
+        previous: "resp_dm_1",
+        agent: "tofu",
+        name: "тофу лейло",
+        replyId: 11,
+      },
+      {
+        id: 50,
+        topic: 7,
+        text: "follow branch",
+        previous: "resp_dm_5",
+        agent: "tofu",
+        name: "тофу лейло",
+      },
+      {
+        id: 60,
+        topic: 7,
+        text: "laylo switch agent",
+        previous: null,
+        agent: "normal",
+        name: "laylo",
+      },
+    ] as const;
+    for (const test of cases) {
+      currentMessageId = test.id;
+      sendWithoutReply = "noReply" in test;
+      const requestIndex = requests.length;
+      const replyId =
+        "rootReply" in test
+          ? test.topic
+          : "replyId" in test
+            ? test.replyId
+            : undefined;
+      const ctx = new GrammyContext(
+        {
+          update_id: test.id,
+          message: {
+            message_id: test.id,
+            message_thread_id: test.topic,
+            // DM topic routing must work even when is_topic_message is absent.
+            date: 0,
+            from: { id: 1, is_bot: false, first_name: "User" },
+            chat,
+            text: test.text,
+            ...(replyId === undefined
+              ? {}
+              : {
+                  reply_to_message: {
+                    message_id: replyId,
+                    date: 0,
+                    chat,
+                    from: bot,
+                    text: "Done.",
+                    reply_to_message: undefined,
+                    ...("rootReply" in test
+                      ? {
+                          forum_topic_created: { name: "Alpha", icon_color: 0 },
+                        }
+                      : {}),
+                  },
+                }),
+          },
+        },
+        api,
+        bot,
+      ) as Context;
+      ctx.database = database;
+      ctx.telemetry = { event: () => {} } as Context["telemetry"];
+      await chatComposer.middleware()(ctx, () => {
+        throw new Error("DM topic message should be handled");
+      });
+      strictEqual(deliveries.length, cases.indexOf(test) + 1);
+      deepStrictEqual(deliveries.at(-1), {
+        message_thread_id: test.topic,
+        ...("noReply" in test
+          ? {}
+          : {
+              reply_parameters: {
+                message_id: test.id,
+                allow_sending_without_reply: true,
+              },
+            }),
+      });
+      strictEqual(
+        (typing.at(-1) as { message_thread_id: number }).message_thread_id,
+        test.topic,
+      );
+      const thread = await getThread(database, {
+        chat_id: chat.id,
+        message_id: test.id,
+      });
+      strictEqual(thread?.thread_id, test.topic);
+      strictEqual(thread?.agent_id, test.agent);
+      strictEqual(thread?.agent_name, test.name);
+      const history = await database
+        .selectFrom("llm_chat_responses")
+        .selectAll()
+        .where("response_id", "=", `resp_dm_${requestIndex + 1}`)
+        .executeTakeFirstOrThrow();
+      strictEqual(history.previous_response_id, test.previous);
+      const input = JSON.stringify(requests[requestIndex].input);
+      if (test.topic === 8) ok(!input.includes("alpha secret"));
+      if (test.topic === 7) ok(!input.includes("beta secret"));
+      if (test.previous) ok(input.includes("alpha secret"));
+      // Re-running migrations must keep persisted topic continuation links.
+      await migrateThreads(database);
+    }
+    // A different private chat with the same topic ID has no continuation.
+    const { getLatestTopicThread } = await import("./threads.ts");
+    strictEqual(
+      await getLatestTopicThread(database, {
+        chatId: 2,
+        threadId: 7,
+        beforeMessageId: 100,
+      }),
+      undefined,
+    );
+    // Messages from later updates cannot become the parent of an earlier one.
+    strictEqual(
+      (
+        await getLatestTopicThread(database, {
+          chatId: 1,
+          threadId: 7,
+          beforeMessageId: 30,
+        })
+      )?.response_id,
+      "resp_dm_1",
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+    setLlmDeploymentName("small", "");
+    await database.destroy();
+  }
+});
+
 Deno.test("tool errors hide details unless debug is enabled", () => {
   const error = {
     tool: "generate_image",
