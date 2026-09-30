@@ -3,8 +3,9 @@
 ## Threaded DMs
 
 Enable **Threaded Mode** for the bot in BotFather to use separate topics in
-private chats. The bot responds to text and images in these topics without a
-name trigger or a reply. Each topic continues its own conversation and retains
+private chats. The bot responds to text and images in all private chats without
+a name trigger or a reply, including messages without a topic ID when Threaded
+Mode is disabled. Each topic continues its own conversation and retains
 its selected agent and alias. An explicit reply continues from that message;
 an explicit agent trigger can change the topic's agent.
 

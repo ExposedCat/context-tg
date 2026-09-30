@@ -652,7 +652,7 @@ function selectNormalMediaGroupMessage(
   messages: TextMessage[],
   ownUsername: string,
   botId: number,
-  privateTopic: boolean,
+  privateChat: boolean,
 ): TextMessage | undefined {
   const groupHasImages = hasMessagesImageAttachments(messages);
 
@@ -663,14 +663,14 @@ function selectNormalMediaGroupMessage(
     const directReply = isDirectReplyToBot(reply, botId);
     const requestText =
       text ??
-      ((directReply || privateTopic) && groupHasImages
+      ((directReply || privateChat) && groupHasImages
         ? "Please respond to the attached image."
         : undefined);
 
     return (
       Boolean(requestText) &&
       !startsWithCommandPrefix(text) &&
-      (addressed || directReply || privateTopic)
+      (addressed || directReply || privateChat)
     );
   });
 }
@@ -2698,8 +2698,7 @@ function shouldSkipProactiveAgentResponse(
 
   return (
     !text ||
-    (ctx.chat?.type === "private" &&
-      getForumThreadId(message, reply) !== undefined) ||
+    ctx.chat?.type === "private" ||
     startsWithCommandPrefix(text) ||
     isAddressed(text, ctx.me.username) ||
     isDirectReplyToBot(reply, ctx.me.id)
@@ -2878,7 +2877,9 @@ chatComposer.on("message", async (ctx, next) => {
     incomingMessage,
     getActualReply(incomingMessage),
   );
-  const privateTopic = ctx.chat.type === "private" && topicId !== undefined;
+  const privateChat = ctx.chat.type === "private";
+  // Zero identifies the default DM conversation in storage, never delivery.
+  const conversationTopicId = privateChat ? (topicId ?? 0) : topicId;
   // Count every incoming message before mention filtering or album selection.
   ctx.telemetry.event("message_checked", {
     chat_type: ctx.chat.type === "private" ? "private" : "group",
@@ -2895,7 +2896,7 @@ chatComposer.on("message", async (ctx, next) => {
     mediaGroupMessages,
     ctx.me.username,
     ctx.me.id,
-    privateTopic,
+    privateChat,
   );
 
   if (!message || message.message_id !== incomingMessage.message_id) {
@@ -2914,10 +2915,10 @@ chatComposer.on("message", async (ctx, next) => {
         message_id: reply.message_id,
       })
     : undefined;
-  if (!thread && privateTopic && topicId !== undefined) {
+  if (!thread && privateChat && conversationTopicId !== undefined) {
     thread = await getLatestTopicThread(ctx.database, {
       chatId: ctx.chat.id,
-      threadId: topicId,
+      threadId: conversationTopicId,
       beforeMessageId: message.message_id,
     });
   }
@@ -2930,7 +2931,7 @@ chatComposer.on("message", async (ctx, next) => {
       : undefined;
   const requestText =
     text ??
-    ((isDirectBotReply || privateTopic) &&
+    ((isDirectBotReply || privateChat) &&
     hasMessagesImageAttachments(mediaGroupMessages)
       ? "Please respond to the attached image."
       : undefined);
@@ -2938,7 +2939,7 @@ chatComposer.on("message", async (ctx, next) => {
   if (
     !requestText ||
     startsWithCommandPrefix(text) ||
-    (!addressed && !isDirectBotReply && !privateTopic)
+    (!addressed && !isDirectBotReply && !privateChat)
   ) {
     await next();
     return;
@@ -2948,7 +2949,7 @@ chatComposer.on("message", async (ctx, next) => {
     reply,
     replyContext,
     thread,
-    threadId: repliedTask?.thread_id ?? getForumThreadId(message, reply),
+    threadId: repliedTask?.thread_id ?? conversationTopicId,
     imageMessages: mediaGroupMessages,
     onUnhandledError: next,
   });

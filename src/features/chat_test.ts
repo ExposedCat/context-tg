@@ -207,8 +207,9 @@ Deno.test("trigger aliases persist through replies and update on explicit trigge
   }
 });
 
-Deno.test("threaded DMs continue per topic without mentions and preserve explicit reply branches", async () => {
+Deno.test("DMs continue without mentions with or without topic IDs and preserve explicit reply branches", async () => {
   const { getThread, migrateThreads } = await import("./threads.ts");
+  const { maybeSendProactiveAgentResponse } = await import("./chat.ts");
   const { setLlmDeploymentName } = await import("./llm-deployments.ts");
   const database = await initDatabase()();
   const originalFetch = globalThis.fetch;
@@ -240,7 +241,17 @@ Deno.test("threaded DMs continue per topic without mentions and preserve explici
     typing.push(options);
     return true;
   };
+  api.getFile = async (fileId) => ({
+    file_id: fileId,
+    file_unique_id: "dm-photo",
+    file_path: "photos/dm-photo.jpg",
+  });
   globalThis.fetch = (async (_input, init) => {
+    if (String(_input).includes("/photos/dm-photo.jpg")) {
+      return new Response(new Uint8Array([1, 2, 3]), {
+        headers: { "content-type": "image/jpeg" },
+      });
+    }
     const payload = JSON.parse(String(init?.body));
     requests.push(payload);
     const id = `resp_dm_${requests.length}`;
@@ -330,6 +341,39 @@ Deno.test("threaded DMs continue per topic without mentions and preserve explici
         agent: "normal",
         name: "laylo",
       },
+      {
+        id: 70,
+        topic: undefined,
+        text: "default DM secret",
+        previous: null,
+        agent: "normal",
+        name: "laylo",
+      },
+      {
+        id: 80,
+        topic: undefined,
+        text: "continue default DM",
+        previous: "resp_dm_8",
+        agent: "normal",
+        name: "laylo",
+        noReply: true,
+      },
+      {
+        id: 90,
+        topic: undefined,
+        text: undefined,
+        photo: [
+          {
+            file_id: "dm-photo",
+            file_unique_id: "dm-photo",
+            width: 10,
+            height: 10,
+          },
+        ],
+        previous: "resp_dm_10",
+        agent: "normal",
+        name: "laylo",
+      },
     ] as const;
     for (const test of cases) {
       currentMessageId = test.id;
@@ -352,6 +396,7 @@ Deno.test("threaded DMs continue per topic without mentions and preserve explici
             from: { id: 1, is_bot: false, first_name: "User" },
             chat,
             text: test.text,
+            ...("photo" in test ? { photo: [...test.photo] } : {}),
             ...(replyId === undefined
               ? {}
               : {
@@ -372,16 +417,19 @@ Deno.test("threaded DMs continue per topic without mentions and preserve explici
           },
         },
         api,
-        bot,
+        { ...bot, has_topics_enabled: test.topic !== undefined },
       ) as Context;
       ctx.database = database;
       ctx.telemetry = { event: () => {} } as Context["telemetry"];
       await chatComposer.middleware()(ctx, () => {
         throw new Error("DM topic message should be handled");
       });
+      // Indexing must not produce a second automatic response for a DM.
+      ok(ctx.message);
+      await maybeSendProactiveAgentResponse(ctx, ctx.message, chat.id);
       strictEqual(deliveries.length, cases.indexOf(test) + 1);
       deepStrictEqual(deliveries.at(-1), {
-        message_thread_id: test.topic,
+        ...(test.topic === undefined ? {} : { message_thread_id: test.topic }),
         ...("noReply" in test
           ? {}
           : {
@@ -399,7 +447,7 @@ Deno.test("threaded DMs continue per topic without mentions and preserve explici
         chat_id: chat.id,
         message_id: test.id,
       });
-      strictEqual(thread?.thread_id, test.topic);
+      strictEqual(thread?.thread_id, test.topic ?? 0);
       strictEqual(thread?.agent_id, test.agent);
       strictEqual(thread?.agent_name, test.name);
       const history = await database
@@ -409,12 +457,26 @@ Deno.test("threaded DMs continue per topic without mentions and preserve explici
         .executeTakeFirstOrThrow();
       strictEqual(history.previous_response_id, test.previous);
       const input = JSON.stringify(requests[requestIndex].input);
+      if ("photo" in test) ok(input.includes("data:image/jpeg;base64,"));
       if (test.topic === 8) ok(!input.includes("alpha secret"));
       if (test.topic === 7) ok(!input.includes("beta secret"));
-      if (test.previous) ok(input.includes("alpha secret"));
+      if (test.topic === undefined) {
+        ok(!input.includes("alpha secret"));
+        ok(!input.includes("beta secret"));
+        if (test.previous) ok(input.includes("default DM secret"));
+      }
+      if (test.previous && test.topic === 7) ok(input.includes("alpha secret"));
       // Re-running migrations must keep persisted topic continuation links.
       await migrateThreads(database);
     }
+    strictEqual(
+      await database
+        .selectFrom("chat_proactive_responses")
+        .selectAll()
+        .where("chat_id", "=", chat.id)
+        .executeTakeFirst(),
+      undefined,
+    );
     // A different private chat with the same topic ID has no continuation.
     const { getLatestTopicThread } = await import("./threads.ts");
     strictEqual(
@@ -440,6 +502,38 @@ Deno.test("threaded DMs continue per topic without mentions and preserve explici
     globalThis.fetch = originalFetch;
     setLlmDeploymentName("small", "");
     await database.destroy();
+  }
+});
+
+Deno.test("private chat commands bypass model responses with or without a topic ID", async () => {
+  for (const topicId of [undefined, 7]) {
+    const ctx = new GrammyContext(
+      {
+        update_id: 1,
+        message: {
+          message_id: 1,
+          message_thread_id: topicId,
+          date: 0,
+          from: { id: 1, is_bot: false, first_name: "User" },
+          chat: { id: 1, type: "private", first_name: "User" },
+          text: "/usage",
+        },
+      },
+      new Api("test"),
+      {
+        id: 42,
+        is_bot: true,
+        first_name: "Test",
+        username: "test_bot",
+      } as Context["me"],
+    ) as Context;
+    ctx.telemetry = { event: () => {} } as Context["telemetry"];
+    let nextCalls = 0;
+    await chatComposer.middleware()(ctx, () => {
+      nextCalls++;
+      return Promise.resolve();
+    });
+    strictEqual(nextCalls, 1);
   }
 });
 
