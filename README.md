@@ -1,5 +1,16 @@
 # Chat Context | Telegram
 
+## Trigger names
+
+Set `NAMES` to a comma-separated list of normal-agent aliases, for example
+`NAMES=laylo,patrick,патрик,лейло,grok,грок,@grok,@грок`. Surrounding whitespace
+and empty entries are ignored. When unset or empty, the aliases default to
+`laylo,лейло`. Restart the bot after changing `NAMES`.
+
+The matched alias is used in the agent's identity prompt and retained for
+follow-up replies. Mentions of the bot's actual username use the first alias.
+Guest mode keeps its own first name; the other agents keep their own aliases.
+
 ## Incoming rate limiting
 
 The bot uses [grammY ratelimiter](https://grammy.dev/plugins/ratelimiter) to

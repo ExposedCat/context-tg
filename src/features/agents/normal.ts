@@ -8,7 +8,14 @@ import {
 import type { AgentDefinition } from "./types.ts";
 
 export const id = "normal";
-export const name = ["laylo", "лейло"];
+const configuredNames = Deno.env
+  .get("NAMES")
+  ?.split(",")
+  .map((name) => name.trim())
+  .filter(Boolean);
+export const name = configuredNames?.length
+  ? configuredNames
+  : ["laylo", "лейло"];
 export const MODEL = LLM_DEPLOYMENTS.small;
 export const tools = [
   "web_search",
