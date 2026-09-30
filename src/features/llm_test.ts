@@ -28,7 +28,7 @@ for (const [name, value] of Object.entries(TEST_ENV)) {
 }
 
 const [
-  { LlmRequestError, requestLlm },
+  { LlmRequestError, requestLlm, requestThreadName },
   { setLlmDeploymentName },
   { initDatabase },
 ] = await Promise.all([
@@ -83,6 +83,71 @@ function createApiResponse(id: string, output: ResponseOutput[]) {
     },
   };
 }
+
+Deno.test("thread naming uses the responding model and exact prompt, with three-word fallbacks", async () => {
+  const originalFetch = globalThis.fetch;
+  const model = setLlmDeploymentName("openminded", "thread-test-model");
+  const message = "  Plan\nmy next   trip abroad ";
+  const prompt = `According to the following user request:
+<message>
+${message}
+</message>
+Respond with a name for this thread. Don't use formatting, don't add anything else, your entire response will be used to name the thread.`;
+  const cases = [
+    { text: "  Travel plans \n", expected: "Travel plans" },
+    { text: "**Travel plans**", expected: "**Travel plans**" },
+    { text: "", expected: "Plan my next" },
+    { text: " \n ", expected: "Plan my next" },
+    { text: "ignored", expected: "Plan my next", failure: true },
+  ];
+
+  try {
+    for (const test of cases) {
+      let calls = 0;
+      globalThis.fetch = (async (_input, init) => {
+        calls++;
+        const body = JSON.parse(String(init?.body));
+        strictEqual(body.model, "thread-test-model");
+        strictEqual(body.instructions, "");
+        strictEqual(body.tools, undefined);
+        strictEqual(body.input.length, 1);
+        strictEqual(body.input[0].content, prompt);
+        if (test.failure) {
+          return new Response(
+            JSON.stringify({
+              error: { message: "Failed", type: "invalid_request_error" },
+            }),
+            {
+              status: 400,
+              headers: { "content-type": "application/json" },
+            },
+          );
+        }
+        return new Response(
+          JSON.stringify(
+            createApiResponse("resp_title", [
+              {
+                id: "msg_title",
+                type: "message",
+                role: "assistant",
+                status: "completed",
+                content: [
+                  { type: "output_text", text: test.text, annotations: [] },
+                ],
+              },
+            ]),
+          ),
+          { headers: { "content-type": "application/json" } },
+        );
+      }) as typeof fetch;
+      strictEqual(await requestThreadName(message, model), test.expected);
+      strictEqual(calls, 1);
+    }
+  } finally {
+    globalThis.fetch = originalFetch;
+    setLlmDeploymentName("openminded", "");
+  }
+});
 
 Deno.test("legacy Chat Completions history is converted to Responses items", () => {
   const inputItems = parseLlmResponseInputItems(

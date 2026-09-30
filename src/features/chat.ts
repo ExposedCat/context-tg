@@ -41,6 +41,7 @@ import {
   type LlmToolContext,
   type LlmToolError,
   requestLlm,
+  requestThreadName,
   type ToolName,
 } from "./llm.ts";
 import { getChatDebugMode } from "./llm-models.ts";
@@ -2069,6 +2070,27 @@ async function sendRecoveredErrorResponse(
   );
 }
 
+async function safelyNamePrivateThread(
+  ctx: Context,
+  topicId: number,
+  text: string,
+  agent: AgentDefinition,
+  signal: AbortSignal,
+): Promise<void> {
+  if (!ctx.chat) return;
+
+  try {
+    const name = await requestThreadName(text, agent.MODEL, {
+      database: ctx.database,
+      context: { chatId: ctx.chat.id, messageId: ctx.message?.message_id ?? 0 },
+      signal,
+    });
+    await ctx.api.editForumTopic(ctx.chat.id, topicId, { name });
+  } catch (error) {
+    logError("Failed to set private thread name:", { topicId, error });
+  }
+}
+
 type HandleChatRequestOptions = {
   silentQuota?: boolean;
   reply?: TextMessage;
@@ -2077,6 +2099,7 @@ type HandleChatRequestOptions = {
   imageMessages?: LlmContextMessage[];
   thread?: Thread;
   threadId?: number;
+  nameThread?: boolean;
   taskText?: string;
   tools?: ToolName[];
   onUnhandledError?: () => Promise<void>;
@@ -2122,6 +2145,7 @@ async function handleChatRequest(
   let progressResponseId: string | undefined;
   let activeAgent: AgentDefinition = normalAgent;
   let activeAgentName = normalAgent.name[0];
+  let threadNaming: Promise<void> | undefined;
   const taskAbortController = createTaskAbortController(taskKey);
 
   try {
@@ -2144,6 +2168,16 @@ async function handleChatRequest(
     const agentName = trigger?.name ?? thread?.agent_name ?? agent.name[0];
     activeAgent = agent;
     activeAgentName = agentName;
+    const topicId = getForumThreadId(message, reply);
+    if (options.nameThread && topicId !== undefined) {
+      threadNaming = safelyNamePrivateThread(
+        ctx,
+        topicId,
+        text,
+        agent,
+        taskAbortController.signal,
+      );
+    }
     const requestedTools = options.tools ?? agent.tools;
     const responseId =
       thread?.response_id &&
@@ -2393,6 +2427,7 @@ async function handleChatRequest(
         logError("Failed to finish task:", { error });
       }
     }
+    await threadNaming;
   }
 }
 
@@ -2950,6 +2985,8 @@ chatComposer.on("message", async (ctx, next) => {
     replyContext,
     thread,
     threadId: repliedTask?.thread_id ?? conversationTopicId,
+    nameThread:
+      privateChat && topicId !== undefined && !thread && Boolean(text?.trim()),
     imageMessages: mediaGroupMessages,
     onUnhandledError: next,
   });

@@ -25,7 +25,7 @@ export const tools = [
   "set_reply_message_id",
 ] satisfies ToolName[];
 
- export function buildInstructions(
+export function buildInstructions(
   chatId: number,
   triggerName?: string,
 ): string {

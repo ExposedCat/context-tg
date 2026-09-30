@@ -1808,3 +1808,40 @@ export async function requestLlm(
     model,
   );
 }
+
+export async function requestThreadName(
+  message: string,
+  model: AgentModel,
+  options: LlmRequestOptions = {},
+): Promise<string> {
+  const fallback = message.trim().split(/\s+/).slice(0, 3).join(" ");
+  const prompt = `According to the following user request:
+<message>
+${message}
+</message>
+Respond with a name for this thread. Don't use formatting, don't add anything else, your entire response will be used to name the thread.`;
+
+  try {
+    const settings = await resolveRuntimeSettings(model, options);
+    const response = await getClient().responses.create(
+      {
+        model: getConfiguredDeploymentName(model),
+        instructions: "",
+        input: [{ role: "user", content: prompt }],
+        store: false,
+        ...(model.withReasoning && settings.reasoning !== null
+          ? { reasoning: { effort: settings.reasoning } }
+          : {}),
+      },
+      { signal: options.signal },
+    );
+    const error = getResponseError(response);
+    if (error) throw error;
+    const name = getResponseText(response)?.trim();
+    if (!name) throw new Error("Thread name was empty.");
+    return name;
+  } catch (error) {
+    logError("Failed to generate thread name:", { error });
+    return fallback;
+  }
+}

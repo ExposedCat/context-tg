@@ -9,6 +9,11 @@ Mode is disabled. Each topic continues its own conversation and retains
 its selected agent and alias. An explicit reply continues from that message;
 an explicit agent trigger can change the topic's agent.
 
+The first text request in a DM topic also generates its name using the responding
+agent's model. The naming call uses a separate prompt without tools or conversation
+history. Its entire response, trimmed, becomes the topic name; if generation fails
+or returns an empty name, the bot uses the first three words of the request.
+
 Responses, reports, typing indicators, and scheduled messages stay in the
 originating topic. Message search and recent-history tools support the current
 DM topic through `target=topic_thread`; `target=group` searches the whole chat.

@@ -216,6 +216,8 @@ Deno.test("DMs continue without mentions with or without topic IDs and preserve 
   const requests: Array<{ input: unknown; instructions: string }> = [];
   const deliveries: unknown[] = [];
   const typing: unknown[] = [];
+  const names: unknown[] = [];
+  const nameRequests: Array<{ model: string; input: unknown }> = [];
   const bot = {
     id: 42,
     is_bot: true,
@@ -246,6 +248,10 @@ Deno.test("DMs continue without mentions with or without topic IDs and preserve 
     file_unique_id: "dm-photo",
     file_path: "photos/dm-photo.jpg",
   });
+  api.editForumTopic = async (chatId, topicId, options) => {
+    names.push({ chatId, topicId, name: options?.name });
+    return true;
+  };
   globalThis.fetch = (async (_input, init) => {
     if (String(_input).includes("/photos/dm-photo.jpg")) {
       return new Response(new Uint8Array([1, 2, 3]), {
@@ -253,6 +259,44 @@ Deno.test("DMs continue without mentions with or without topic IDs and preserve 
       });
     }
     const payload = JSON.parse(String(init?.body));
+    if (payload.instructions === "") {
+      nameRequests.push(payload);
+      if (payload.model === "test-troll-model") {
+        return new Response(
+          JSON.stringify({
+            error: {
+              message: "Title generation failed",
+              type: "invalid_request_error",
+            },
+          }),
+          {
+            status: 400,
+            headers: { "content-type": "application/json" },
+          },
+        );
+      }
+      return new Response(
+        JSON.stringify({
+          id: "resp_title",
+          object: "response",
+          status: "completed",
+          output: [
+            {
+              type: "message",
+              role: "assistant",
+              content: [
+                {
+                  type: "output_text",
+                  text: "  Generated thread name  ",
+                  annotations: [],
+                },
+              ],
+            },
+          ],
+        }),
+        { headers: { "content-type": "application/json" } },
+      );
+    }
     requests.push(payload);
     const id = `resp_dm_${requests.length}`;
     const output = sendWithoutReply
@@ -289,6 +333,7 @@ Deno.test("DMs continue without mentions with or without topic IDs and preserve 
 
   try {
     setLlmDeploymentName("small", "test-model");
+    setLlmDeploymentName("openminded", "test-troll-model");
     const cases = [
       {
         id: 10,
@@ -373,6 +418,14 @@ Deno.test("DMs continue without mentions with or without topic IDs and preserve 
         previous: "resp_dm_10",
         agent: "normal",
         name: "laylo",
+      },
+      {
+        id: 100,
+        topic: 9,
+        text: "troll laylo gamma secret",
+        previous: null,
+        agent: "troll",
+        name: "troll laylo",
       },
     ] as const;
     for (const test of cases) {
@@ -477,6 +530,15 @@ Deno.test("DMs continue without mentions with or without topic IDs and preserve 
         .executeTakeFirst(),
       undefined,
     );
+    deepStrictEqual(names, [
+      { chatId: 1, topicId: 7, name: "Generated thread name" },
+      { chatId: 1, topicId: 8, name: "Generated thread name" },
+      { chatId: 1, topicId: 9, name: "troll laylo gamma" },
+    ]);
+    deepStrictEqual(
+      nameRequests.map((request) => request.model),
+      ["test-model", "test-model", "test-troll-model"],
+    );
     // A different private chat with the same topic ID has no continuation.
     const { getLatestTopicThread } = await import("./threads.ts");
     strictEqual(
@@ -501,6 +563,7 @@ Deno.test("DMs continue without mentions with or without topic IDs and preserve 
   } finally {
     globalThis.fetch = originalFetch;
     setLlmDeploymentName("small", "");
+    setLlmDeploymentName("openminded", "");
     await database.destroy();
   }
 });
