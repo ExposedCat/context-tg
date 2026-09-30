@@ -25,6 +25,7 @@
     "npm:@grammyjs/i18n@1.1.2": "1.1.2_grammy@1.46.0",
     "npm:@grammyjs/opentelemetry@0.1.1": "0.1.1_grammy@1.46.0",
     "npm:@grammyjs/opentelemetry@~0.1.1": "0.1.1_grammy@1.46.0",
+    "npm:@grammyjs/ratelimiter@^1.2.1": "1.2.1",
     "npm:@grammyjs/runner@2.0.3": "2.0.3_grammy@1.46.0",
     "npm:@opentelemetry/api@^1.9.1": "1.9.1",
     "npm:debug@^4.4.3": "4.4.3",
@@ -196,6 +197,9 @@
         "@opentelemetry/semantic-conventions@1.30.0",
         "grammy"
       ]
+    },
+    "@grammyjs/ratelimiter@1.2.1": {
+      "integrity": "sha512-4bmVUBCBnIb2epbDiBLCvvnVjaYg7kDCPR1Ptt6gqoxm5vlD8BjainYv+yjF6221hu2KUv8QAckumDI+6xyGsQ=="
     },
     "@grammyjs/runner@2.0.3_grammy@1.46.0": {
       "integrity": "sha512-nckmTs1dPWfVQteK9cxqxzE+0m1VRvluLWB8UgFzsjg62w3qthPJt0TYtJBEdG7OedvfQq4vnFAyE6iaMkR42A==",
@@ -708,6 +712,7 @@
       "npm:@biomejs/biome@2.3.8",
       "npm:@grammyjs/i18n@1.1.2",
       "npm:@grammyjs/opentelemetry@~0.1.1",
+      "npm:@grammyjs/ratelimiter@^1.2.1",
       "npm:@grammyjs/runner@2.0.3",
       "npm:@opentelemetry/api@^1.9.1",
       "npm:debug@^4.4.3",

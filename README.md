@@ -1,5 +1,18 @@
 # Chat Context | Telegram
 
+## Incoming rate limiting
+
+The bot uses [grammY ratelimiter](https://grammy.dev/plugins/ratelimiter) to
+allow up to 10 updates per user every 2 seconds across chats. Excess updates
+are silently dropped before telemetry, message indexing, commands, and LLM
+processing. The burst allowance accommodates photo albums. Updates without
+a sender user ID bypass the limiter.
+
+Counters are held in memory per bot process and reset on restart. This limits
+user spam; it does not provide network-level DDoS protection. Adjust
+`USER_RATE_LIMIT_TIME_FRAME_MS` and `USER_RATE_LIMIT_MAX_UPDATES` in `src/bot.ts`
+to change the limits.
+
 ## Remembered-message search
 
 Chat search combines the existing dense embeddings with Qdrant full-text

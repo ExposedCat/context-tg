@@ -4,6 +4,7 @@ import {
   openTelemetry,
   type SpanDefinitions,
 } from "@grammyjs/opentelemetry";
+import { limit } from "@grammyjs/ratelimiter";
 import { DiagLogLevel } from "@opentelemetry/api";
 import { Bot, type Context as GrammyContext, type Transformer } from "grammy";
 import { I18n, type I18nFlavor } from "grammy-i18n";
@@ -28,6 +29,8 @@ import { safelyMaybeSendPeriodicTroll } from "./features/trolling.ts";
 import { delay } from "./utils/async.ts";
 
 const RUNNER_CONCURRENCY = 500;
+const USER_RATE_LIMIT_TIME_FRAME_MS = 2000;
+const USER_RATE_LIMIT_MAX_UPDATES = 10;
 const TELEGRAM_RATE_LIMIT_RETRY_DELAY_MS = 3000;
 const TELEGRAM_RATE_LIMIT_MAX_RETRIES = 5;
 const BOT_COMMAND_LOCALES = ["ru", "uk", "de"] as const;
@@ -105,6 +108,13 @@ export function initBot(token: string, database: Database) {
     defaultLocale: "en",
   });
 
+  // Allow album bursts while dropping excess updates before expensive work.
+  bot.use(
+    limit({
+      timeFrame: USER_RATE_LIMIT_TIME_FRAME_MS,
+      limit: USER_RATE_LIMIT_MAX_UPDATES,
+    }),
+  );
   bot.use(telemetryMiddleware);
   bot.use((ctx, next) => {
     ctx.database = database;

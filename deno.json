@@ -9,6 +9,7 @@
 		"@db/sqlite": "jsr:@db/sqlite@^0.13.0",
 		"@grammyjs/debug": "jsr:@grammyjs/debug@^0.2.1",
 		"@grammyjs/opentelemetry": "npm:@grammyjs/opentelemetry@^0.1.1",
+		"@grammyjs/ratelimiter": "npm:@grammyjs/ratelimiter@^1.2.1",
 		"@kysely/kysely": "jsr:@kysely/kysely@^0.28.17",
 		"@marshift/kysely-deno-sqlite3": "jsr:@marshift/kysely-deno-sqlite3@^1.0.0",
 		"@openai/openai": "jsr:@openai/openai",
