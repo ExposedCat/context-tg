@@ -118,5 +118,3 @@ configure-trolling-mode-description = Агресивний: попередній
 trolling-mode-aggressive = Агресивний
 trolling-mode-mild = М’який
 trolling-mode-clean = Без обзивань
-settings-trolling-mode-current = Режим тролінгу в цьому чаті: {$mode}.
-settings-trolling-mode-usage = {$command} mode aggressive|mild|clean

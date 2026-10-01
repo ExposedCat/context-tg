@@ -20,7 +20,6 @@ for (const [key, value] of Object.entries({
   Deno.env.set(key, value);
 
 const { configureComposer } = await import("./configure.ts");
-const { stateComposer } = await import("./state.ts");
 const { initDatabase } = await import("./database.ts");
 const { getChatReasoningEffort, getChatDebugMode } = await import(
   "./llm-models.ts"
@@ -77,7 +76,6 @@ Deno.test("rich configure navigation, persistence and authorization", async () =
       }),
     );
     bot.use(configureComposer);
-    bot.use(stateComposer);
     const chat = { id: -100, type: "supergroup" as const, title: "test" };
     const from = (id: number) => ({ id, is_bot: false, first_name: "user" });
     let updateId = 0;
@@ -102,24 +100,6 @@ Deno.test("rich configure navigation, persistence and authorization", async () =
             call.method === "sendRichMessage",
         )?.payload.rich_message as { html: string }
       ).html;
-    const command = async (text: string, user = 1) => {
-      calls.length = 0;
-      await bot.handleUpdate({
-        update_id: ++updateId,
-        message: {
-          message_id: updateId,
-          date: 1,
-          chat,
-          from: from(user),
-          text,
-          entities: [{
-            type: "bot_command",
-            offset: 0,
-            length: text.split(" ")[0].length,
-          }],
-        },
-      });
-    };
     await bot.handleUpdate({
       update_id: ++updateId,
       message: {
@@ -165,12 +145,16 @@ Deno.test("rich configure navigation, persistence and authorization", async () =
       "mild",
     );
     match(html(), /data="cfg:trolling-mode:clean"/);
+    match(html(), /style="primary" data="cfg:trolling-mode:mild"/);
     strictEqual(
       (await getTrollingSettings(database, -200)).mode,
       "clean",
     );
     await setTrollingInterval(database, chat.id, 138);
     await click("cfg:trolling:off");
+    await click("cfg:trolling-mode:aggressive");
+    strictEqual((await getTrollingSettings(database, chat.id)).enabled, false);
+    await click("cfg:trolling-mode:mild");
     await click("cfg:trolling:on");
     strictEqual(
       (await getTrollingSettings(database, chat.id)).mode,
@@ -185,12 +169,7 @@ Deno.test("rich configure navigation, persistence and authorization", async () =
       (await getTrollingSettings(database, chat.id)).intervalMessageCount,
       138,
     );
-    await command("/trolling mode mild", 2);
-    strictEqual(
-      (await getTrollingSettings(database, chat.id)).mode,
-      "mild",
-    );
-    await command("/trolling mode clean", 3);
+    await click("cfg:trolling-mode:mild", 2);
     strictEqual(
       (await getTrollingSettings(database, chat.id)).mode,
       "mild",
@@ -205,17 +184,7 @@ Deno.test("rich configure navigation, persistence and authorization", async () =
         call.method === "answerCallbackQuery" && call.payload.show_alert
       ),
     );
-    await command("/trolling mode invalid");
-    strictEqual(
-      (await getTrollingSettings(database, chat.id)).mode,
-      "mild",
-    );
-    await command("/trolleach@test_bot mode clean");
-    strictEqual(
-      (await getTrollingSettings(database, chat.id)).mode,
-      "clean",
-    );
-    await command("/trolling mode aggressive", 2);
+    await click("cfg:trolling-mode:aggressive", 2);
     strictEqual((await getTrollingSettings(database, chat.id)).mode, "aggressive");
     await click("cfg:trolling-mode:mild", 2);
     strictEqual((await getTrollingSettings(database, chat.id)).mode, "mild");

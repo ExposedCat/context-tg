@@ -112,8 +112,8 @@ selects `small` (the default) or `big`; an unset or failed primary uses the fall
 
 ## Trolling tone
 
-Each chat can select one of three modes through `/trolling mode MODE`
-(or `/trolleach mode MODE`), or under `/settings` → Trolling:
+Each chat can select one of three modes using the existing buttons under
+`/settings` → Trolling. The selected mode is highlighted:
 
 - `aggressive`: the original crude, profane style with harsh personal roasts.
 - `mild`: softer, playful roasts with light context-specific name-calling and

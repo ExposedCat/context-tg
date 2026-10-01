@@ -116,5 +116,3 @@ configure-trolling-mode-description = Aggressiv: der ursprüngliche grobe Stil m
 trolling-mode-aggressive = Aggressiv
 trolling-mode-mild = Mild
 trolling-mode-clean = Ohne Beschimpfungen
-settings-trolling-mode-current = Trolling-Modus in diesem Chat: {$mode}.
-settings-trolling-mode-usage = {$command} mode aggressive|mild|clean

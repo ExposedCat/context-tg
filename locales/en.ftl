@@ -116,5 +116,3 @@ configure-trolling-mode-description = Aggressive: the original profane roast sty
 trolling-mode-aggressive = Aggressive
 trolling-mode-mild = Mild
 trolling-mode-clean = Clean
-settings-trolling-mode-current = Trolling mode in this chat: {$mode}.
-settings-trolling-mode-usage = {$command} mode aggressive|mild|clean
