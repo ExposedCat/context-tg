@@ -67,12 +67,12 @@ settings-debug-set = {$setting} is now {$value}.
 settings-choose-reasoning = Choose {$setting} for {$deployment}:
 settings-reasoning-set = {$setting} for {$deployment} is now {$value}.
 
-settings-trolling-description = I'll periodically check whether to send a trolling reply. Each check has a 25% chance of triggering.
+settings-trolling-description = I'll generate a trolling reply at every configured interval and send it only if the quality check approves.
 settings-trolling-disabled = Trolling is off for this chat.
 settings-trolling-updated =
     { $count ->
-        [one] I'll check for a trolling reply after every message. Each check has a 25% chance of triggering.
-       *[other] I'll check for a trolling reply every {$count} messages. Each check has a 25% chance of triggering.
+        [one] I'll generate a reply after every message and send it only if the quality check approves.
+       *[other] I'll generate a reply every {$count} messages and send it only if the quality check approves.
     }
 settings-proactive-description = I'll periodically check whether to send a proactive reply. Each check has a 25% chance of triggering.
 settings-proactive-disabled = Proactive replies are off for this chat.
@@ -106,7 +106,7 @@ configure-no-emoji = No emoji packs.
 configure-kind = Kind
 configure-deployment = Deployment
 configure-model-usage = Use /model Kind Deployment
-configure-trolling-description = Each {$count}-th message will get trolled with a 25% chance.
+configure-trolling-description = Every {$count}-th message triggers generation of a trolling reply. It is sent only after the quality check approves.
 configure-proactive-description = Each {$count}-th message will get a reply with a 25% chance.
 configure-all = Configure all
 configure-back = Back

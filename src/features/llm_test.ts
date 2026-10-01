@@ -1591,3 +1591,176 @@ Deno.test("two-mode trolling preferences migrate once to mild and clean", async 
     await database.destroy();
   }
 });
+
+Deno.test("trolling validation uses Sol high with strict boolean structured output", async () => {
+  const { requestTrollingValidation } = await import("./llm.ts");
+  const originalFetch = globalThis.fetch;
+  const input = {
+    messages: ["<message>context</message>"],
+    candidate: "A topical quip.",
+    mode: "clean" as const,
+  };
+  let requests = 0;
+  let output = '{"valid":true}';
+  globalThis.fetch = (async (_input, init) => {
+    requests++;
+    const body = JSON.parse(String(init?.body));
+    strictEqual(body.model, "gpt-6.1-sol");
+    deepStrictEqual(body.reasoning, { effort: "high" });
+    strictEqual(body.store, false);
+    strictEqual(body.previous_response_id, undefined);
+    strictEqual(body.tools, undefined);
+    deepStrictEqual(JSON.parse(body.input[0].content), input);
+    deepStrictEqual(body.text.format, {
+      type: "json_schema",
+      name: "trolling_validation",
+      strict: true,
+      schema: {
+        type: "object",
+        properties: { valid: { type: "boolean" } },
+        required: ["valid"],
+        additionalProperties: false,
+      },
+    });
+    return new Response(
+      JSON.stringify(createApiResponse("resp_review", [{
+        id: "msg_review",
+        type: "message",
+        role: "assistant",
+        status: "completed",
+        content: [{ type: "output_text", text: output, annotations: [] }],
+      }])),
+      { headers: { "content-type": "application/json" } },
+    );
+  }) as typeof fetch;
+  try {
+    deepStrictEqual(await requestTrollingValidation(input), { valid: true });
+    output = '{"valid":false}';
+    deepStrictEqual(await requestTrollingValidation(input), { valid: false });
+    for (
+      const invalid of [
+        '{"valid":"false"}',
+        '{"valid":true,"extra":1}',
+        "{}",
+        "[]",
+        "not JSON",
+        "",
+      ]
+    ) {
+      output = invalid;
+      await assertRejects(
+        () => requestTrollingValidation(input),
+        /Trolling validation/,
+      );
+    }
+    strictEqual(requests, 8);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+Deno.test("periodic trolling always generates at its interval and sends only approved replies", async () => {
+  const { maybeSendPeriodicTroll, setTrollingInterval } = await import(
+    "./trolling.ts"
+  );
+  const { getUsageStatus } = await import("./usage.ts");
+  const database = await initDatabase()();
+  const originalFetch = globalThis.fetch;
+  const originalRandom = Math.random;
+  const sent: string[] = [];
+  let generations = 0;
+  let validations = 0;
+  let verdict = '{"valid":false}';
+  let messageId = 0;
+  const candidate = "A specific topical quip.";
+  const ctx = {
+    database,
+    chat: { id: -100, type: "supergroup" },
+    telemetry: { event: () => {} },
+    reply: (text: string) => {
+      sent.push(text);
+      return Promise.resolve();
+    },
+  } as unknown as import("../bot.ts").Context;
+  const respond = (text: string) =>
+    Response.json(createApiResponse("resp_periodic", [{
+      id: "msg_periodic",
+      type: "message",
+      role: "assistant",
+      status: "completed",
+      content: [{ type: "output_text", text, annotations: [] }],
+    }]));
+  globalThis.fetch = (async (url, init) => {
+    const request = new Request(url, init);
+    if (new URL(request.url).hostname === "qdrant.test") {
+      if (request.url.endsWith("/points/scroll")) {
+        return Response.json({
+          result: {
+            points: [{
+              id: "last",
+              payload: {
+                text: "A concrete chat message",
+                date: "2026-10-01",
+                date_timestamp: 1,
+                sender_name: "User",
+                sender_id: 2,
+                chat_id: -100,
+                message_id: messageId,
+              },
+            }],
+          },
+        });
+      }
+      return Response.json({ result: { payload_schema: {} } });
+    }
+    const body = await request.json();
+    if (body.model === "test-troll-model") {
+      generations++;
+      return respond(candidate);
+    }
+    strictEqual(body.model, "gpt-6.1-sol");
+    validations++;
+    const input = JSON.parse(body.input[0].content);
+    strictEqual(input.candidate, candidate);
+    strictEqual(input.mode, "clean");
+    ok(input.messages.at(-1).includes("A concrete chat message"));
+    return respond(verdict);
+  }) as typeof fetch;
+  Math.random = () => 1; // The old 25% trigger would suppress all these replies.
+  try {
+    setLlmDeploymentName("openminded", "test-troll-model");
+    await setTrollingInterval(database, -100, 2);
+    const receive = () =>
+      maybeSendPeriodicTroll(ctx, { message_id: ++messageId }, {
+        id: 2,
+        first_name: "User",
+      }, -100);
+    await receive();
+    strictEqual(generations, 0);
+    await receive();
+    deepStrictEqual([generations, validations, sent.length], [1, 1, 0]);
+    verdict = '{"valid":true}';
+    await receive();
+    await receive();
+    deepStrictEqual([generations, validations, sent.length], [2, 2, 1]);
+    strictEqual(sent[0], candidate);
+    verdict = '{"valid":"true"}';
+    await receive();
+    await assertRejects(receive, /Trolling validation/);
+    deepStrictEqual([generations, validations, sent.length], [3, 3, 1]);
+    const { used } = await getUsageStatus(database, -100);
+    strictEqual(used, 6);
+    await database.insertInto("credit_limits").values({
+      chat_id: -100,
+      quota: used + 1,
+      unlimited: 0,
+    }).execute();
+    await receive();
+    await receive();
+    deepStrictEqual([generations, validations, sent.length], [4, 3, 1]);
+  } finally {
+    globalThis.fetch = originalFetch;
+    Math.random = originalRandom;
+    await database.destroy();
+  }
+});

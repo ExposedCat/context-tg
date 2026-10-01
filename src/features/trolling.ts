@@ -4,7 +4,7 @@ import type { Context } from "../bot.ts";
 import { trollAgent } from "./agents/index.ts";
 import type { Database } from "./database.ts";
 import { readLastMessages } from "./last-messages.ts";
-import { requestLlm } from "./llm.ts";
+import { requestLlm, requestTrollingValidation } from "./llm.ts";
 import {
   formatPromptMessageXml,
   formatSystemPromptMessageXml,
@@ -40,7 +40,6 @@ const logError = createDebug("app:trolling:error");
 
 export const DEFAULT_TROLLING_INTERVAL_MESSAGE_COUNT = 100;
 const TROLLING_CONTEXT_MESSAGE_COUNT = 11;
-const TRIGGER_CHANCE = 0.25;
 
 export async function migrateTrolling(database: Database) {
   await database.schema
@@ -274,8 +273,7 @@ function shouldTriggerTrolling(
     enabled &&
     messageCount > 0 &&
     intervalMessageCount > 0 &&
-    messageCount % intervalMessageCount === 0 &&
-    Math.random() < TRIGGER_CHANCE
+    messageCount % intervalMessageCount === 0
   );
 }
 
@@ -353,6 +351,19 @@ export async function maybeSendPeriodicTroll(
   if (!text) {
     return;
   }
+
+  const { mode } = await getTrollingSettings(ctx.database, chatId);
+  try {
+    await chargeCredits("request");
+  } catch {
+    return;
+  }
+  const { valid } = await requestTrollingValidation({
+    messages: messages.map(formatContextMessage),
+    candidate: text,
+    mode,
+  });
+  if (!valid) return;
 
   await ctx.reply(text, {
     link_preview_options: { is_disabled: true },
