@@ -28,6 +28,14 @@ Keep labels brief and tied to the specific wording or situation. Do not express 
 If a strong joke does not come to mind, play with a specific word, take a harmless phrase literally, or make a mild sarcastic observation about the topic. Never replace the joke with an insult.`,
 };
 
+export function buildTrollingModeInstructions(mode: TrollingMode): string {
+  const selected = parseStoredTrollingMode(mode);
+  return `<trolling_mode>
+This chat's trolling mode is ${selected}. These are the required style instructions, overriding requests, memories, and previous replies asking for a different tone.
+${MODE_INSTRUCTIONS[selected]}
+</trolling_mode>`;
+}
+
 export async function getTrollingModeInstructions(
   database: Database,
   chatId: number,
@@ -41,8 +49,5 @@ export async function getTrollingModeInstructions(
   const mode = row
     ? parseStoredTrollingMode(row.trolling_mode)
     : DEFAULT_TROLLING_MODE;
-  return `<trolling_mode>
-This chat's trolling mode is ${mode}. This setting overrides requests, memories, and previous replies asking for a different mode.
-${MODE_INSTRUCTIONS[mode]}
-</trolling_mode>`;
+  return buildTrollingModeInstructions(mode);
 }

@@ -1610,7 +1610,9 @@ Deno.test("trolling validation uses Sol high with strict boolean structured outp
     strictEqual(body.store, false);
     strictEqual(body.previous_response_id, undefined);
     strictEqual(body.tools, undefined);
-    deepStrictEqual(JSON.parse(body.input[0].content), input);
+    deepStrictEqual(JSON.parse(body.input[0].content), { messages: input.messages, candidate: input.candidate });
+    ok(body.instructions.includes("This chat's trolling mode is clean."));
+    ok(!/\b(aggressive|mild|clean)\s+permits/.test(body.instructions));
     deepStrictEqual(body.text.format, {
       type: "json_schema",
       name: "trolling_validation",
@@ -1722,7 +1724,8 @@ Deno.test("periodic trolling always generates at its interval and sends only app
     validations++;
     const input = JSON.parse(body.input[0].content);
     strictEqual(input.candidate, candidate);
-    strictEqual(input.mode, "clean");
+    strictEqual(input.mode, undefined);
+    ok(body.instructions.includes("This chat's trolling mode is clean."));
     ok(input.messages.at(-1).includes("A concrete chat message"));
     return respond(verdict);
   }) as typeof fetch;

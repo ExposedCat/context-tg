@@ -137,6 +137,9 @@ credit, including a validation that rejects the candidate. If the remaining
 balance cannot fund validation, the candidate is not sent. This gate applies to
 automatic trolling; explicit troll-agent conversations keep their existing flow.
 
+The application injects only the selected style into generation and validation
+prompts. Neither call receives a catalogue of the other modes to choose from.
+
 Only chat admins can change the mode. It applies to automatic trolling and
 explicit troll-agent conversations, including follow-ups. Changing the mode
 preserves the interval, enabled state, and message counter. `/trolling 100`
