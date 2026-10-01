@@ -12,6 +12,7 @@ import {
 } from "./llm-prompt.ts";
 import type { MessageMetadata } from "./messages.ts";
 import { createLlmCallTelemetry } from "./telemetry.ts";
+import { DEFAULT_TROLLING_MODE, parseStoredTrollingMode, type TrollingMode } from "./trolling-mode.ts";
 import { createCreditCharge, hasUsageRemaining } from "./usage.ts";
 
 type Sender = {
@@ -26,13 +27,13 @@ export type ChatTrollingTable = {
   message_count: number;
   interval_message_count: number;
   enabled: number;
-  allow_insults: number;
+  trolling_mode: TrollingMode;
 };
 
 export type TrollingSettings = {
   enabled: boolean;
   intervalMessageCount: number;
-  allowInsults: boolean;
+  mode: TrollingMode;
 };
 
 const logError = createDebug("app:trolling:error");
@@ -54,9 +55,9 @@ export async function migrateTrolling(database: Database) {
     )
     .addColumn("enabled", "integer", (column) => column.notNull().defaultTo(1))
     .addColumn(
-      "allow_insults",
-      "integer",
-      (column) => column.notNull().defaultTo(0),
+      "trolling_mode",
+      "text",
+      (column) => column.notNull().defaultTo(DEFAULT_TROLLING_MODE),
     )
     .execute();
 
@@ -74,15 +75,25 @@ export async function migrateTrolling(database: Database) {
   const tables = await database.introspection.getTables();
   const table = tables.find((table) => table.name === "chat_trolling");
   if (!table) throw new Error("chat_trolling table is missing after migration");
-  if (!table.columns.some((column) => column.name === "allow_insults")) {
-    await database.schema
-      .alterTable("chat_trolling")
-      .addColumn(
-        "allow_insults",
-        "integer",
-        (column) => column.notNull().defaultTo(0),
-      )
-      .execute();
+  if (!table.columns.some((column) => column.name === "trolling_mode")) {
+    await database.transaction().execute(async (transaction) => {
+      await transaction.schema
+        .alterTable("chat_trolling")
+        .addColumn(
+          "trolling_mode",
+          "text",
+          (column) => column.notNull().defaultTo(DEFAULT_TROLLING_MODE),
+        )
+        .execute();
+      if (table.columns.some((column) => column.name === "allow_insults")) {
+        const invalid = await sql`select chat_id from chat_trolling where allow_insults not in (0, 1) or allow_insults is null limit 1`.execute(transaction);
+        if (invalid.rows.length) {
+          throw new Error("Cannot migrate invalid chat_trolling.allow_insults; expected 0 or 1");
+        }
+        // Upgrade the previously stored two-mode preference once, atomically.
+        await sql`update chat_trolling set trolling_mode = case when allow_insults = 1 then 'mild' else 'clean' end`.execute(transaction);
+      }
+    });
   }
 
   try {
@@ -134,7 +145,7 @@ async function incrementTrollingMessageCount(
         message_count: 0,
         interval_message_count: DEFAULT_TROLLING_INTERVAL_MESSAGE_COUNT,
         enabled: 1,
-        allow_insults: 0,
+        trolling_mode: DEFAULT_TROLLING_MODE,
       })
       .onConflict((conflict) => conflict.column("chat_id").doNothing())
       .execute();
@@ -151,7 +162,7 @@ async function incrementTrollingMessageCount(
         "message_count",
         "interval_message_count",
         "enabled",
-        "allow_insults",
+        "trolling_mode",
       ])
       .where("chat_id", "=", chatId)
       .executeTakeFirst();
@@ -159,7 +170,7 @@ async function incrementTrollingMessageCount(
     return {
       messageCount: row?.message_count ?? 0,
       enabled: row?.enabled !== 0,
-      allowInsults: row?.allow_insults === 1,
+      mode: row ? parseStoredTrollingMode(row.trolling_mode) : DEFAULT_TROLLING_MODE,
       intervalMessageCount: row?.interval_message_count ??
         DEFAULT_TROLLING_INTERVAL_MESSAGE_COUNT,
     };
@@ -178,7 +189,7 @@ export async function setTrollingInterval(
       message_count: 0,
       interval_message_count: intervalMessageCount,
       enabled: 1,
-      allow_insults: 0,
+      trolling_mode: DEFAULT_TROLLING_MODE,
     })
     .onConflict((conflict) =>
       conflict.column("chat_id").doUpdateSet({
@@ -202,7 +213,7 @@ export async function setTrollingEnabled(
       message_count: 0,
       interval_message_count: DEFAULT_TROLLING_INTERVAL_MESSAGE_COUNT,
       enabled: enabled ? 1 : 0,
-      allow_insults: 0,
+      trolling_mode: DEFAULT_TROLLING_MODE,
     })
     .onConflict((conflict) =>
       conflict.column("chat_id").doUpdateSet({
@@ -219,23 +230,24 @@ export async function getTrollingSettings(
 ): Promise<TrollingSettings> {
   const row = await database
     .selectFrom("chat_trolling")
-    .select(["interval_message_count", "enabled", "allow_insults"])
+    .select(["interval_message_count", "enabled", "trolling_mode"])
     .where("chat_id", "=", chatId)
     .executeTakeFirst();
 
   return {
     enabled: row?.enabled !== 0,
-    allowInsults: row?.allow_insults === 1,
+    mode: row ? parseStoredTrollingMode(row.trolling_mode) : DEFAULT_TROLLING_MODE,
     intervalMessageCount: row?.interval_message_count ??
       DEFAULT_TROLLING_INTERVAL_MESSAGE_COUNT,
   };
 }
 
-export async function setTrollingInsults(
+export async function setTrollingMode(
   database: Database,
   chatId: number,
-  allowInsults: boolean,
+  mode: TrollingMode,
 ): Promise<void> {
+  parseStoredTrollingMode(mode);
   await database
     .insertInto("chat_trolling")
     .values({
@@ -243,11 +255,11 @@ export async function setTrollingInsults(
       message_count: 0,
       interval_message_count: DEFAULT_TROLLING_INTERVAL_MESSAGE_COUNT,
       enabled: 1,
-      allow_insults: allowInsults ? 1 : 0,
+      trolling_mode: mode,
     })
     .onConflict((conflict) =>
       conflict.column("chat_id").doUpdateSet({
-        allow_insults: allowInsults ? 1 : 0,
+        trolling_mode: mode,
       })
     )
     .execute();
@@ -274,9 +286,9 @@ function buildTrollingRequest(
   return [
     formatSystemPromptMessageXml(
       [
-        `Write a friendly, playful reply to the last message from ${targetName}. You do not need to address the sender by name.`,
+        `Write a trolling reply to the last message from ${targetName}, in the chat's configured trolling_mode. You do not need to address the sender by name.`,
         "The final context message is the trigger message. Build the joke around its wording or situation, not the whole chat.",
-        "Use one brief, context-specific joke, wordplay, or mild sarcastic observation. Follow the chat's trolling_insults setting for name-calling. Never use profanity or aggressive personal remarks. Avoid repeating jokes from the context.",
+        "Use one brief, context-specific roast, joke, wordplay, or sarcastic observation. The trolling_mode setting determines whether profanity, name-calling, and aggressive roasting are allowed. Avoid repeating jokes from the context.",
         "If the message expresses distress, grief, or asks to stop teasing, respond briefly and kindly without a joke.",
       ].join("\n"),
     ),

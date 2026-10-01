@@ -111,8 +111,10 @@ configure-proactive-description = Jede {$count}. Nachricht erhält mit einer Wah
 configure-all = Alle konfigurieren
 configure-back = Zurück
 
-configure-trolling-insults = Leichte Beschimpfungen
-configure-trolling-insults-description = Wenn aktiviert, sind spielerische, kontextbezogene Beschimpfungen erlaubt. Aggressive Beleidigungen und Schimpfwörter sind in beiden Modi ausgeschlossen.
-settings-trolling-insults-on = Leichte, kontextbezogene Beschimpfungen sind in diesem Chat erlaubt. Aggression und Schimpfwörter bleiben ausgeschlossen.
-settings-trolling-insults-off = Beschimpfungen sind in diesem Chat ausgeschlossen; nur Wortspiele und situationsbezogener Sarkasmus.
-settings-trolling-insults-usage = {$command} insults on — leichte Beschimpfungen erlauben; {$command} insults off — ausschließen.
+configure-trolling-mode = Trolling-Modus
+configure-trolling-mode-description = Aggressiv: der ursprüngliche grobe Stil mit Schimpfwörtern und harten persönlichen Roasts. Mild: spielerische Roasts mit leichten Beschimpfungen und gelegentlichen Schimpfwörtern. Ohne Beschimpfungen: Wortspiele und situationsbezogener Sarkasmus ohne Beschimpfungen oder Schimpfwörter.
+trolling-mode-aggressive = Aggressiv
+trolling-mode-mild = Mild
+trolling-mode-clean = Ohne Beschimpfungen
+settings-trolling-mode-current = Trolling-Modus in diesem Chat: {$mode}.
+settings-trolling-mode-usage = {$command} mode aggressive|mild|clean

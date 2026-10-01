@@ -111,8 +111,10 @@ configure-proactive-description = Each {$count}-th message will get a reply with
 configure-all = Configure all
 configure-back = Back
 
-configure-trolling-insults = Light name-calling
-configure-trolling-insults-description = When enabled, playful context-specific name-calling is allowed. Aggressive abuse and profanity are excluded in both modes.
-settings-trolling-insults-on = Light name-calling is allowed in this chat. Aggression and profanity remain excluded.
-settings-trolling-insults-off = Name-calling is excluded in this chat; only wordplay and situational sarcasm.
-settings-trolling-insults-usage = {$command} insults on — allow light name-calling; {$command} insults off — exclude it.
+configure-trolling-mode = Trolling mode
+configure-trolling-mode-description = Aggressive: the original profane roast style. Mild: softer roasts with light name-calling and occasional profanity. Clean: wordplay and situational sarcasm without name-calling or profanity.
+trolling-mode-aggressive = Aggressive
+trolling-mode-mild = Mild
+trolling-mode-clean = Clean
+settings-trolling-mode-current = Trolling mode in this chat: {$mode}.
+settings-trolling-mode-usage = {$command} mode aggressive|mild|clean

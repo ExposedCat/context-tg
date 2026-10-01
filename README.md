@@ -112,19 +112,23 @@ selects `small` (the default) or `big`; an unset or failed primary uses the fall
 
 ## Trolling tone
 
-Trolling favors short, context-specific jokes, wordplay, and mild sarcasm.
-Aggressive abuse, profanity, threats, and humiliating personal attacks are
-excluded in both modes.
+Each chat can select one of three modes through `/trolling mode MODE`
+(or `/trolleach mode MODE`), or under `/settings` → Trolling:
 
-Light name-calling is **off by default**, including for existing chats. Chat
-admins can enable it with `/trolling insults on` or exclude all name-calling
-with `/trolling insults off`. `/trolleach` accepts the same options. The
-**Light name-calling** toggle is also available under `/settings` → Trolling.
-The setting applies to automatic trolling and explicit troll-agent conversations
-(including follow-ups). Changing it preserves the message interval, enabled
-state, and message counter. `/trolling 100` still sets the message interval,
-not the intensity.
+- `aggressive`: the original crude, profane style with harsh personal roasts.
+- `mild`: softer, playful roasts with light context-specific name-calling and
+  occasional profanity, without aggressive personal abuse.
+- `clean`: wordplay, situational sarcasm, and nitpicking the wording or logic,
+  without name-calling or profanity. This is the default.
 
-Database initialization adds `chat_trolling.allow_insults` with a default of
-`0`; no manual database update is needed when the bot starts. These are model
-instructions, not an output filter; evaluate the tone with the deployed model.
+Only chat admins can change the mode. It applies to automatic trolling and
+explicit troll-agent conversations, including follow-ups. Changing the mode
+preserves the interval, enabled state, and message counter. `/trolling 100`
+continues to set the message interval, not the intensity.
+
+Database initialization adds `chat_trolling.trolling_mode`, defaulting to
+`clean`. Existing two-mode preferences migrate once: `allow_insults = 1`
+becomes `mild`, and `0` becomes `clean`. Original databases without a tone
+setting use `clean`. Later startups preserve the selected mode.
+These are model instructions, not an output filter; evaluate the tone with
+the deployed model.

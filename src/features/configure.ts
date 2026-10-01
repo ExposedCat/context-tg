@@ -17,10 +17,11 @@ import {
   getProactiveResponseSettings,
   setProactiveResponseEnabled,
 } from "./proactive.ts";
+import { isTrollingMode, TROLLING_MODES } from "./trolling-mode.ts";
 import {
   getTrollingSettings,
   setTrollingEnabled,
-  setTrollingInsults,
+  setTrollingMode,
 } from "./trolling.ts";
 
 export const configureComposer = new Composer<Context>();
@@ -94,10 +95,8 @@ export async function buildRichConfigureMessage(
         : await getProactiveResponseSettings(ctx.database, ctx.chat.id);
     html = `<p>${escapeHtml(ctx.t(`configure-${page}-description`, { count: status.intervalMessageCount }))}</p><p>${toggle(ctx, `${page}:${status.enabled ? "off" : "on"}`, status.enabled)}${status.enabled ? ` · <code>/${page} ${status.intervalMessageCount}</code>` : ""}</p>`;
     if (page === "trolling") {
-      const { allowInsults } = await getTrollingSettings(ctx.database, chatId);
-      html += `<p>${t("configure-trolling-insults")} ${
-        toggle(ctx, `insults:${allowInsults ? "off" : "on"}`, allowInsults)
-      }</p><p>${t("configure-trolling-insults-description")}</p>`;
+      const { mode } = await getTrollingSettings(ctx.database, chatId);
+      html += `<p>${t("configure-trolling-mode")}</p><tg-button-row>${TROLLING_MODES.map((value) => button(ctx.t(`trolling-mode-${value}`), `trolling-mode:${value}`, mode === value ? "primary" : undefined)).join("")}</tg-button-row><p>${t("configure-trolling-mode-description")}</p>`;
     }
   } else {
     const rows = await Promise.all(
@@ -187,8 +186,8 @@ configureComposer.callbackQuery(/^cfg:/, async (ctx) => {
           : setProactiveResponseEnabled;
       await setEnabled(ctx.database, ctx.chat.id, target === "on");
     }
-  } else if (action === "insults" && (target === "on" || target === "off")) {
-    await setTrollingInsults(ctx.database, ctx.chat.id, target === "on");
+  } else if (action === "trolling-mode" && isTrollingMode(target)) {
+    await setTrollingMode(ctx.database, ctx.chat.id, target);
     page = "trolling";
   } else if (action === "remove" && target) {
     const packs = await listEmojiPacks(ctx.database);

@@ -55,7 +55,7 @@ import type {
   LlmCallTelemetry,
   LlmCallTelemetryPayload,
 } from "./telemetry.ts";
-import { getTrollingInsultInstructions } from "./trolling-insults.ts";
+import { getTrollingModeInstructions } from "./trolling-mode.ts";
 import type { CreditCharge } from "./usage.ts";
 
 export type { LlmReport } from "./llm-tools/reports.ts";
@@ -1803,10 +1803,10 @@ export async function requestLlm(
   if (options.agentId === "troll") {
     if (!options.database || options.context?.chatId === undefined) {
       throw new Error(
-        "Troll requests require a database and chatId to load the chat's insult mode",
+        "Troll requests require a database and chatId to load the chat's trolling mode",
       );
     }
-    instructions += `\n\n${await getTrollingInsultInstructions(
+    instructions += `\n\n${await getTrollingModeInstructions(
       options.database,
       options.context.chatId,
     )}`;

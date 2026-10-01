@@ -113,8 +113,10 @@ configure-proactive-description = Каждое {$count}-е сообщение п
 configure-all = Настроить все
 configure-back = Назад
 
-configure-trolling-insults = Лёгкие обзывательства
-configure-trolling-insults-description = Когда включено, допустимы лёгкие обзывательства по контексту. Агрессивные оскорбления и мат исключены в обоих режимах.
-settings-trolling-insults-on = В этом чате допустимы лёгкие обзывательства по контексту. Агрессия и мат по-прежнему исключены.
-settings-trolling-insults-off = Обзывательства в этом чате исключены; только игра слов и сарказм по ситуации.
-settings-trolling-insults-usage = {$command} insults on — разрешить лёгкие обзывательства; {$command} insults off — исключить их.
+configure-trolling-mode = Режим троллинга
+configure-trolling-mode-description = Агрессивный: прежний жёсткий формат с матом и обзывательствами. Мягкий: лёгкие обзывательства и умеренный мат без агрессивной ругани. Без обзывательств: стёб, сарказм и придирки к словам без мата и перехода на личности.
+trolling-mode-aggressive = Агрессивный
+trolling-mode-mild = Мягкий
+trolling-mode-clean = Без обзывательств
+settings-trolling-mode-current = Режим троллинга в этом чате: {$mode}.
+settings-trolling-mode-usage = {$command} mode aggressive|mild|clean

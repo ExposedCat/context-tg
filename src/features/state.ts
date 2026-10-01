@@ -38,11 +38,12 @@ import {
   replyWithSchedules,
 } from "./schedules.ts";
 import { replyWithCancelTask, replyWithRecentTasks } from "./tasks.ts";
+import { isTrollingMode } from "./trolling-mode.ts";
 import {
   getTrollingSettings,
   setTrollingEnabled,
-  setTrollingInsults,
   setTrollingInterval,
+  setTrollingMode,
 } from "./trolling.ts";
 import { handleUsageCommand } from "./usage.ts";
 
@@ -788,21 +789,14 @@ async function replyWithTrollingIntervalCommand(
     return;
   }
 
-  if (value?.trim().split(/\s+/)[0]?.toLowerCase() === "insults") {
-    const mode = value.trim().toLowerCase().replace(/\s+/g, " ");
-    if (mode !== "insults on" && mode !== "insults off") {
-      await ctx.reply(ctx.t("settings-trolling-insults-usage", { command }));
+  if (value?.trim().split(/\s+/)[0]?.toLowerCase() === "mode") {
+    const [, mode, extra] = value.trim().toLowerCase().split(/\s+/);
+    if (extra || !isTrollingMode(mode)) {
+      await ctx.reply(ctx.t("settings-trolling-mode-usage", { command }));
       return;
     }
-    const allowInsults = mode === "insults on";
-    await setTrollingInsults(ctx.database, ctx.chat.id, allowInsults);
-    await ctx.reply(
-      ctx.t(
-        allowInsults
-          ? "settings-trolling-insults-on"
-          : "settings-trolling-insults-off",
-      ),
-    );
+    await setTrollingMode(ctx.database, ctx.chat.id, mode);
+    await ctx.reply(ctx.t("settings-trolling-mode-current", { mode: ctx.t(`trolling-mode-${mode}`) }));
     return;
   }
 
@@ -814,12 +808,8 @@ async function replyWithTrollingIntervalCommand(
       [
         ctx.t("settings-trolling-description"),
         getIntervalCommandUsage(ctx.t, command),
-        ctx.t("settings-trolling-insults-usage", { command }),
-        ctx.t(
-          current.allowInsults
-            ? "settings-trolling-insults-on"
-            : "settings-trolling-insults-off",
-        ),
+        ctx.t("settings-trolling-mode-usage", { command }),
+        ctx.t("settings-trolling-mode-current", { mode: ctx.t(`trolling-mode-${current.mode}`) }),
         ctx.t("settings-current-value", {
           value: formatMessageIntervalStatus(ctx.t, current),
         }),

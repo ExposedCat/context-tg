@@ -1441,9 +1441,9 @@ Deno.test("web search adds a surcharge and denied tools never execute", async ()
   }
 });
 
-Deno.test("troll requests load the current chat insult mode, including follow-ups", async () => {
+Deno.test("troll requests load the current chat trolling mode, including follow-ups", async () => {
   const { trollAgent } = await import("./agents/index.ts");
-  const { setTrollingInsults } = await import("./trolling.ts");
+  const { setTrollingMode } = await import("./trolling.ts");
   const database = await initDatabase()();
   const originalFetch = globalThis.fetch;
   const requests: Array<Record<string, unknown>> = [];
@@ -1478,27 +1478,27 @@ Deno.test("troll requests load the current chat insult mode, including follow-up
     const first = await call(500);
     ok(
       String(requests[0].instructions).includes(
-        "This chat's insult mode is off.",
+        "This chat's trolling mode is clean.",
       ),
     );
-    await setTrollingInsults(database, 500, true);
+    await setTrollingMode(database, 500, "mild");
     const second = await call(500, first.response_id);
     ok(
       String(requests[1].instructions).includes(
-        "This chat's insult mode is on.",
+        "This chat's trolling mode is mild.",
       ),
     );
     await call(501);
     ok(
       String(requests[2].instructions).includes(
-        "This chat's insult mode is off.",
+        "This chat's trolling mode is clean.",
       ),
     );
-    await setTrollingInsults(database, 500, false);
+    await setTrollingMode(database, 500, "clean");
     await call(500, second.response_id);
     ok(
       String(requests[3].instructions).includes(
-        "This chat's insult mode is off.",
+        "This chat's trolling mode is clean.",
       ),
     );
     await assertRejects(
@@ -1513,7 +1513,11 @@ Deno.test("troll requests load the current chat insult mode, including follow-up
         ),
       /require a database and chatId/,
     );
-    strictEqual(requests.length, 4);
+    await setTrollingMode(database, 500, "aggressive");
+    await call(500, second.response_id);
+    ok(String(requests[4].instructions).includes("This chat's trolling mode is aggressive."));
+    ok(String(requests[4].instructions).includes("crude, profane, chaotic"));
+    strictEqual(requests.length, 5);
   } finally {
     globalThis.fetch = originalFetch;
     await database.destroy();
@@ -1521,12 +1525,12 @@ Deno.test("troll requests load the current chat insult mode, including follow-up
 });
 
 Deno.test("trolling migration upgrades existing rows without changing state", async () => {
-  const { migrateTrolling, setTrollingInsults } = await import("./trolling.ts");
+  const { migrateTrolling, setTrollingMode } = await import("./trolling.ts");
   const { sql } = await import("@kysely/kysely");
   const database = await initDatabase()();
   try {
     await database.schema.alterTable("chat_trolling").dropColumn(
-      "allow_insults",
+      "trolling_mode",
     ).execute();
     // Simulate the previous schema with a disabled chat and an in-progress counter.
     await sql`insert into chat_trolling (chat_id, message_count, interval_message_count, enabled) values (500, 42, 137, 0)`
@@ -1536,7 +1540,7 @@ Deno.test("trolling migration upgrades existing rows without changing state", as
     const columns = (await database.introspection.getTables()).find((table) =>
       table.name === "chat_trolling"
     )?.columns;
-    ok(columns?.some((column) => column.name === "allow_insults"));
+    ok(columns?.some((column) => column.name === "trolling_mode"));
     deepStrictEqual(
       await database.selectFrom("chat_trolling").selectAll().where(
         "chat_id",
@@ -1548,10 +1552,10 @@ Deno.test("trolling migration upgrades existing rows without changing state", as
         message_count: 42,
         interval_message_count: 137,
         enabled: 0,
-        allow_insults: 0,
+        trolling_mode: "clean",
       },
     );
-    await setTrollingInsults(database, 500, true);
+    await setTrollingMode(database, 500, "mild");
     await migrateTrolling(database);
     const row = await database.selectFrom("chat_trolling").selectAll().where(
       "chat_id",
@@ -1561,7 +1565,28 @@ Deno.test("trolling migration upgrades existing rows without changing state", as
     strictEqual(row.message_count, 42);
     strictEqual(row.interval_message_count, 137);
     strictEqual(row.enabled, 0);
-    strictEqual(row.allow_insults, 1);
+    strictEqual(row.trolling_mode, "mild");
+  } finally {
+    await database.destroy();
+  }
+});
+
+Deno.test("two-mode trolling preferences migrate once to mild and clean", async () => {
+  const { migrateTrolling, getTrollingSettings, setTrollingMode } = await import("./trolling.ts");
+  const { sql } = await import("@kysely/kysely");
+  const database = await initDatabase()();
+  try {
+    await database.schema.alterTable("chat_trolling").dropColumn("trolling_mode").execute();
+    await database.schema.alterTable("chat_trolling").addColumn("allow_insults", "integer", (column) => column.notNull().defaultTo(0)).execute();
+    await sql`insert into chat_trolling (chat_id, message_count, interval_message_count, enabled, allow_insults) values (500, 42, 137, 0, 1), (501, 7, 100, 1, 0)`.execute(database);
+    await migrateTrolling(database);
+    strictEqual((await getTrollingSettings(database, 500)).mode, "mild");
+    strictEqual((await getTrollingSettings(database, 501)).mode, "clean");
+    await setTrollingMode(database, 500, "aggressive");
+    await migrateTrolling(database);
+    strictEqual((await getTrollingSettings(database, 500)).mode, "aggressive");
+    const row = await database.selectFrom("chat_trolling").select(["message_count", "interval_message_count", "enabled"]).where("chat_id", "=", 500).executeTakeFirstOrThrow();
+    deepStrictEqual(row, { message_count: 42, interval_message_count: 137, enabled: 0 });
   } finally {
     await database.destroy();
   }

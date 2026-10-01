@@ -155,66 +155,72 @@ Deno.test("rich configure navigation, persistence and authorization", async () =
       137,
     );
     strictEqual(
-      (await getTrollingSettings(database, chat.id)).allowInsults,
-      false,
+      (await getTrollingSettings(database, chat.id)).mode,
+      "clean",
     );
-    match(html(), /data="cfg:insults:on"/);
-    await click("cfg:insults:on");
+    match(html(), /data="cfg:trolling-mode:mild"/);
+    await click("cfg:trolling-mode:mild");
     strictEqual(
-      (await getTrollingSettings(database, chat.id)).allowInsults,
-      true,
+      (await getTrollingSettings(database, chat.id)).mode,
+      "mild",
     );
-    match(html(), /data="cfg:insults:off"/);
+    match(html(), /data="cfg:trolling-mode:clean"/);
     strictEqual(
-      (await getTrollingSettings(database, -200)).allowInsults,
-      false,
+      (await getTrollingSettings(database, -200)).mode,
+      "clean",
     );
     await setTrollingInterval(database, chat.id, 138);
     await click("cfg:trolling:off");
     await click("cfg:trolling:on");
     strictEqual(
-      (await getTrollingSettings(database, chat.id)).allowInsults,
-      true,
+      (await getTrollingSettings(database, chat.id)).mode,
+      "mild",
     );
-    await click("cfg:insults:off");
+    await click("cfg:trolling-mode:clean");
     strictEqual(
-      (await getTrollingSettings(database, chat.id)).allowInsults,
-      false,
+      (await getTrollingSettings(database, chat.id)).mode,
+      "clean",
     );
     strictEqual(
       (await getTrollingSettings(database, chat.id)).intervalMessageCount,
       138,
     );
-    await command("/trolling insults on", 2);
+    await command("/trolling mode mild", 2);
     strictEqual(
-      (await getTrollingSettings(database, chat.id)).allowInsults,
-      true,
+      (await getTrollingSettings(database, chat.id)).mode,
+      "mild",
     );
-    await command("/trolling insults off", 3);
+    await command("/trolling mode clean", 3);
     strictEqual(
-      (await getTrollingSettings(database, chat.id)).allowInsults,
-      true,
+      (await getTrollingSettings(database, chat.id)).mode,
+      "mild",
     );
-    await click("cfg:insults:off", 3);
+    await click("cfg:trolling-mode:clean", 3);
     strictEqual(
-      (await getTrollingSettings(database, chat.id)).allowInsults,
-      true,
+      (await getTrollingSettings(database, chat.id)).mode,
+      "mild",
     );
     ok(
       calls.some((call) =>
         call.method === "answerCallbackQuery" && call.payload.show_alert
       ),
     );
-    await command("/trolling insults invalid");
+    await command("/trolling mode invalid");
     strictEqual(
-      (await getTrollingSettings(database, chat.id)).allowInsults,
-      true,
+      (await getTrollingSettings(database, chat.id)).mode,
+      "mild",
     );
-    await command("/trolleach@test_bot insults off");
+    await command("/trolleach@test_bot mode clean");
     strictEqual(
-      (await getTrollingSettings(database, chat.id)).allowInsults,
-      false,
+      (await getTrollingSettings(database, chat.id)).mode,
+      "clean",
     );
+    await command("/trolling mode aggressive", 2);
+    strictEqual((await getTrollingSettings(database, chat.id)).mode, "aggressive");
+    await click("cfg:trolling-mode:mild", 2);
+    strictEqual((await getTrollingSettings(database, chat.id)).mode, "mild");
+    await click("cfg:trolling-mode:invalid");
+    strictEqual((await getTrollingSettings(database, chat.id)).mode, "mild");
     await setProactiveResponseInterval(database, chat.id, 83);
     await click("cfg:proactive:off");
     await click("cfg:proactive:on");
