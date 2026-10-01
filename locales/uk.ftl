@@ -112,3 +112,9 @@ configure-trolling-description = Кожне {$count}-те повідомленн
 configure-proactive-description = Кожне {$count}-те повідомлення отримає відповідь з імовірністю 25%.
 configure-all = Налаштувати всі
 configure-back = Назад
+
+configure-trolling-insults = Легкі обзивання
+configure-trolling-insults-description = Коли ввімкнено, дозволені легкі обзивання за контекстом. Агресивні образи та лайка виключені в обох режимах.
+settings-trolling-insults-on = У цьому чаті дозволені легкі обзивання за контекстом. Агресія та лайка залишаються виключеними.
+settings-trolling-insults-off = Обзивання в цьому чаті виключені; лише гра слів і сарказм щодо ситуації.
+settings-trolling-insults-usage = {$command} insults on — дозволити легкі обзивання; {$command} insults off — виключити їх.

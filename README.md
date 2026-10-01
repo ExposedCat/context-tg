@@ -109,3 +109,22 @@ selects `small` (the default) or `big`; an unset or failed primary uses the fall
 `LLM_IMAGE_MODEL` is no longer used. Both use
 `/images/generations` under the shared base URL; primary image edits use
 `/images/edits`. Separate image endpoint and API key variables are no longer used.
+
+## Trolling tone
+
+Trolling favors short, context-specific jokes, wordplay, and mild sarcasm.
+Aggressive abuse, profanity, threats, and humiliating personal attacks are
+excluded in both modes.
+
+Light name-calling is **off by default**, including for existing chats. Chat
+admins can enable it with `/trolling insults on` or exclude all name-calling
+with `/trolling insults off`. `/trolleach` accepts the same options. The
+**Light name-calling** toggle is also available under `/settings` → Trolling.
+The setting applies to automatic trolling and explicit troll-agent conversations
+(including follow-ups). Changing it preserves the message interval, enabled
+state, and message counter. `/trolling 100` still sets the message interval,
+not the intensity.
+
+Database initialization adds `chat_trolling.allow_insults` with a default of
+`0`; no manual database update is needed when the bot starts. These are model
+instructions, not an output filter; evaluate the tone with the deployed model.

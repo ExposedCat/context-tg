@@ -41,6 +41,7 @@ import { replyWithCancelTask, replyWithRecentTasks } from "./tasks.ts";
 import {
   getTrollingSettings,
   setTrollingEnabled,
+  setTrollingInsults,
   setTrollingInterval,
 } from "./trolling.ts";
 import { handleUsageCommand } from "./usage.ts";
@@ -787,6 +788,24 @@ async function replyWithTrollingIntervalCommand(
     return;
   }
 
+  if (value?.trim().split(/\s+/)[0]?.toLowerCase() === "insults") {
+    const mode = value.trim().toLowerCase().replace(/\s+/g, " ");
+    if (mode !== "insults on" && mode !== "insults off") {
+      await ctx.reply(ctx.t("settings-trolling-insults-usage", { command }));
+      return;
+    }
+    const allowInsults = mode === "insults on";
+    await setTrollingInsults(ctx.database, ctx.chat.id, allowInsults);
+    await ctx.reply(
+      ctx.t(
+        allowInsults
+          ? "settings-trolling-insults-on"
+          : "settings-trolling-insults-off",
+      ),
+    );
+    return;
+  }
+
   const setting = parseMessageIntervalSetting(value);
 
   if (setting === undefined) {
@@ -795,6 +814,12 @@ async function replyWithTrollingIntervalCommand(
       [
         ctx.t("settings-trolling-description"),
         getIntervalCommandUsage(ctx.t, command),
+        ctx.t("settings-trolling-insults-usage", { command }),
+        ctx.t(
+          current.allowInsults
+            ? "settings-trolling-insults-on"
+            : "settings-trolling-insults-off",
+        ),
         ctx.t("settings-current-value", {
           value: formatMessageIntervalStatus(ctx.t, current),
         }),

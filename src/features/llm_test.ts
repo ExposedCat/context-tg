@@ -1440,3 +1440,129 @@ Deno.test("web search adds a surcharge and denied tools never execute", async ()
     globalThis.fetch = originalFetch;
   }
 });
+
+Deno.test("troll requests load the current chat insult mode, including follow-ups", async () => {
+  const { trollAgent } = await import("./agents/index.ts");
+  const { setTrollingInsults } = await import("./trolling.ts");
+  const database = await initDatabase()();
+  const originalFetch = globalThis.fetch;
+  const requests: Array<Record<string, unknown>> = [];
+  setLlmDeploymentName("openminded", "test-troll-model");
+  globalThis.fetch = (async (_input, init) => {
+    requests.push(JSON.parse(String(init?.body)));
+    return new Response(
+      JSON.stringify(createApiResponse(`resp_mode_${requests.length}`, [{
+        id: `msg_mode_${requests.length}`,
+        type: "message",
+        role: "assistant",
+        status: "completed",
+        content: [{
+          type: "output_text",
+          text: "A topical quip.",
+          annotations: [],
+        }],
+      }])),
+      { headers: { "content-type": "application/json" } },
+    );
+  }) as typeof fetch;
+  try {
+    const call = (chatId: number, responseId?: string) =>
+      requestLlm(
+        "Make a joke about this typo",
+        [],
+        responseId,
+        { database, context: { chatId }, agentId: "troll" },
+        trollAgent.buildInstructions(chatId),
+        trollAgent.MODEL,
+      );
+    const first = await call(500);
+    ok(
+      String(requests[0].instructions).includes(
+        "This chat's insult mode is off.",
+      ),
+    );
+    await setTrollingInsults(database, 500, true);
+    const second = await call(500, first.response_id);
+    ok(
+      String(requests[1].instructions).includes(
+        "This chat's insult mode is on.",
+      ),
+    );
+    await call(501);
+    ok(
+      String(requests[2].instructions).includes(
+        "This chat's insult mode is off.",
+      ),
+    );
+    await setTrollingInsults(database, 500, false);
+    await call(500, second.response_id);
+    ok(
+      String(requests[3].instructions).includes(
+        "This chat's insult mode is off.",
+      ),
+    );
+    await assertRejects(
+      () =>
+        requestLlm(
+          "hello",
+          [],
+          undefined,
+          { agentId: "troll" },
+          "troll",
+          trollAgent.MODEL,
+        ),
+      /require a database and chatId/,
+    );
+    strictEqual(requests.length, 4);
+  } finally {
+    globalThis.fetch = originalFetch;
+    await database.destroy();
+  }
+});
+
+Deno.test("trolling migration upgrades existing rows without changing state", async () => {
+  const { migrateTrolling, setTrollingInsults } = await import("./trolling.ts");
+  const { sql } = await import("@kysely/kysely");
+  const database = await initDatabase()();
+  try {
+    await database.schema.alterTable("chat_trolling").dropColumn(
+      "allow_insults",
+    ).execute();
+    // Simulate the previous schema with a disabled chat and an in-progress counter.
+    await sql`insert into chat_trolling (chat_id, message_count, interval_message_count, enabled) values (500, 42, 137, 0)`
+      .execute(database);
+    await migrateTrolling(database);
+    await migrateTrolling(database);
+    const columns = (await database.introspection.getTables()).find((table) =>
+      table.name === "chat_trolling"
+    )?.columns;
+    ok(columns?.some((column) => column.name === "allow_insults"));
+    deepStrictEqual(
+      await database.selectFrom("chat_trolling").selectAll().where(
+        "chat_id",
+        "=",
+        500,
+      ).executeTakeFirst(),
+      {
+        chat_id: 500,
+        message_count: 42,
+        interval_message_count: 137,
+        enabled: 0,
+        allow_insults: 0,
+      },
+    );
+    await setTrollingInsults(database, 500, true);
+    await migrateTrolling(database);
+    const row = await database.selectFrom("chat_trolling").selectAll().where(
+      "chat_id",
+      "=",
+      500,
+    ).executeTakeFirstOrThrow();
+    strictEqual(row.message_count, 42);
+    strictEqual(row.interval_message_count, 137);
+    strictEqual(row.enabled, 0);
+    strictEqual(row.allow_insults, 1);
+  } finally {
+    await database.destroy();
+  }
+});
