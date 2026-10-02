@@ -278,15 +278,15 @@ function shouldTriggerTrolling(
 }
 
 function buildTrollingRequest(
-  targetName: string,
+  triggerSenderName: string,
   messages: MessageMetadata[],
 ): string[] {
   return [
     formatSystemPromptMessageXml(
       [
-        `Write a trolling reply to the last message from ${targetName}, in the chat's configured trolling_mode. You do not need to address the sender by name.`,
-        "The final context message is the trigger message. Build the joke around its wording or situation, not the whole chat.",
-        "Use one brief, context-specific roast, joke, wordplay, or sarcastic observation. The trolling_mode setting determines whether profanity, name-calling, and aggressive roasting are allowed.",
+        `Write a trolling reply that fits the ongoing conversation, in the chat's configured trolling_mode. The request was triggered by the last message from ${triggerSenderName}.`,
+        "The final context message is the trigger, not a required target. Choose one participant, statement, or situation from the recent conversation with a concrete hook for the joke. The person being teased can differ from the sender of the message you reply to. Make it clear who or what the joke concerns, and attribute statements to the person who actually made them.",
+        "Use one brief, context-specific roast, joke, wordplay, or sarcastic observation. The trolling_mode setting determines whether profanity, name-calling, and aggressive roasting are allowed. Keep the reply relevant to the ongoing conversation; do not drag in unrelated people or invent facts to create a target.",
         "If the message expresses distress, grief, or asks to stop teasing, respond briefly and kindly without a joke.",
       ].join("\n"),
     ),
