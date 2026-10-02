@@ -1471,7 +1471,7 @@ Deno.test("troll requests load the current chat trolling mode, including follow-
         "Make a joke about this typo",
         [],
         responseId,
-        { database, context: { chatId }, agentId: "troll" },
+        { database, context: { chatId, messageId: 1 }, agentId: "troll" },
         trollAgent.buildInstructions(chatId),
         trollAgent.MODEL,
       );
@@ -1661,6 +1661,167 @@ Deno.test("trolling validation uses Sol high with strict boolean structured outp
   }
 });
 
+Deno.test("trolling validation telemetry tracks verdicts, response failures and API failures", async (t) => {
+  const { requestTrollingValidation } = await import("./llm.ts");
+  const originalFetch = globalThis.fetch;
+  const input = {
+    messages: ["context"],
+    candidate: "A topical quip.",
+    mode: "clean" as const,
+  };
+  const events: LlmCallTelemetryPayload[] = [];
+  const respond = (text: string) =>
+    createApiResponse("resp_review", [{
+      id: "msg_review",
+      type: "message",
+      role: "assistant",
+      status: "completed",
+      content: [{ type: "output_text", text, annotations: [] }],
+    }]);
+  const fullUsage = { input_tokens: 10, cached_tokens: 2, output_tokens: 5 };
+  const cases = [
+    {
+      name: "approval",
+      response: respond('{"valid":true}'),
+      valid: true,
+      usage: fullUsage,
+    },
+    {
+      name: "rejection",
+      response: respond('{"valid":false}'),
+      valid: false,
+      usage: fullUsage,
+    },
+    {
+      name: "invalid JSON",
+      response: respond("not JSON"),
+      error: /invalid JSON/,
+      usage: fullUsage,
+    },
+    {
+      name: "invalid verdict",
+      response: respond('{"valid":"true"}'),
+      error: /exactly/,
+      usage: fullUsage,
+    },
+    {
+      name: "refusal",
+      response: {
+        ...respond(""),
+        output: [{
+          type: "message",
+          content: [{ type: "refusal", refusal: "No" }],
+        }],
+      },
+      error: /refused/,
+      usage: fullUsage,
+    },
+    {
+      name: "incomplete response",
+      response: { ...respond('{"valid":true}'), status: "incomplete" },
+      error: /did not complete/,
+      usage: fullUsage,
+    },
+    {
+      name: "failed response",
+      response: {
+        ...respond(""),
+        status: "failed",
+        error: { code: "server_error", message: "Review failed" },
+      },
+      error: /Trolling validation failed/,
+      usage: fullUsage,
+    },
+    {
+      name: "missing usage",
+      response: { ...respond('{"valid":true}'), usage: undefined },
+      valid: true,
+      usage: { input_tokens: 0, cached_tokens: 0, output_tokens: 0 },
+    },
+    {
+      name: "missing cached usage",
+      response: {
+        ...respond('{"valid":true}'),
+        usage: { input_tokens: 10, output_tokens: 5 },
+      },
+      valid: true,
+      usage: { ...fullUsage, cached_tokens: 0 },
+    },
+    {
+      name: "API failure",
+      response: {
+        error: { message: "API failed", type: "invalid_request_error" },
+      },
+      httpStatus: 400,
+      error: /API failed/,
+      usage: { input_tokens: 0, cached_tokens: 0, output_tokens: 0 },
+    },
+  ];
+  try {
+    for (const test of cases) {
+      await t.step(test.name, async () => {
+        events.length = 0;
+        globalThis.fetch = (() =>
+          Promise.resolve(
+            Response.json(test.response, { status: test.httpStatus ?? 200 }),
+          )) as typeof fetch;
+        const options = {
+          telemetry: {
+            chatType: "group" as const,
+            mode: "normal" as const,
+            emit: (payload: LlmCallTelemetryPayload) =>
+              events.push(payload),
+          },
+        };
+        if (test.error) {
+          await assertRejects(
+            () => requestTrollingValidation(input, options),
+            test.error,
+          );
+        } else {
+          deepStrictEqual(await requestTrollingValidation(input, options), {
+            valid: test.valid,
+          });
+        }
+        deepStrictEqual(events, [{
+          chat_type: "group",
+          ...test.usage,
+          tools: [],
+          mode: "normal",
+          status: test.error ? "failed" : "success",
+        }]);
+      });
+    }
+    await t.step(
+      "telemetry failures preserve the verdict and original error",
+      async () => {
+        const options = {
+          telemetry: {
+            chatType: "private" as const,
+            mode: "normal" as const,
+            emit: () => {
+              throw new Error("Telemetry unavailable");
+            },
+          },
+        };
+        globalThis.fetch = (() =>
+          Promise.resolve(
+            Response.json(respond('{"valid":false}')),
+          )) as typeof fetch;
+        deepStrictEqual(await requestTrollingValidation(input, options), {
+          valid: false,
+        });
+        globalThis.fetch = (() =>
+          Promise.resolve(Response.json(respond("not JSON")))) as typeof fetch;
+        await assertRejects(() =>
+          requestTrollingValidation(input, options), /invalid JSON/);
+      },
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 Deno.test("periodic trolling always generates at its interval and sends only approved replies", async () => {
   const { maybeSendPeriodicTroll, setTrollingInterval } = await import(
     "./trolling.ts"
@@ -1670,6 +1831,7 @@ Deno.test("periodic trolling always generates at its interval and sends only app
   const originalFetch = globalThis.fetch;
   const originalRandom = Math.random;
   const sent: string[] = [];
+  const telemetryEvents: LlmCallTelemetryPayload[] = [];
   let generations = 0;
   let validations = 0;
   let verdict = '{"valid":false}';
@@ -1678,7 +1840,11 @@ Deno.test("periodic trolling always generates at its interval and sends only app
   const ctx = {
     database,
     chat: { id: -100, type: "supergroup" },
-    telemetry: { event: () => {} },
+    telemetry: {
+      event: (name: string, payload: LlmCallTelemetryPayload) => {
+        if (name === "llm_call") telemetryEvents.push(payload);
+      },
+    },
     reply: (text: string) => {
       sent.push(text);
       return Promise.resolve();
@@ -1742,6 +1908,7 @@ Deno.test("periodic trolling always generates at its interval and sends only app
     strictEqual(generations, 0);
     await receive();
     deepStrictEqual([generations, validations, sent.length], [1, 1, 0]);
+    deepStrictEqual(telemetryEvents.map((event) => event.status), ["success", "success"]);
     verdict = '{"valid":true}';
     await receive();
     await receive();
@@ -1751,6 +1918,7 @@ Deno.test("periodic trolling always generates at its interval and sends only app
     await receive();
     await assertRejects(receive, /Trolling validation/);
     deepStrictEqual([generations, validations, sent.length], [3, 3, 1]);
+    deepStrictEqual(telemetryEvents.map((event) => event.status), ["success", "success", "success", "success", "success", "failed"]);
     const { used } = await getUsageStatus(database, -100);
     strictEqual(used, 6);
     await database.insertInto("credit_limits").values({
@@ -1761,6 +1929,18 @@ Deno.test("periodic trolling always generates at its interval and sends only app
     await receive();
     await receive();
     deepStrictEqual([generations, validations, sent.length], [4, 3, 1]);
+    strictEqual(telemetryEvents.length, 7);
+    for (const event of telemetryEvents) {
+      deepStrictEqual(event, {
+        chat_type: "group",
+        input_tokens: 10,
+        cached_tokens: 2,
+        output_tokens: 5,
+        tools: [],
+        mode: "normal",
+        status: event.status,
+      });
+    }
   } finally {
     globalThis.fetch = originalFetch;
     Math.random = originalRandom;

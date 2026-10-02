@@ -324,6 +324,11 @@ export async function maybeSendPeriodicTroll(
   } catch {
     return;
   }
+  const telemetry = createLlmCallTelemetry(
+    ctx.chat?.type,
+    "normal",
+    ctx.telemetry.event,
+  );
   const response = await requestLlm(
     buildTrollingRequest(formatSenderName(sender), messages),
     [],
@@ -336,11 +341,7 @@ export async function maybeSendPeriodicTroll(
         threadId: message.message_thread_id,
       },
       agentId: trollAgent.id,
-      telemetry: createLlmCallTelemetry(
-        ctx.chat?.type,
-        "normal",
-        ctx.telemetry.event,
-      ),
+      telemetry,
     },
     trollAgent.buildInstructions(chatId),
     trollAgent.MODEL,
@@ -358,11 +359,14 @@ export async function maybeSendPeriodicTroll(
   } catch {
     return;
   }
-  const { valid } = await requestTrollingValidation({
-    messages: messages.map(formatContextMessage),
-    candidate: text,
-    mode,
-  });
+  const { valid } = await requestTrollingValidation(
+    {
+      messages: messages.map(formatContextMessage),
+      candidate: text,
+      mode,
+    },
+    { telemetry },
+  );
   if (!valid) return;
 
   await ctx.reply(text, {
