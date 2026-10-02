@@ -1822,6 +1822,166 @@ Deno.test("trolling validation telemetry tracks verdicts, response failures and 
   }
 });
 
+Deno.test("periodic trolling delivers to the selected context message or without a reply", async (t) => {
+  const { maybeSendPeriodicTroll, setTrollingInterval } = await import(
+    "./trolling.ts"
+  );
+  const { getLlmDeployment } = await import("./llm-deployments.ts");
+  const database = await initDatabase()();
+  const originalFetch = globalThis.fetch;
+  const originalModel = getLlmDeployment("openminded").deploymentName;
+  const candidate = "A specific topical quip.";
+  const sent: Array<{ text: string; options: Record<string, unknown> }> = [];
+  let selectedId: number | null | undefined;
+  let approved = true;
+  let validations = 0;
+  const ctx = {
+    database,
+    chat: { id: -100, type: "supergroup" },
+    telemetry: { event: () => {} },
+    reply: (text: string, options: Record<string, unknown>) => {
+      sent.push({ text, options });
+      return Promise.resolve();
+    },
+  } as unknown as import("../bot.ts").Context;
+  const respond = (id: string, output: ResponseOutput[]) =>
+    Response.json(createApiResponse(id, output));
+  const textOutput = (text: string): ResponseOutput[] => [
+    {
+      id: "msg_reply",
+      type: "message",
+      role: "assistant",
+      status: "completed",
+      content: [{ type: "output_text", text, annotations: [] }],
+    },
+  ];
+  globalThis.fetch = (async (url, init) => {
+    const request = new Request(url, init);
+    if (new URL(request.url).hostname === "qdrant.test") {
+      if (!request.url.endsWith("/points/scroll")) {
+        return Response.json({ result: { payload_schema: {} } });
+      }
+      const body = await request.json();
+      ok(
+        body.filter.must.some(
+          (filter: Record<string, unknown>) =>
+            filter.key === "thread_id" &&
+            (filter.match as { value: number }).value === 7,
+        ),
+      );
+      return Response.json({
+        result: {
+          points: [1, 2].map((id) => ({
+            id: String(id),
+            payload: {
+              text: id === 1 ? "Earlier claim" : "Trigger message",
+              date: "2026-10-02",
+              date_timestamp: id,
+              sender_name: id === 1 ? "Earlier user" : "Trigger user",
+              sender_id: id,
+              chat_id: -100,
+              thread_id: 7,
+              message_id: id,
+            },
+          })),
+        },
+      });
+    }
+    const body = await request.json();
+    if (body.model === "test-troll-reply-model") {
+      deepStrictEqual(
+        body.tools.map((tool: { name: string }) => tool.name),
+        ["set_reply_message_id"],
+      );
+      const result = body.input.find(
+        (item: { type: string }) => item.type === "function_call_output",
+      );
+      if (selectedId !== undefined && !result) {
+        return respond("resp_select", [
+          {
+            id: "tool_select",
+            type: "function_call",
+            call_id: "call_select",
+            name: "set_reply_message_id",
+            arguments: JSON.stringify({ message_id: selectedId }),
+            status: "completed",
+          },
+        ]);
+      }
+      if (selectedId !== undefined) {
+        ok(
+          result.output.includes(
+            JSON.stringify({ reply_message_id: selectedId }),
+          ),
+        );
+      }
+      return respond("resp_final", textOutput(candidate));
+    }
+    strictEqual(body.model, "gpt-61-sol");
+    validations++;
+    const input = JSON.parse(body.input[0].content);
+    strictEqual(
+      input.reply_message_id,
+      selectedId === undefined ? 2 : selectedId,
+    );
+    strictEqual(input.candidate, candidate);
+    ok(input.messages[0].includes('id="1"'));
+    return respond(
+      "resp_review",
+      textOutput(JSON.stringify({ valid: approved })),
+    );
+  }) as typeof fetch;
+  try {
+    setLlmDeploymentName("openminded", "test-troll-reply-model");
+    for (const test of [
+      { name: "earlier participant", id: 1, replyId: 1 },
+      { name: "explicit trigger", id: 2, replyId: 2 },
+      { name: "default trigger", id: undefined, replyId: 2 },
+      { name: "shared situation", id: null, replyId: null },
+      { name: "unknown message is not sent", id: 99, skip: true },
+      { name: "rejected earlier reply is not sent", id: 1, rejected: true },
+    ]) {
+      await t.step(test.name, async () => {
+        selectedId = test.id;
+        approved = !test.rejected;
+        validations = 0;
+        sent.length = 0;
+        await setTrollingInterval(database, -100, 1);
+        await maybeSendPeriodicTroll(
+          ctx,
+          {
+            message_id: 2,
+            message_thread_id: 7,
+          },
+          { id: 2, first_name: "Trigger user" },
+          -100,
+        );
+        strictEqual(validations, test.skip ? 0 : 1);
+        if (test.skip || test.rejected) {
+          deepStrictEqual(sent, []);
+          return;
+        }
+        deepStrictEqual(sent, [
+          {
+            text: candidate,
+            options: {
+              link_preview_options: { is_disabled: true },
+              message_thread_id: 7,
+              ...(test.replyId === null
+                ? {}
+                : { reply_parameters: { message_id: test.replyId } }),
+            },
+          },
+        ]);
+      });
+    }
+  } finally {
+    globalThis.fetch = originalFetch;
+    setLlmDeploymentName("openminded", originalModel);
+    await database.destroy();
+  }
+});
+
 Deno.test("periodic trolling always generates at its interval and sends only approved replies", async () => {
   const { maybeSendPeriodicTroll, setTrollingInterval } = await import(
     "./trolling.ts"

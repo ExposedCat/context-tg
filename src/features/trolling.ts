@@ -286,6 +286,7 @@ function buildTrollingRequest(
       [
         `Write a trolling reply that fits the ongoing conversation, in the chat's configured trolling_mode. The request was triggered by the last message from ${triggerSenderName}.`,
         "The final context message is the trigger, not a required target. Choose one participant, statement, or situation from the recent conversation with a concrete hook for the joke. The person being teased can differ from the sender of the message you reply to. Make it clear who or what the joke concerns, and attribute statements to the person who actually made them.",
+        "Reply to the message the joke is about. If it is an earlier context message, call set_reply_message_id with its exact id before your final response. For a joke about the shared situation without a specific target message, call set_reply_message_id with null to send without a reply. Never invent a message id.",
         "Use one brief, context-specific roast, joke, wordplay, or sarcastic observation. The trolling_mode setting determines whether profanity, name-calling, and aggressive roasting are allowed. Keep the reply relevant to the ongoing conversation; do not drag in unrelated people or invent facts to create a target.",
         "If the message expresses distress, grief, or asks to stop teasing, respond briefly and kindly without a joke.",
       ].join("\n"),
@@ -331,7 +332,7 @@ export async function maybeSendPeriodicTroll(
   );
   const response = await requestLlm(
     buildTrollingRequest(formatSenderName(sender), messages),
-    [],
+    ["set_reply_message_id"],
     undefined,
     {
       database: ctx.database,
@@ -353,6 +354,20 @@ export async function maybeSendPeriodicTroll(
     return;
   }
 
+  const replyMessageId =
+    response.replyMessageId === undefined
+      ? message.message_id
+      : response.replyMessageId;
+  // Only attach to messages supplied from this chat and topic.
+  if (
+    replyMessageId !== null &&
+    replyMessageId !== message.message_id &&
+    !messages.some(
+      (contextMessage) => contextMessage.message_id === replyMessageId,
+    )
+  )
+    return;
+
   const { mode } = await getTrollingSettings(ctx.database, chatId);
   try {
     await chargeCredits("request");
@@ -364,6 +379,7 @@ export async function maybeSendPeriodicTroll(
       messages: messages.map(formatContextMessage),
       candidate: text,
       mode,
+      replyMessageId,
     },
     { telemetry },
   );
@@ -371,9 +387,12 @@ export async function maybeSendPeriodicTroll(
 
   await ctx.reply(text, {
     link_preview_options: { is_disabled: true },
-    reply_parameters: {
-      message_id: message.message_id,
-    },
+    ...(message.message_thread_id !== undefined
+      ? { message_thread_id: message.message_thread_id }
+      : {}),
+    ...(replyMessageId === null
+      ? {}
+      : { reply_parameters: { message_id: replyMessageId } }),
   });
 }
 
