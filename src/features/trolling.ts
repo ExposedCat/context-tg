@@ -286,7 +286,7 @@ function buildTrollingRequest(
       [
         `Write a trolling reply to the last message from ${targetName}, in the chat's configured trolling_mode. You do not need to address the sender by name.`,
         "The final context message is the trigger message. Build the joke around its wording or situation, not the whole chat.",
-        "Use one brief, context-specific roast, joke, wordplay, or sarcastic observation. The trolling_mode setting determines whether profanity, name-calling, and aggressive roasting are allowed. Avoid repeating jokes from the context.",
+        "Use one brief, context-specific roast, joke, wordplay, or sarcastic observation. The trolling_mode setting determines whether profanity, name-calling, and aggressive roasting are allowed.",
         "If the message expresses distress, grief, or asks to stop teasing, respond briefly and kindly without a joke.",
       ].join("\n"),
     ),

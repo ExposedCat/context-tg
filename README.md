@@ -125,7 +125,7 @@ Automatic trolling triggers at every configured message interval, without a
 random chance. It first generates a candidate, then makes a separate stateless
 Responses API call to `gpt-6.1-sol` with reasoning effort `high` and strict
 structured output `{ valid: boolean }`. The validator receives recent messages,
-the exact candidate, and the selected mode. It rejects generic, repetitive,
+the exact candidate, and the selected mode. It rejects generic,
 off-topic, or inappropriate replies; a `false` verdict means nothing is sent
 and no replacement is generated. A validation failure or invalid response also
 prevents sending and is reported through the existing trolling error log.
