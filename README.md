@@ -128,7 +128,7 @@ structured output `{ valid: boolean }`. The validator receives recent messages,
 the exact candidate, and the selected mode. It rejects generic,
 off-topic, or inappropriate replies; a `false` verdict means nothing is sent
 and no replacement is generated. A validation failure or invalid response also
-prevents sending and is reported through the existing trolling error log.
+prevents sending and is reported through the automatic-response error log.
 
 The validator uses the existing `LLM_BASE_URL` and `LLM_API_KEY`, so that endpoint
 must support `gpt-61-sol` and Responses structured outputs. No alternative model
@@ -136,6 +136,11 @@ or JSON-mode fallback is used. Generation and validation each cost one request
 credit, including a validation that rejects the candidate. If the remaining
 balance cannot fund validation, the candidate is not sent. This gate applies to
 automatic trolling; explicit troll-agent conversations keep their existing flow.
+
+If automatic trolling and proactive responses both trigger on the same message,
+the bot randomly chooses one with equal probability. Both message counters
+advance, but only the chosen response runs and spends credits. If the chosen
+troll is rejected or the chosen response fails, the bot does not try the other.
 
 The application injects only the selected style into generation and validation
 prompts. Neither call receives a catalogue of the other modes to choose from.

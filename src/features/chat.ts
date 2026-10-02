@@ -2734,6 +2734,15 @@ export async function maybeSendProactiveAgentResponse(
   message: ProactiveTriggerMessage,
   chatId: number,
 ): Promise<void> {
+  const respond = await prepareProactiveAgentResponse(ctx, message, chatId);
+  await respond?.();
+}
+
+export async function prepareProactiveAgentResponse(
+  ctx: Context,
+  message: ProactiveTriggerMessage,
+  chatId: number,
+): Promise<(() => Promise<void>) | undefined> {
   if (!(await hasUsageRemaining(ctx.database, chatId))) return;
   const textMessage = message as TextMessage;
 
@@ -2750,6 +2759,15 @@ export async function maybeSendProactiveAgentResponse(
     return;
   }
 
+  return () => sendProactiveAgentResponse(ctx, message, chatId);
+}
+
+async function sendProactiveAgentResponse(
+  ctx: Context,
+  message: ProactiveTriggerMessage,
+  chatId: number,
+): Promise<void> {
+  const textMessage = message as TextMessage;
   const reply = getActualReply(textMessage);
   const threadId = getMessageTopicId(textMessage, reply);
   const messages = await readLastMessages(PROACTIVE_CONTEXT_MESSAGE_COUNT, {
@@ -2769,18 +2787,6 @@ export async function maybeSendProactiveAgentResponse(
     threadId,
     tools: getProactiveTools(),
   });
-}
-
-export async function safelyMaybeSendProactiveAgentResponse(
-  ctx: Context,
-  message: ProactiveTriggerMessage,
-  chatId: number,
-): Promise<void> {
-  try {
-    await maybeSendProactiveAgentResponse(ctx, message, chatId);
-  } catch (error) {
-    logError("Failed to send proactive agent response:", error);
-  }
 }
 
 export async function replyWithResumeTask(

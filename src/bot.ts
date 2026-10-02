@@ -9,10 +9,8 @@ import { DiagLogLevel } from "@opentelemetry/api";
 import { Bot, type Context as GrammyContext, type Transformer } from "grammy";
 import { I18n, type I18nFlavor } from "grammy-i18n";
 import { run } from "grammy-runner";
-import {
-  chatComposer,
-  safelyMaybeSendProactiveAgentResponse,
-} from "./features/chat.ts";
+import { safelyMaybeSendAutomaticResponse } from "./features/automatic-responses.ts";
+import { chatComposer } from "./features/chat.ts";
 import type { Database } from "./features/database.ts";
 import {
   createEmojiPackTransformer,
@@ -25,7 +23,6 @@ import {
 import { startScheduleDispatcher } from "./features/schedules.ts";
 import { stateComposer } from "./features/state.ts";
 import type { BotTelemetryEvents } from "./features/telemetry.ts";
-import { safelyMaybeSendPeriodicTroll } from "./features/trolling.ts";
 import { delay } from "./utils/async.ts";
 
 const RUNNER_CONCURRENCY = 500;
@@ -98,10 +95,7 @@ export function initBot(token: string, database: Database) {
   bot.api.config.use(createTelegramRateLimitRetryTransformer());
   bot.api.config.use(createEmojiPackTransformer(database, bot.api));
   bot.api.config.use(telemetryTransformer);
-  setIndexedTextMessageHandler(async (ctx, message, sender, chatId) => {
-    await safelyMaybeSendPeriodicTroll(ctx, message, sender, chatId);
-    await safelyMaybeSendProactiveAgentResponse(ctx, message, chatId);
-  });
+  setIndexedTextMessageHandler(safelyMaybeSendAutomaticResponse);
 
   const i18n = new I18n<Context>({
     directory: "locales",

@@ -1,4 +1,3 @@
-import { createDebug } from "@grammyjs/debug";
 import { sql } from "@kysely/kysely";
 import type { Context } from "../bot.ts";
 import { trollAgent } from "./agents/index.ts";
@@ -12,7 +11,11 @@ import {
 } from "./llm-prompt.ts";
 import type { MessageMetadata } from "./messages.ts";
 import { createLlmCallTelemetry } from "./telemetry.ts";
-import { DEFAULT_TROLLING_MODE, parseStoredTrollingMode, type TrollingMode } from "./trolling-mode.ts";
+import {
+  DEFAULT_TROLLING_MODE,
+  parseStoredTrollingMode,
+  type TrollingMode,
+} from "./trolling-mode.ts";
 import { createCreditCharge, hasUsageRemaining } from "./usage.ts";
 
 type Sender = {
@@ -36,8 +39,6 @@ export type TrollingSettings = {
   mode: TrollingMode;
 };
 
-const logError = createDebug("app:trolling:error");
-
 export const DEFAULT_TROLLING_INTERVAL_MESSAGE_COUNT = 100;
 const TROLLING_CONTEXT_MESSAGE_COUNT = 11;
 
@@ -53,10 +54,8 @@ export async function migrateTrolling(database: Database) {
       column.notNull().defaultTo(DEFAULT_TROLLING_INTERVAL_MESSAGE_COUNT),
     )
     .addColumn("enabled", "integer", (column) => column.notNull().defaultTo(1))
-    .addColumn(
-      "trolling_mode",
-      "text",
-      (column) => column.notNull().defaultTo(DEFAULT_TROLLING_MODE),
+    .addColumn("trolling_mode", "text", (column) =>
+      column.notNull().defaultTo(DEFAULT_TROLLING_MODE),
     )
     .execute();
 
@@ -78,19 +77,24 @@ export async function migrateTrolling(database: Database) {
     await database.transaction().execute(async (transaction) => {
       await transaction.schema
         .alterTable("chat_trolling")
-        .addColumn(
-          "trolling_mode",
-          "text",
-          (column) => column.notNull().defaultTo(DEFAULT_TROLLING_MODE),
+        .addColumn("trolling_mode", "text", (column) =>
+          column.notNull().defaultTo(DEFAULT_TROLLING_MODE),
         )
         .execute();
       if (table.columns.some((column) => column.name === "allow_insults")) {
-        const invalid = await sql`select chat_id from chat_trolling where allow_insults not in (0, 1) or allow_insults is null limit 1`.execute(transaction);
+        const invalid =
+          await sql`select chat_id from chat_trolling where allow_insults not in (0, 1) or allow_insults is null limit 1`.execute(
+            transaction,
+          );
         if (invalid.rows.length) {
-          throw new Error("Cannot migrate invalid chat_trolling.allow_insults; expected 0 or 1");
+          throw new Error(
+            "Cannot migrate invalid chat_trolling.allow_insults; expected 0 or 1",
+          );
         }
         // Upgrade the previously stored two-mode preference once, atomically.
-        await sql`update chat_trolling set trolling_mode = case when allow_insults = 1 then 'mild' else 'clean' end`.execute(transaction);
+        await sql`update chat_trolling set trolling_mode = case when allow_insults = 1 then 'mild' else 'clean' end`.execute(
+          transaction,
+        );
       }
     });
   }
@@ -169,9 +173,11 @@ async function incrementTrollingMessageCount(
     return {
       messageCount: row?.message_count ?? 0,
       enabled: row?.enabled !== 0,
-      mode: row ? parseStoredTrollingMode(row.trolling_mode) : DEFAULT_TROLLING_MODE,
-      intervalMessageCount: row?.interval_message_count ??
-        DEFAULT_TROLLING_INTERVAL_MESSAGE_COUNT,
+      mode: row
+        ? parseStoredTrollingMode(row.trolling_mode)
+        : DEFAULT_TROLLING_MODE,
+      intervalMessageCount:
+        row?.interval_message_count ?? DEFAULT_TROLLING_INTERVAL_MESSAGE_COUNT,
     };
   });
 }
@@ -235,9 +241,11 @@ export async function getTrollingSettings(
 
   return {
     enabled: row?.enabled !== 0,
-    mode: row ? parseStoredTrollingMode(row.trolling_mode) : DEFAULT_TROLLING_MODE,
-    intervalMessageCount: row?.interval_message_count ??
-      DEFAULT_TROLLING_INTERVAL_MESSAGE_COUNT,
+    mode: row
+      ? parseStoredTrollingMode(row.trolling_mode)
+      : DEFAULT_TROLLING_MODE,
+    intervalMessageCount:
+      row?.interval_message_count ?? DEFAULT_TROLLING_INTERVAL_MESSAGE_COUNT,
   };
 }
 
@@ -259,7 +267,7 @@ export async function setTrollingMode(
     .onConflict((conflict) =>
       conflict.column("chat_id").doUpdateSet({
         trolling_mode: mode,
-      })
+      }),
     )
     .execute();
 }
@@ -301,6 +309,16 @@ export async function maybeSendPeriodicTroll(
   sender: Sender,
   chatId: number,
 ): Promise<void> {
+  const respond = await preparePeriodicTroll(ctx, message, sender, chatId);
+  await respond?.();
+}
+
+export async function preparePeriodicTroll(
+  ctx: Context,
+  message: { message_id: number; message_thread_id?: number },
+  sender: Sender,
+  chatId: number,
+): Promise<(() => Promise<void>) | undefined> {
   if (!(await hasUsageRemaining(ctx.database, chatId))) return;
   const { messageCount, enabled, intervalMessageCount } =
     await incrementTrollingMessageCount(ctx.database, chatId);
@@ -309,6 +327,15 @@ export async function maybeSendPeriodicTroll(
     return;
   }
 
+  return () => sendPeriodicTroll(ctx, message, sender, chatId);
+}
+
+async function sendPeriodicTroll(
+  ctx: Context,
+  message: { message_id: number; message_thread_id?: number },
+  sender: Sender,
+  chatId: number,
+): Promise<void> {
   const messages = await readLastMessages(TROLLING_CONTEXT_MESSAGE_COUNT, {
     chatId,
     messageId: message.message_id,
@@ -394,17 +421,4 @@ export async function maybeSendPeriodicTroll(
       ? {}
       : { reply_parameters: { message_id: replyMessageId } }),
   });
-}
-
-export async function safelyMaybeSendPeriodicTroll(
-  ctx: Context,
-  message: { message_id: number; message_thread_id?: number },
-  sender: Sender,
-  chatId: number,
-): Promise<void> {
-  try {
-    await maybeSendPeriodicTroll(ctx, message, sender, chatId);
-  } catch (error) {
-    logError("Failed to send periodic troll response", { error });
-  }
 }
