@@ -1440,3 +1440,510 @@ Deno.test("web search adds a surcharge and denied tools never execute", async ()
     globalThis.fetch = originalFetch;
   }
 });
+
+Deno.test("troll requests load the current chat trolling mode, including follow-ups", async () => {
+  const { trollAgent } = await import("./agents/index.ts");
+  const { setTrollingMode } = await import("./trolling.ts");
+  const database = await initDatabase()();
+  const originalFetch = globalThis.fetch;
+  const requests: Array<Record<string, unknown>> = [];
+  setLlmDeploymentName("openminded", "test-troll-model");
+  globalThis.fetch = (async (_input, init) => {
+    requests.push(JSON.parse(String(init?.body)));
+    return new Response(
+      JSON.stringify(createApiResponse(`resp_mode_${requests.length}`, [{
+        id: `msg_mode_${requests.length}`,
+        type: "message",
+        role: "assistant",
+        status: "completed",
+        content: [{
+          type: "output_text",
+          text: "A topical quip.",
+          annotations: [],
+        }],
+      }])),
+      { headers: { "content-type": "application/json" } },
+    );
+  }) as typeof fetch;
+  try {
+    const call = (chatId: number, responseId?: string) =>
+      requestLlm(
+        "Make a joke about this typo",
+        [],
+        responseId,
+        { database, context: { chatId, messageId: 1 }, agentId: "troll" },
+        trollAgent.buildInstructions(chatId),
+        trollAgent.MODEL,
+      );
+    const first = await call(500);
+    ok(
+      String(requests[0].instructions).includes(
+        "This chat's trolling mode is clean.",
+      ),
+    );
+    await setTrollingMode(database, 500, "mild");
+    const second = await call(500, first.response_id);
+    ok(
+      String(requests[1].instructions).includes(
+        "This chat's trolling mode is mild.",
+      ),
+    );
+    await call(501);
+    ok(
+      String(requests[2].instructions).includes(
+        "This chat's trolling mode is clean.",
+      ),
+    );
+    await setTrollingMode(database, 500, "clean");
+    await call(500, second.response_id);
+    ok(
+      String(requests[3].instructions).includes(
+        "This chat's trolling mode is clean.",
+      ),
+    );
+    await assertRejects(
+      () =>
+        requestLlm(
+          "hello",
+          [],
+          undefined,
+          { agentId: "troll" },
+          "troll",
+          trollAgent.MODEL,
+        ),
+      /require a database and chatId/,
+    );
+    await setTrollingMode(database, 500, "aggressive");
+    await call(500, second.response_id);
+    ok(String(requests[4].instructions).includes("This chat's trolling mode is aggressive."));
+    ok(String(requests[4].instructions).includes("crude, profane, chaotic"));
+    strictEqual(requests.length, 5);
+  } finally {
+    globalThis.fetch = originalFetch;
+    await database.destroy();
+  }
+});
+
+Deno.test("trolling migration upgrades existing rows without changing state", async () => {
+  const { migrateTrolling, setTrollingMode } = await import("./trolling.ts");
+  const { sql } = await import("@kysely/kysely");
+  const database = await initDatabase()();
+  try {
+    await database.schema.alterTable("chat_trolling").dropColumn(
+      "trolling_mode",
+    ).execute();
+    // Simulate the previous schema with a disabled chat and an in-progress counter.
+    await sql`insert into chat_trolling (chat_id, message_count, interval_message_count, enabled) values (500, 42, 137, 0)`
+      .execute(database);
+    await migrateTrolling(database);
+    await migrateTrolling(database);
+    const columns = (await database.introspection.getTables()).find((table) =>
+      table.name === "chat_trolling"
+    )?.columns;
+    ok(columns?.some((column) => column.name === "trolling_mode"));
+    deepStrictEqual(
+      await database.selectFrom("chat_trolling").selectAll().where(
+        "chat_id",
+        "=",
+        500,
+      ).executeTakeFirst(),
+      {
+        chat_id: 500,
+        message_count: 42,
+        interval_message_count: 137,
+        enabled: 0,
+        trolling_mode: "clean",
+      },
+    );
+    await setTrollingMode(database, 500, "mild");
+    await migrateTrolling(database);
+    const row = await database.selectFrom("chat_trolling").selectAll().where(
+      "chat_id",
+      "=",
+      500,
+    ).executeTakeFirstOrThrow();
+    strictEqual(row.message_count, 42);
+    strictEqual(row.interval_message_count, 137);
+    strictEqual(row.enabled, 0);
+    strictEqual(row.trolling_mode, "mild");
+  } finally {
+    await database.destroy();
+  }
+});
+
+Deno.test("two-mode trolling preferences migrate once to mild and clean", async () => {
+  const { migrateTrolling, getTrollingSettings, setTrollingMode } = await import("./trolling.ts");
+  const { sql } = await import("@kysely/kysely");
+  const database = await initDatabase()();
+  try {
+    await database.schema.alterTable("chat_trolling").dropColumn("trolling_mode").execute();
+    await database.schema.alterTable("chat_trolling").addColumn("allow_insults", "integer", (column) => column.notNull().defaultTo(0)).execute();
+    await sql`insert into chat_trolling (chat_id, message_count, interval_message_count, enabled, allow_insults) values (500, 42, 137, 0, 1), (501, 7, 100, 1, 0)`.execute(database);
+    await migrateTrolling(database);
+    strictEqual((await getTrollingSettings(database, 500)).mode, "mild");
+    strictEqual((await getTrollingSettings(database, 501)).mode, "clean");
+    await setTrollingMode(database, 500, "aggressive");
+    await migrateTrolling(database);
+    strictEqual((await getTrollingSettings(database, 500)).mode, "aggressive");
+    const row = await database.selectFrom("chat_trolling").select(["message_count", "interval_message_count", "enabled"]).where("chat_id", "=", 500).executeTakeFirstOrThrow();
+    deepStrictEqual(row, { message_count: 42, interval_message_count: 137, enabled: 0 });
+  } finally {
+    await database.destroy();
+  }
+});
+
+Deno.test("trolling validation uses Sol high with strict boolean structured output", async () => {
+  const { requestTrollingValidation } = await import("./llm.ts");
+  const originalFetch = globalThis.fetch;
+  const input = {
+    messages: ["<message>context</message>"],
+    candidate: "A topical quip.",
+    mode: "clean" as const,
+  };
+  let requests = 0;
+  let output = '{"valid":true}';
+  globalThis.fetch = (async (_input, init) => {
+    requests++;
+    const body = JSON.parse(String(init?.body));
+    strictEqual(body.model, "gpt-6.1-sol");
+    deepStrictEqual(body.reasoning, { effort: "high" });
+    strictEqual(body.store, false);
+    strictEqual(body.previous_response_id, undefined);
+    strictEqual(body.tools, undefined);
+    deepStrictEqual(JSON.parse(body.input[0].content), { messages: input.messages, candidate: input.candidate });
+    ok(body.instructions.includes("This chat's trolling mode is clean."));
+    ok(!/\b(aggressive|mild|clean)\s+permits/.test(body.instructions));
+    deepStrictEqual(body.text.format, {
+      type: "json_schema",
+      name: "trolling_validation",
+      strict: true,
+      schema: {
+        type: "object",
+        properties: { valid: { type: "boolean" } },
+        required: ["valid"],
+        additionalProperties: false,
+      },
+    });
+    return new Response(
+      JSON.stringify(createApiResponse("resp_review", [{
+        id: "msg_review",
+        type: "message",
+        role: "assistant",
+        status: "completed",
+        content: [{ type: "output_text", text: output, annotations: [] }],
+      }])),
+      { headers: { "content-type": "application/json" } },
+    );
+  }) as typeof fetch;
+  try {
+    deepStrictEqual(await requestTrollingValidation(input), { valid: true });
+    output = '{"valid":false}';
+    deepStrictEqual(await requestTrollingValidation(input), { valid: false });
+    for (
+      const invalid of [
+        '{"valid":"false"}',
+        '{"valid":true,"extra":1}',
+        "{}",
+        "[]",
+        "not JSON",
+        "",
+      ]
+    ) {
+      output = invalid;
+      await assertRejects(
+        () => requestTrollingValidation(input),
+        /Trolling validation/,
+      );
+    }
+    strictEqual(requests, 8);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+Deno.test("trolling validation telemetry tracks verdicts, response failures and API failures", async (t) => {
+  const { requestTrollingValidation } = await import("./llm.ts");
+  const originalFetch = globalThis.fetch;
+  const input = {
+    messages: ["context"],
+    candidate: "A topical quip.",
+    mode: "clean" as const,
+  };
+  const events: LlmCallTelemetryPayload[] = [];
+  const respond = (text: string) =>
+    createApiResponse("resp_review", [{
+      id: "msg_review",
+      type: "message",
+      role: "assistant",
+      status: "completed",
+      content: [{ type: "output_text", text, annotations: [] }],
+    }]);
+  const fullUsage = { input_tokens: 10, cached_tokens: 2, output_tokens: 5 };
+  const cases = [
+    {
+      name: "approval",
+      response: respond('{"valid":true}'),
+      valid: true,
+      usage: fullUsage,
+    },
+    {
+      name: "rejection",
+      response: respond('{"valid":false}'),
+      valid: false,
+      usage: fullUsage,
+    },
+    {
+      name: "invalid JSON",
+      response: respond("not JSON"),
+      error: /invalid JSON/,
+      usage: fullUsage,
+    },
+    {
+      name: "invalid verdict",
+      response: respond('{"valid":"true"}'),
+      error: /exactly/,
+      usage: fullUsage,
+    },
+    {
+      name: "refusal",
+      response: {
+        ...respond(""),
+        output: [{
+          type: "message",
+          content: [{ type: "refusal", refusal: "No" }],
+        }],
+      },
+      error: /refused/,
+      usage: fullUsage,
+    },
+    {
+      name: "incomplete response",
+      response: { ...respond('{"valid":true}'), status: "incomplete" },
+      error: /did not complete/,
+      usage: fullUsage,
+    },
+    {
+      name: "failed response",
+      response: {
+        ...respond(""),
+        status: "failed",
+        error: { code: "server_error", message: "Review failed" },
+      },
+      error: /Trolling validation failed/,
+      usage: fullUsage,
+    },
+    {
+      name: "missing usage",
+      response: { ...respond('{"valid":true}'), usage: undefined },
+      valid: true,
+      usage: { input_tokens: 0, cached_tokens: 0, output_tokens: 0 },
+    },
+    {
+      name: "missing cached usage",
+      response: {
+        ...respond('{"valid":true}'),
+        usage: { input_tokens: 10, output_tokens: 5 },
+      },
+      valid: true,
+      usage: { ...fullUsage, cached_tokens: 0 },
+    },
+    {
+      name: "API failure",
+      response: {
+        error: { message: "API failed", type: "invalid_request_error" },
+      },
+      httpStatus: 400,
+      error: /API failed/,
+      usage: { input_tokens: 0, cached_tokens: 0, output_tokens: 0 },
+    },
+  ];
+  try {
+    for (const test of cases) {
+      await t.step(test.name, async () => {
+        events.length = 0;
+        globalThis.fetch = (() =>
+          Promise.resolve(
+            Response.json(test.response, { status: test.httpStatus ?? 200 }),
+          )) as typeof fetch;
+        const options = {
+          telemetry: {
+            chatType: "group" as const,
+            mode: "normal" as const,
+            emit: (payload: LlmCallTelemetryPayload) =>
+              events.push(payload),
+          },
+        };
+        if (test.error) {
+          await assertRejects(
+            () => requestTrollingValidation(input, options),
+            test.error,
+          );
+        } else {
+          deepStrictEqual(await requestTrollingValidation(input, options), {
+            valid: test.valid,
+          });
+        }
+        deepStrictEqual(events, [{
+          chat_type: "group",
+          ...test.usage,
+          tools: [],
+          mode: "normal",
+          status: test.error ? "failed" : "success",
+        }]);
+      });
+    }
+    await t.step(
+      "telemetry failures preserve the verdict and original error",
+      async () => {
+        const options = {
+          telemetry: {
+            chatType: "private" as const,
+            mode: "normal" as const,
+            emit: () => {
+              throw new Error("Telemetry unavailable");
+            },
+          },
+        };
+        globalThis.fetch = (() =>
+          Promise.resolve(
+            Response.json(respond('{"valid":false}')),
+          )) as typeof fetch;
+        deepStrictEqual(await requestTrollingValidation(input, options), {
+          valid: false,
+        });
+        globalThis.fetch = (() =>
+          Promise.resolve(Response.json(respond("not JSON")))) as typeof fetch;
+        await assertRejects(() =>
+          requestTrollingValidation(input, options), /invalid JSON/);
+      },
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+Deno.test("periodic trolling always generates at its interval and sends only approved replies", async () => {
+  const { maybeSendPeriodicTroll, setTrollingInterval } = await import(
+    "./trolling.ts"
+  );
+  const { getUsageStatus } = await import("./usage.ts");
+  const database = await initDatabase()();
+  const originalFetch = globalThis.fetch;
+  const originalRandom = Math.random;
+  const sent: string[] = [];
+  const telemetryEvents: LlmCallTelemetryPayload[] = [];
+  let generations = 0;
+  let validations = 0;
+  let verdict = '{"valid":false}';
+  let messageId = 0;
+  const candidate = "A specific topical quip.";
+  const ctx = {
+    database,
+    chat: { id: -100, type: "supergroup" },
+    telemetry: {
+      event: (name: string, payload: LlmCallTelemetryPayload) => {
+        if (name === "llm_call") telemetryEvents.push(payload);
+      },
+    },
+    reply: (text: string) => {
+      sent.push(text);
+      return Promise.resolve();
+    },
+  } as unknown as import("../bot.ts").Context;
+  const respond = (text: string) =>
+    Response.json(createApiResponse("resp_periodic", [{
+      id: "msg_periodic",
+      type: "message",
+      role: "assistant",
+      status: "completed",
+      content: [{ type: "output_text", text, annotations: [] }],
+    }]));
+  globalThis.fetch = (async (url, init) => {
+    const request = new Request(url, init);
+    if (new URL(request.url).hostname === "qdrant.test") {
+      if (request.url.endsWith("/points/scroll")) {
+        return Response.json({
+          result: {
+            points: [{
+              id: "last",
+              payload: {
+                text: "A concrete chat message",
+                date: "2026-10-01",
+                date_timestamp: 1,
+                sender_name: "User",
+                sender_id: 2,
+                chat_id: -100,
+                message_id: messageId,
+              },
+            }],
+          },
+        });
+      }
+      return Response.json({ result: { payload_schema: {} } });
+    }
+    const body = await request.json();
+    if (body.model === "test-troll-model") {
+      generations++;
+      return respond(candidate);
+    }
+    strictEqual(body.model, "gpt-6.1-sol");
+    validations++;
+    const input = JSON.parse(body.input[0].content);
+    strictEqual(input.candidate, candidate);
+    strictEqual(input.mode, undefined);
+    ok(body.instructions.includes("This chat's trolling mode is clean."));
+    ok(input.messages.at(-1).includes("A concrete chat message"));
+    return respond(verdict);
+  }) as typeof fetch;
+  Math.random = () => 1; // The old 25% trigger would suppress all these replies.
+  try {
+    setLlmDeploymentName("openminded", "test-troll-model");
+    await setTrollingInterval(database, -100, 2);
+    const receive = () =>
+      maybeSendPeriodicTroll(ctx, { message_id: ++messageId }, {
+        id: 2,
+        first_name: "User",
+      }, -100);
+    await receive();
+    strictEqual(generations, 0);
+    await receive();
+    deepStrictEqual([generations, validations, sent.length], [1, 1, 0]);
+    deepStrictEqual(telemetryEvents.map((event) => event.status), ["success", "success"]);
+    verdict = '{"valid":true}';
+    await receive();
+    await receive();
+    deepStrictEqual([generations, validations, sent.length], [2, 2, 1]);
+    strictEqual(sent[0], candidate);
+    verdict = '{"valid":"true"}';
+    await receive();
+    await assertRejects(receive, /Trolling validation/);
+    deepStrictEqual([generations, validations, sent.length], [3, 3, 1]);
+    deepStrictEqual(telemetryEvents.map((event) => event.status), ["success", "success", "success", "success", "success", "failed"]);
+    const { used } = await getUsageStatus(database, -100);
+    strictEqual(used, 6);
+    await database.insertInto("credit_limits").values({
+      chat_id: -100,
+      quota: used + 1,
+      unlimited: 0,
+    }).execute();
+    await receive();
+    await receive();
+    deepStrictEqual([generations, validations, sent.length], [4, 3, 1]);
+    strictEqual(telemetryEvents.length, 7);
+    for (const event of telemetryEvents) {
+      deepStrictEqual(event, {
+        chat_type: "group",
+        input_tokens: 10,
+        cached_tokens: 2,
+        output_tokens: 5,
+        tools: [],
+        mode: "normal",
+        status: event.status,
+      });
+    }
+  } finally {
+    globalThis.fetch = originalFetch;
+    Math.random = originalRandom;
+    await database.destroy();
+  }
+});

@@ -56,7 +56,13 @@ Deno.test("rich configure navigation, persistence and authorization", async () =
       calls.push({ method, payload: payload as Record<string, unknown> });
       return Promise.resolve({
         ok: true,
-        result: method === "getChatMember" ? { status: "administrator" } : true,
+        result: method === "getChatMember"
+          ? {
+            status: (payload as { user_id?: number }).user_id === 3
+              ? "member"
+              : "administrator",
+          }
+          : true,
       }) as ReturnType<typeof _prev>;
     });
     bot.use((ctx, next) => {
@@ -128,6 +134,62 @@ Deno.test("rich configure navigation, persistence and authorization", async () =
       (await getTrollingSettings(database, chat.id)).intervalMessageCount,
       137,
     );
+    strictEqual(
+      (await getTrollingSettings(database, chat.id)).mode,
+      "clean",
+    );
+    match(html(), /data="cfg:trolling-mode:mild"/);
+    await click("cfg:trolling-mode:mild");
+    strictEqual(
+      (await getTrollingSettings(database, chat.id)).mode,
+      "mild",
+    );
+    match(html(), /data="cfg:trolling-mode:clean"/);
+    match(html(), /style="primary" data="cfg:trolling-mode:mild"/);
+    strictEqual(
+      (await getTrollingSettings(database, -200)).mode,
+      "clean",
+    );
+    await setTrollingInterval(database, chat.id, 138);
+    await click("cfg:trolling:off");
+    await click("cfg:trolling-mode:aggressive");
+    strictEqual((await getTrollingSettings(database, chat.id)).enabled, false);
+    await click("cfg:trolling-mode:mild");
+    await click("cfg:trolling:on");
+    strictEqual(
+      (await getTrollingSettings(database, chat.id)).mode,
+      "mild",
+    );
+    await click("cfg:trolling-mode:clean");
+    strictEqual(
+      (await getTrollingSettings(database, chat.id)).mode,
+      "clean",
+    );
+    strictEqual(
+      (await getTrollingSettings(database, chat.id)).intervalMessageCount,
+      138,
+    );
+    await click("cfg:trolling-mode:mild", 2);
+    strictEqual(
+      (await getTrollingSettings(database, chat.id)).mode,
+      "mild",
+    );
+    await click("cfg:trolling-mode:clean", 3);
+    strictEqual(
+      (await getTrollingSettings(database, chat.id)).mode,
+      "mild",
+    );
+    ok(
+      calls.some((call) =>
+        call.method === "answerCallbackQuery" && call.payload.show_alert
+      ),
+    );
+    await click("cfg:trolling-mode:aggressive", 2);
+    strictEqual((await getTrollingSettings(database, chat.id)).mode, "aggressive");
+    await click("cfg:trolling-mode:mild", 2);
+    strictEqual((await getTrollingSettings(database, chat.id)).mode, "mild");
+    await click("cfg:trolling-mode:invalid");
+    strictEqual((await getTrollingSettings(database, chat.id)).mode, "mild");
     await setProactiveResponseInterval(database, chat.id, 83);
     await click("cfg:proactive:off");
     await click("cfg:proactive:on");

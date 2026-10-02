@@ -67,12 +67,12 @@ settings-debug-set = „{$setting}“ ist jetzt „{$value}“.
 settings-choose-reasoning = „{$setting}“ für „{$deployment}“ auswählen:
 settings-reasoning-set = „{$setting}“ für „{$deployment}“ ist jetzt „{$value}“.
 
-settings-trolling-description = Ich prüfe regelmäßig, ob eine Trolling-Antwort dran ist. Die Chance liegt bei jeder Prüfung bei 25 %.
+settings-trolling-description = Bei jedem eingestellten Intervall erstelle ich eine Trolling-Antwort und sende sie nur nach bestandener Qualitätsprüfung.
 settings-trolling-disabled = Trolling ist in diesem Chat aus.
 settings-trolling-updated =
     { $count ->
-        [one] Ich prüfe jetzt nach jeder Nachricht, ob eine Trolling-Antwort dran ist. Die Chance liegt bei jeder Prüfung bei 25 %.
-       *[other] Ich prüfe jetzt alle {$count} Nachrichten, ob eine Trolling-Antwort dran ist. Die Chance liegt bei jeder Prüfung bei 25 %.
+        [one] Ich erstelle nach jeder Nachricht eine Antwort und sende sie nur nach bestandener Qualitätsprüfung.
+       *[other] Ich erstelle alle {$count} Nachrichten eine Antwort und sende sie nur nach bestandener Qualitätsprüfung.
     }
 settings-proactive-description = Ich prüfe regelmäßig, ob eine proaktive Antwort dran ist. Die Chance liegt bei jeder Prüfung bei 25 %.
 settings-proactive-disabled = Proaktive Antworten sind in diesem Chat aus.
@@ -106,7 +106,13 @@ configure-no-emoji = Keine Emoji-Pakete.
 configure-kind = Art
 configure-deployment = Deployment
 configure-model-usage = Verwende /model Art Deployment
-configure-trolling-description = Jede {$count}. Nachricht wird mit einer Wahrscheinlichkeit von 25 % getrollt.
+configure-trolling-description = Jede {$count}. Nachricht löst die Erstellung einer Trolling-Antwort aus. Gesendet wird sie nur nach bestandener Qualitätsprüfung.
 configure-proactive-description = Jede {$count}. Nachricht erhält mit einer Wahrscheinlichkeit von 25 % eine Antwort.
 configure-all = Alle konfigurieren
 configure-back = Zurück
+
+configure-trolling-mode = Trolling-Modus
+configure-trolling-mode-description = Aggressiv: der ursprüngliche grobe Stil mit Schimpfwörtern und harten persönlichen Roasts. Mild: spielerische Roasts mit leichten Beschimpfungen und gelegentlichen Schimpfwörtern. Ohne Beschimpfungen: Wortspiele und situationsbezogener Sarkasmus ohne Beschimpfungen oder Schimpfwörter.
+trolling-mode-aggressive = Aggressiv
+trolling-mode-mild = Mild
+trolling-mode-clean = Ohne Beschimpfungen

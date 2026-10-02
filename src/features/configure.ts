@@ -17,7 +17,12 @@ import {
   getProactiveResponseSettings,
   setProactiveResponseEnabled,
 } from "./proactive.ts";
-import { getTrollingSettings, setTrollingEnabled } from "./trolling.ts";
+import { isTrollingMode, TROLLING_MODES } from "./trolling-mode.ts";
+import {
+  getTrollingSettings,
+  setTrollingEnabled,
+  setTrollingMode,
+} from "./trolling.ts";
 
 export const configureComposer = new Composer<Context>();
 const EFFORTS = ["none", "low", "medium", "high", "xhigh"] as const;
@@ -89,6 +94,10 @@ export async function buildRichConfigureMessage(
         ? await getTrollingSettings(ctx.database, ctx.chat.id)
         : await getProactiveResponseSettings(ctx.database, ctx.chat.id);
     html = `<p>${escapeHtml(ctx.t(`configure-${page}-description`, { count: status.intervalMessageCount }))}</p><p>${toggle(ctx, `${page}:${status.enabled ? "off" : "on"}`, status.enabled)}${status.enabled ? ` · <code>/${page} ${status.intervalMessageCount}</code>` : ""}</p>`;
+    if (page === "trolling") {
+      const { mode } = await getTrollingSettings(ctx.database, chatId);
+      html += `<p>${t("configure-trolling-mode")}</p><tg-button-row>${TROLLING_MODES.map((value) => button(ctx.t(`trolling-mode-${value}`), `trolling-mode:${value}`, mode === value ? "primary" : undefined)).join("")}</tg-button-row><p>${t("configure-trolling-mode-description")}</p>`;
+    }
   } else {
     const rows = await Promise.all(
       LLM_DEPLOYMENT_OPTIONS.map(async (model) => {
@@ -177,6 +186,9 @@ configureComposer.callbackQuery(/^cfg:/, async (ctx) => {
           : setProactiveResponseEnabled;
       await setEnabled(ctx.database, ctx.chat.id, target === "on");
     }
+  } else if (action === "trolling-mode" && isTrollingMode(target)) {
+    await setTrollingMode(ctx.database, ctx.chat.id, target);
+    page = "trolling";
   } else if (action === "remove" && target) {
     const packs = await listEmojiPacks(ctx.database);
     const keys = await Promise.all(packs.map((pack) => packKey(pack.name)));

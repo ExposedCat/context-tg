@@ -109,3 +109,45 @@ selects `small` (the default) or `big`; an unset or failed primary uses the fall
 `LLM_IMAGE_MODEL` is no longer used. Both use
 `/images/generations` under the shared base URL; primary image edits use
 `/images/edits`. Separate image endpoint and API key variables are no longer used.
+
+## Trolling tone
+
+Each chat can select one of three modes using the existing buttons under
+`/settings` → Trolling. The selected mode is highlighted:
+
+- `aggressive`: the original crude, profane style with harsh personal roasts.
+- `mild`: softer, playful roasts with light context-specific name-calling and
+  occasional profanity, without aggressive personal abuse.
+- `clean`: wordplay, situational sarcasm, and nitpicking the wording or logic,
+  without name-calling or profanity. This is the default.
+
+Automatic trolling triggers at every configured message interval, without a
+random chance. It first generates a candidate, then makes a separate stateless
+Responses API call to `gpt-6.1-sol` with reasoning effort `high` and strict
+structured output `{ valid: boolean }`. The validator receives recent messages,
+the exact candidate, and the selected mode. It rejects generic,
+off-topic, or inappropriate replies; a `false` verdict means nothing is sent
+and no replacement is generated. A validation failure or invalid response also
+prevents sending and is reported through the existing trolling error log.
+
+The validator uses the existing `LLM_BASE_URL` and `LLM_API_KEY`, so that endpoint
+must support `gpt-6.1-sol` and Responses structured outputs. No alternative model
+or JSON-mode fallback is used. Generation and validation each cost one request
+credit, including a validation that rejects the candidate. If the remaining
+balance cannot fund validation, the candidate is not sent. This gate applies to
+automatic trolling; explicit troll-agent conversations keep their existing flow.
+
+The application injects only the selected style into generation and validation
+prompts. Neither call receives a catalogue of the other modes to choose from.
+
+Only chat admins can change the mode. It applies to automatic trolling and
+explicit troll-agent conversations, including follow-ups. Changing the mode
+preserves the interval, enabled state, and message counter. `/trolling 100`
+continues to set the message interval, not the intensity.
+
+Database initialization adds `chat_trolling.trolling_mode`, defaulting to
+`clean`. Existing two-mode preferences migrate once: `allow_insults = 1`
+becomes `mild`, and `0` becomes `clean`. Original databases without a tone
+setting use `clean`. Later startups preserve the selected mode.
+These are model instructions, not an output filter; evaluate the tone with
+the deployed model.
