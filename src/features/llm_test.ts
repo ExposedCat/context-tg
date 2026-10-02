@@ -1605,7 +1605,7 @@ Deno.test("trolling validation uses Sol high with strict boolean structured outp
   globalThis.fetch = (async (_input, init) => {
     requests++;
     const body = JSON.parse(String(init?.body));
-    strictEqual(body.model, "gpt-6.1-sol");
+    strictEqual(body.model, "gpt-61-sol");
     deepStrictEqual(body.reasoning, { effort: "high" });
     strictEqual(body.store, false);
     strictEqual(body.previous_response_id, undefined);
@@ -1886,7 +1886,7 @@ Deno.test("periodic trolling always generates at its interval and sends only app
       generations++;
       return respond(candidate);
     }
-    strictEqual(body.model, "gpt-6.1-sol");
+    strictEqual(body.model, "gpt-61-sol");
     validations++;
     const input = JSON.parse(body.input[0].content);
     strictEqual(input.candidate, candidate);

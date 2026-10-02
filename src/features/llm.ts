@@ -1849,7 +1849,7 @@ export async function requestTrollingValidation(
   try {
     response = await getClient().responses.create(
       {
-        model: "gpt-6.1-sol",
+        model: "gpt-61-sol",
         reasoning: { effort: "high" },
         store: false,
         instructions:

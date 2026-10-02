@@ -123,7 +123,7 @@ Each chat can select one of three modes using the existing buttons under
 
 Automatic trolling triggers at every configured message interval, without a
 random chance. It first generates a candidate, then makes a separate stateless
-Responses API call to `gpt-6.1-sol` with reasoning effort `high` and strict
+Responses API call to `gpt-61-sol` with reasoning effort `high` and strict
 structured output `{ valid: boolean }`. The validator receives recent messages,
 the exact candidate, and the selected mode. It rejects generic,
 off-topic, or inappropriate replies; a `false` verdict means nothing is sent
@@ -131,7 +131,7 @@ and no replacement is generated. A validation failure or invalid response also
 prevents sending and is reported through the existing trolling error log.
 
 The validator uses the existing `LLM_BASE_URL` and `LLM_API_KEY`, so that endpoint
-must support `gpt-6.1-sol` and Responses structured outputs. No alternative model
+must support `gpt-61-sol` and Responses structured outputs. No alternative model
 or JSON-mode fallback is used. Generation and validation each cost one request
 credit, including a validation that rejects the candidate. If the remaining
 balance cannot fund validation, the candidate is not sent. This gate applies to
