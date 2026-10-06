@@ -13,8 +13,9 @@ A request costs 1 credit. Each tool invocation costs 1 more; web search adds 1,
 and each image API attempt adds 5 (including the alternate-model retry).
 Charges happen before work and are retained on failure, cancellation, or failed
 delivery. Model continuations/recovery for the same request aren't new requests.
-Work that cannot afford its next charge is skipped. Troll/proactive triggers are
-silent when credits run out. Commands themselves are free.
+There is no per-request tool-call or tool-round cap. Tool work that cannot afford
+its next charge is skipped and reported as a tool-call failure. Troll/proactive
+triggers are silent when credits run out. Commands themselves are free.
 
 `/usage` shows today's spend and prices. Bot admins can adjust the persistent
 daily allowance with `/usage +N` or `/usage -N` (minimum zero). `/usage +unlimited`

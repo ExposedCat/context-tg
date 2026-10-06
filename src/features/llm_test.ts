@@ -365,6 +365,116 @@ Deno.test("requestLlm uses Responses items through a function-call round", async
   }
 });
 
+Deno.test("tool rounds continue past four and credit exhaustion is a normal tool failure", async () => {
+  setLlmDeploymentName("small", "test-model");
+  const originalFetch = globalThis.fetch;
+  try {
+    for (const exhaustCredits of [false, true]) {
+      const requests: Array<Record<string, unknown>> = [];
+      const telemetryEvents: LlmCallTelemetryPayload[] = [];
+      let charges = 0;
+      globalThis.fetch = (async (input, init) => {
+        const request = new Request(input, init);
+        strictEqual(new URL(request.url).pathname, "/v1/responses");
+        requests.push(await request.json());
+        const round = requests.length;
+        return Response.json(
+          createApiResponse(
+            `resp_round_${round}`,
+            round <= 6
+              ? [
+                  {
+                    id: `fc_round_${round}`,
+                    type: "function_call",
+                    call_id: `call_round_${round}`,
+                    name: "set_reply_message_id",
+                    arguments: JSON.stringify({ message_id: round }),
+                    status: "completed",
+                  },
+                ]
+              : [
+                  {
+                    id: "msg_round_final",
+                    type: "message",
+                    role: "assistant",
+                    status: "completed",
+                    content: [
+                      { type: "output_text", text: "Done.", annotations: [] },
+                    ],
+                  },
+                ],
+          ),
+        );
+      }) as typeof fetch;
+
+      const response = await requestLlm(
+        "Use the tools",
+        ["set_reply_message_id"],
+        undefined,
+        {
+          context: { chatId: 1, messageId: 1 },
+          chargeCredits: async (kind, tool) => {
+            strictEqual(kind, "tool");
+            strictEqual(tool, "set_reply_message_id");
+            charges += 1;
+            if (exhaustCredits && charges === 6) {
+              throw new Error("Not enough credits: 5/5 used today.");
+            }
+          },
+          telemetry: {
+            chatType: "private",
+            mode: "normal",
+            emit: (payload) => telemetryEvents.push(payload),
+          },
+        },
+      );
+
+      strictEqual(requests.length, 7);
+      strictEqual(charges, 6);
+      strictEqual(response.response, "Done.");
+      strictEqual(response.tool_call_count, 6);
+      strictEqual(response.replyMessageId, exhaustCredits ? 5 : 6);
+      deepStrictEqual(
+        response.errors,
+        exhaustCredits
+          ? [
+              {
+                tool: "set_reply_message_id",
+                details: "Not enough credits: 5/5 used today.",
+              },
+            ]
+          : [],
+      );
+      strictEqual(
+        telemetryEvents[0].status,
+        exhaustCredits ? "with_errors" : "success",
+      );
+      for (const request of requests) {
+        deepStrictEqual(request.tools, requests[0].tools);
+      }
+      const outputs = (
+        requests[6].input as Array<Record<string, unknown>>
+      ).filter((item) => item.type === "function_call_output");
+      strictEqual(outputs.length, 6);
+      for (const [index, output] of outputs.entries()) {
+        strictEqual(output.call_id, `call_round_${index + 1}`);
+        if (exhaustCredits && index === 5) {
+          ok(String(output.output).includes('"error":"Tool call failed"'));
+          ok(
+            String(output.output).includes(
+              "Not enough credits: 5/5 used today.",
+            ),
+          );
+        } else {
+          ok(String(output.output).includes(`"reply_message_id":${index + 1}`));
+        }
+      }
+    }
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 Deno.test("requestLlm telemetry repeats tool names and reports tool errors", async () => {
   setLlmDeploymentName("small", "test-model");
   const telemetryEvents: LlmCallTelemetryPayload[] = [];

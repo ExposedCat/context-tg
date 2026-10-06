@@ -231,7 +231,6 @@ const MAX_LLM_RETRIES = 10;
 const MAX_EMPTY_RESPONSE_RETRIES = 2;
 const LLM_RATE_LIMIT_RETRY_DELAY_MS = 3000;
 const LLM_RATE_LIMIT_MAX_RETRIES = 5;
-const MAX_FUNCTION_TOOL_ROUNDS = 4;
 const RETRIABLE_EMPTY_RESPONSE_DETAILS = new Set([
   "empty response",
   "missing output",
@@ -1202,21 +1201,6 @@ function createInterruptedToolOutput(
   };
 }
 
-function createSkippedToolOutput(call: FunctionToolCall): FunctionCallOutput {
-  return {
-    type: "function_call_output",
-    call_id: call.call_id,
-    output: formatToolResponseContent(
-      call.name,
-      JSON.stringify({
-        error: "Tool execution skipped",
-        details:
-          "Tool execution was skipped because the maximum tool round limit was reached. Produce the final answer from the available context and mention any important missing data.",
-      }),
-    ),
-  };
-}
-
 function closePendingToolCalls(
   inputItems: ResponseInputItem[],
 ): ResponseInputItem[] {
@@ -1346,44 +1330,6 @@ async function recordResponse(
   );
 
   return responseId;
-}
-
-async function createFinalTextResponse(
-  client: OpenAI,
-  response: ApiResponse,
-  options: LlmRequestOptions,
-  state: LlmRequestState,
-  model: AgentModel,
-  instructions: string,
-  settings: LlmRuntimeSettings,
-): Promise<ApiResponse> {
-  const unresolvedFunctionCalls = getFunctionToolCalls(response);
-
-  if (unresolvedFunctionCalls.length === 0) {
-    return response;
-  }
-
-  state.hadToolErrors = true;
-
-  if (getResponseText(response)) {
-    return response;
-  }
-
-  logDebug("Forcing final text response after unresolved tool calls", {
-    response: formatResponseSummary(response),
-  });
-
-  return await createLlmResponseWithRetries(
-    client,
-    unresolvedFunctionCalls.map(createSkippedToolOutput),
-    [],
-    state.lastResponseId,
-    state,
-    options,
-    model,
-    instructions,
-    settings,
-  );
 }
 
 async function createLlmResponse(
@@ -1613,7 +1559,7 @@ async function resolveFunctionToolCalls(
     responseId: state.lastResponseId,
   });
 
-  for (let index = 0; index < MAX_FUNCTION_TOOL_ROUNDS; index += 1) {
+  while (true) {
     const functionCalls = getFunctionToolCalls(response);
 
     if (functionCalls.length === 0) {
@@ -1665,16 +1611,6 @@ async function resolveFunctionToolCalls(
       calledTools.add(tool);
     }
   }
-
-  response = await createFinalTextResponse(
-    client,
-    response,
-    options,
-    state,
-    model,
-    instructions,
-    settings,
-  );
 
   await options.onProgress?.({
     toolCallCount,
