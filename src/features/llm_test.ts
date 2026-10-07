@@ -656,6 +656,15 @@ Deno.test("read_image returns an image in the function-call output", async () =>
     strictEqual(response.response, "It is an orange cat.");
     strictEqual(requests.length, 2);
 
+    const tools = requests[0].tools as Array<Record<string, unknown>>;
+    const readImageTool = tools.find((tool) => tool.name === "read_image");
+    ok(readImageTool);
+    const parameters = readImageTool.parameters as Record<string, unknown>;
+    strictEqual(parameters.type, "object");
+    for (const keyword of ["oneOf", "anyOf", "allOf", "enum", "const", "not"]) {
+      strictEqual(Object.hasOwn(parameters, keyword), false);
+    }
+
     const secondInput = requests[1].input as Array<Record<string, unknown>>;
     const functionOutput = secondInput.find(
       (item) => item.type === "function_call_output",

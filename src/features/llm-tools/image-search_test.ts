@@ -119,6 +119,25 @@ Deno.test("read_image rejects non-HTTP URLs", async () => {
   );
 });
 
+Deno.test("read_image requires exactly one of url or id", async () => {
+  strictEqual(
+    await executeReadImage({}),
+    JSON.stringify({
+      error:
+        "Cannot read image: provide a direct HTTP(S) url or saved image id.",
+    }),
+  );
+  strictEqual(
+    await executeReadImage({
+      url: "https://images.example.com/cat.jpg",
+      id: "saved-image-id",
+    }),
+    JSON.stringify({
+      error: "Cannot read image: provide either url or id, not both.",
+    }),
+  );
+});
+
 Deno.test("read_image resolves a saved image id into vision input", async () => {
   const database = await initDatabase()();
   const image = await saveImageFileId(database, "saved-telegram-photo");
