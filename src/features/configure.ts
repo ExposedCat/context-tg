@@ -96,7 +96,7 @@ export async function buildRichConfigureMessage(
     html = `<p>${escapeHtml(ctx.t(`configure-${page}-description`, { count: status.intervalMessageCount }))}</p><p>${toggle(ctx, `${page}:${status.enabled ? "off" : "on"}`, status.enabled)}${status.enabled ? ` · <code>/${page} ${status.intervalMessageCount}</code>` : ""}</p>`;
     if (page === "trolling") {
       const { mode } = await getTrollingSettings(ctx.database, chatId);
-      html += `<p>${t("configure-trolling-mode")}</p><tg-button-row>${TROLLING_MODES.map((value) => button(ctx.t(`trolling-mode-${value}`), `trolling-mode:${value}`, mode === value ? "primary" : undefined)).join("")}</tg-button-row><p>${t("configure-trolling-mode-description")}</p>`;
+      html += `<p>${t("configure-trolling-mode")}</p><tg-button-row>${TROLLING_MODES.map((value) => button(ctx.t(`trolling-mode-${value}`), `trolling-mode:${value}`, mode === value ? "primary" : undefined)).join("")}</tg-button-row>`;
     }
   } else {
     const rows = await Promise.all(

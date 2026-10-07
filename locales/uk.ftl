@@ -114,7 +114,6 @@ configure-all = Налаштувати всі
 configure-back = Назад
 
 configure-trolling-mode = Режим тролінгу
-configure-trolling-mode-description = Агресивний: попередній жорсткий формат із лайкою та обзиваннями. М’який: легкі обзивання й помірна лайка без агресивних образ. Без обзивань: жарти, сарказм і прискіпування до слів без лайки та переходу на особистості.
 trolling-mode-aggressive = Агресивний
 trolling-mode-mild = М’який
 trolling-mode-clean = Без обзивань

@@ -1,6 +1,6 @@
 import type { Database } from "./database.ts";
 
-export const TROLLING_MODES = ["aggressive", "mild", "clean"] as const;
+export const TROLLING_MODES = ["clean", "mild", "aggressive"] as const;
 export type TrollingMode = (typeof TROLLING_MODES)[number];
 export const DEFAULT_TROLLING_MODE: TrollingMode = "clean";
 

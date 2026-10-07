@@ -112,7 +112,6 @@ configure-all = Alle konfigurieren
 configure-back = Zurück
 
 configure-trolling-mode = Trolling-Modus
-configure-trolling-mode-description = Aggressiv: der ursprüngliche grobe Stil mit Schimpfwörtern und harten persönlichen Roasts. Mild: spielerische Roasts mit leichten Beschimpfungen und gelegentlichen Schimpfwörtern. Ohne Beschimpfungen: Wortspiele und situationsbezogener Sarkasmus ohne Beschimpfungen oder Schimpfwörter.
 trolling-mode-aggressive = Aggressiv
 trolling-mode-mild = Mild
 trolling-mode-clean = Ohne Beschimpfungen

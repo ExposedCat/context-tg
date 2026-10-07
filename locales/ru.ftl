@@ -114,7 +114,6 @@ configure-all = Настроить все
 configure-back = Назад
 
 configure-trolling-mode = Режим троллинга
-configure-trolling-mode-description = Агрессивный: прежний жёсткий формат с матом и обзывательствами. Мягкий: лёгкие обзывательства и умеренный мат без агрессивной ругани. Без обзывательств: стёб, сарказм и придирки к словам без мата и перехода на личности.
 trolling-mode-aggressive = Агрессивный
 trolling-mode-mild = Мягкий
 trolling-mode-clean = Без обзывательств

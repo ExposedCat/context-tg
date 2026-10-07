@@ -112,7 +112,6 @@ configure-all = Configure all
 configure-back = Back
 
 configure-trolling-mode = Trolling mode
-configure-trolling-mode-description = Aggressive: the original profane roast style. Mild: softer roasts with light name-calling and occasional profanity. Clean: wordplay and situational sarcasm without name-calling or profanity.
 trolling-mode-aggressive = Aggressive
 trolling-mode-mild = Mild
 trolling-mode-clean = Clean
