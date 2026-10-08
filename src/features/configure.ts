@@ -17,12 +17,13 @@ import {
   getProactiveResponseSettings,
   setProactiveResponseEnabled,
 } from "./proactive.ts";
-import { isTrollingMode, TROLLING_MODES } from "./trolling-mode.ts";
 import {
   getTrollingSettings,
   setTrollingEnabled,
   setTrollingMode,
 } from "./trolling.ts";
+import { isTrollingMode, TROLLING_MODES } from "./trolling-mode.ts";
+import { getFinanceMcpEnabled, setFinanceMcpEnabled } from "./user-settings.ts";
 
 export const configureComposer = new Composer<Context>();
 const EFFORTS = ["none", "low", "medium", "high", "xhigh"] as const;
@@ -62,7 +63,10 @@ export async function buildRichConfigureMessage(
     button(ctx.t("configure-button"), target, active ? "primary" : undefined);
   let html: string;
   if (page === "menu") {
-    const rows = [`<p>${t("configure-emoji")} ${configure("emoji")}</p>`];
+    const rows: string[] = [];
+    const canConfigure = await canConfigureChat(ctx);
+    if (canConfigure)
+      rows.push(`<p>${t("configure-emoji")} ${configure("emoji")}</p>`);
     if (isBotAdmin(ctx)) {
       rows.push(`<p>${t("configure-models")} ${configure("models")}</p>`);
       const enabled = await getChatDebugMode(ctx.database, ctx.chat.id);
@@ -70,10 +74,18 @@ export async function buildRichConfigureMessage(
         `<p>${t("settings-kind-debug")} ${toggle(ctx, `debug:${enabled ? "off" : "on"}`, enabled)}</p>`,
       );
     }
-    rows.push(`<p>${t("configure-trolling")} ${configure("trolling")}</p>`);
-    rows.push(`<p>${t("configure-proactive")} ${configure("proactive")}</p>`);
+    if (canConfigure) {
+      rows.push(`<p>${t("configure-trolling")} ${configure("trolling")}</p>`);
+      rows.push(`<p>${t("configure-proactive")} ${configure("proactive")}</p>`);
+    }
     if (isBotAdmin(ctx))
       rows.push(`<p>${t("configure-effort")} ${configure("effort")}</p>`);
+    if (ctx.from) {
+      const enabled = await getFinanceMcpEnabled(ctx.database, ctx.from.id);
+      rows.push(
+        `<p>${t("configure-finance-mcp")} ${toggle(ctx, `finance:${ctx.from.id}:${enabled ? "off" : "on"}`, enabled)}</p>`,
+      );
+    }
     html = rows.join("\n");
   } else if (page === "emoji") {
     const packs = await listEmojiPacks(ctx.database);
@@ -134,25 +146,25 @@ export async function buildRichConfigureMessage(
 }
 
 configureComposer.command("settings", async (ctx) => {
-  if (!ctx.chat) return;
-  if (!(await canConfigureChat(ctx))) {
-    await ctx.reply(ctx.t("settings-admin-warning-chat"));
-    return;
-  }
+  if (!ctx.chat || !ctx.from) return;
   await ctx.replyWithRichMessage(await buildRichConfigureMessage(ctx));
 });
 
 configureComposer.callbackQuery(/^cfg:/, async (ctx) => {
-  if (!ctx.chat || !(await canConfigureChat(ctx))) {
+  const [action, target, value, extra] = ctx.callbackQuery.data
+    .slice(4)
+    .split(":");
+  if (
+    !ctx.chat ||
+    !ctx.from ||
+    (!["menu", "finance"].includes(action) && !(await canConfigureChat(ctx)))
+  ) {
     await ctx.answerCallbackQuery({
       text: ctx.t("settings-admin-warning-chat"),
       show_alert: true,
     });
     return;
   }
-  const [action, target, value, extra] = ctx.callbackQuery.data
-    .slice(4)
-    .split(":");
   if (
     ["models", "debug", "effort", "set"].includes(action) &&
     !isBotAdmin(ctx)
@@ -171,8 +183,18 @@ configureComposer.callbackQuery(/^cfg:/, async (ctx) => {
       show_alert: true,
     });
   };
-  if (extra || (value && action !== "set")) return await invalid();
-  if (action === "debug" && (target === "on" || target === "off")) {
+  if (extra || (value && action !== "set" && action !== "finance"))
+    return await invalid();
+  if (action === "finance" && (value === "on" || value === "off")) {
+    if (target !== String(ctx.from.id)) {
+      await ctx.answerCallbackQuery({
+        text: ctx.t("configure-user-settings-own"),
+        show_alert: true,
+      });
+      return;
+    }
+    await setFinanceMcpEnabled(ctx.database, ctx.from.id, value === "on");
+  } else if (action === "debug" && (target === "on" || target === "off")) {
     await persistChatDebugMode(ctx.database, ctx.chat.id, target === "on");
   } else if (
     (action === "trolling" || action === "proactive") &&

@@ -1,4 +1,4 @@
-command-settings-description = Change chat settings
+command-settings-description = Change chat and personal settings
 command-debug-description = Turn debug details on or off
 command-packs-description = List emoji packs
 command-tasks-description = Show recent tasks
@@ -94,6 +94,8 @@ settings-usage-prices =
     Resets daily at 00:00 UTC.
 
 configure-button = Configure
+configure-finance-mcp = Finance MCP
+configure-user-settings-own = Open /settings to change your own user settings.
 configure-enabled = Enabled
 configure-disabled = Disabled
 configure-emoji = Emoji

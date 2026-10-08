@@ -1,4 +1,4 @@
-command-settings-description = Змінити налаштування чату
+command-settings-description = Змінити налаштування чату й особисті налаштування
 command-debug-description = Увімкнути або вимкнути налагодження
 command-packs-description = Показати набори емодзі
 command-tasks-description = Показати останні завдання
@@ -96,6 +96,8 @@ settings-usage-prices =
     Скидання щодня о 00:00 UTC.
 
 configure-button = Налаштувати
+configure-finance-mcp = Finance MCP
+configure-user-settings-own = Відкрийте /settings, щоб змінити власні налаштування користувача.
 configure-enabled = Увімкнено
 configure-disabled = Вимкнено
 configure-emoji = Емодзі

@@ -29,6 +29,9 @@ const { getTrollingSettings, setTrollingInterval } = await import(
 );
 const { getProactiveResponseSettings, setProactiveResponseInterval } =
   await import("./proactive.ts");
+const { getFinanceMcpEnabled, migrateUserSettings } = await import(
+  "./user-settings.ts"
+);
 
 Deno.test("rich configure navigation, persistence and authorization", async () => {
   const database = await initDatabase()();
@@ -56,13 +59,15 @@ Deno.test("rich configure navigation, persistence and authorization", async () =
       calls.push({ method, payload: payload as Record<string, unknown> });
       return Promise.resolve({
         ok: true,
-        result: method === "getChatMember"
-          ? {
-            status: (payload as { user_id?: number }).user_id === 3
-              ? "member"
-              : "administrator",
-          }
-          : true,
+        result:
+          method === "getChatMember"
+            ? {
+                status:
+                  (payload as { user_id?: number }).user_id === 3
+                    ? "member"
+                    : "administrator",
+              }
+            : true,
       }) as ReturnType<typeof _prev>;
     });
     bot.use((ctx, next) => {
@@ -114,6 +119,78 @@ Deno.test("rich configure navigation, persistence and authorization", async () =
     ok(calls.some((call) => call.method === "sendRichMessage"));
     ok(calls.every((call) => !("reply_markup" in call.payload)));
     match(html(), /<p>Debug <tg-button[^>]+style="danger"/);
+    match(
+      html(),
+      /Finance MCP <tg-button[^>]+style="danger" data="cfg:finance:1:on"/,
+    );
+    strictEqual(await getFinanceMcpEnabled(database, 3), false);
+    calls.length = 0;
+    await bot.handleUpdate({
+      update_id: ++updateId,
+      message: {
+        message_id: 2,
+        date: 1,
+        chat,
+        from: from(3),
+        text: "/settings",
+        entities: [{ type: "bot_command", offset: 0, length: 9 }],
+      },
+    });
+    match(html(), /data="cfg:finance:3:on"/);
+    for (const action of [
+      "emoji",
+      "models",
+      "debug",
+      "trolling",
+      "proactive",
+      "effort",
+    ]) {
+      ok(!html().includes(`data="cfg:${action}`));
+      await click(`cfg:${action}`, 3);
+      ok(
+        calls.some(
+          (call) =>
+            call.method === "answerCallbackQuery" && call.payload.show_alert,
+        ),
+      );
+      await click("cfg:menu", 3);
+    }
+    await click("cfg:finance:1:on", 3);
+    strictEqual(await getFinanceMcpEnabled(database, 1), false);
+    ok(
+      calls.some(
+        (call) =>
+          call.method === "answerCallbackQuery" && call.payload.show_alert,
+      ),
+    );
+    await click("cfg:finance:3:on", 3);
+    strictEqual(await getFinanceMcpEnabled(database, 3), true);
+    strictEqual(await getFinanceMcpEnabled(database, 1), false);
+    match(
+      html(),
+      /Finance MCP <tg-button[^>]+style="success" data="cfg:finance:3:off"/,
+    );
+    await migrateUserSettings(database);
+    strictEqual(await getFinanceMcpEnabled(database, 3), true);
+    calls.length = 0;
+    await bot.handleUpdate({
+      update_id: ++updateId,
+      message: {
+        message_id: 3,
+        date: 1,
+        chat: { id: 3, type: "private", first_name: "user" },
+        from: from(3),
+        text: "/settings",
+        entities: [{ type: "bot_command", offset: 0, length: 9 }],
+      },
+    });
+    match(html(), /data="cfg:finance:3:off"/);
+    ok(!calls.some((call) => call.method === "getChatMember"));
+    await click("cfg:finance:3:off", 3);
+    strictEqual(await getFinanceMcpEnabled(database, 3), false);
+    await click("cfg:finance:3:invalid", 3);
+    strictEqual(await getFinanceMcpEnabled(database, 3), false);
+    await click("cfg:menu");
     await click("cfg:debug:on");
     strictEqual(await getChatDebugMode(database, chat.id), true);
     match(html(), /<p>Debug <tg-button[^>]+style="success"/);
@@ -134,58 +211,41 @@ Deno.test("rich configure navigation, persistence and authorization", async () =
       (await getTrollingSettings(database, chat.id)).intervalMessageCount,
       137,
     );
-    strictEqual(
-      (await getTrollingSettings(database, chat.id)).mode,
-      "clean",
-    );
+    strictEqual((await getTrollingSettings(database, chat.id)).mode, "clean");
     match(html(), /data="cfg:trolling-mode:mild"/);
     await click("cfg:trolling-mode:mild");
-    strictEqual(
-      (await getTrollingSettings(database, chat.id)).mode,
-      "mild",
-    );
+    strictEqual((await getTrollingSettings(database, chat.id)).mode, "mild");
     match(html(), /data="cfg:trolling-mode:clean"/);
     match(html(), /style="primary" data="cfg:trolling-mode:mild"/);
-    strictEqual(
-      (await getTrollingSettings(database, -200)).mode,
-      "clean",
-    );
+    strictEqual((await getTrollingSettings(database, -200)).mode, "clean");
     await setTrollingInterval(database, chat.id, 138);
     await click("cfg:trolling:off");
     await click("cfg:trolling-mode:aggressive");
     strictEqual((await getTrollingSettings(database, chat.id)).enabled, false);
     await click("cfg:trolling-mode:mild");
     await click("cfg:trolling:on");
-    strictEqual(
-      (await getTrollingSettings(database, chat.id)).mode,
-      "mild",
-    );
+    strictEqual((await getTrollingSettings(database, chat.id)).mode, "mild");
     await click("cfg:trolling-mode:clean");
-    strictEqual(
-      (await getTrollingSettings(database, chat.id)).mode,
-      "clean",
-    );
+    strictEqual((await getTrollingSettings(database, chat.id)).mode, "clean");
     strictEqual(
       (await getTrollingSettings(database, chat.id)).intervalMessageCount,
       138,
     );
     await click("cfg:trolling-mode:mild", 2);
-    strictEqual(
-      (await getTrollingSettings(database, chat.id)).mode,
-      "mild",
-    );
+    strictEqual((await getTrollingSettings(database, chat.id)).mode, "mild");
     await click("cfg:trolling-mode:clean", 3);
-    strictEqual(
-      (await getTrollingSettings(database, chat.id)).mode,
-      "mild",
-    );
+    strictEqual((await getTrollingSettings(database, chat.id)).mode, "mild");
     ok(
-      calls.some((call) =>
-        call.method === "answerCallbackQuery" && call.payload.show_alert
+      calls.some(
+        (call) =>
+          call.method === "answerCallbackQuery" && call.payload.show_alert,
       ),
     );
     await click("cfg:trolling-mode:aggressive", 2);
-    strictEqual((await getTrollingSettings(database, chat.id)).mode, "aggressive");
+    strictEqual(
+      (await getTrollingSettings(database, chat.id)).mode,
+      "aggressive",
+    );
     await click("cfg:trolling-mode:mild", 2);
     strictEqual((await getTrollingSettings(database, chat.id)).mode, "mild");
     await click("cfg:trolling-mode:invalid");

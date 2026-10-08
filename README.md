@@ -1,5 +1,24 @@
 # Chat Context | Telegram
 
+## Finance MCP
+
+Anyone can open `/settings`. The menu shows only controls they may use:
+chat admins retain Emoji, Trolling and Proactive controls, while Models, Debug
+and Effort remain restricted to the bot admin.
+
+**Finance MCP** is a personal toggle, off by default. It is saved by Telegram
+user ID in SQLite and applies across chats. When enabled, requests from that
+user discover Eyri's MCP reports and expose them to the model as `finance_*`
+tools. The bot supplies the requesting user's Telegram ID itself; the model
+cannot choose another portfolio. In groups, report answers are sent to that
+group. Open `/start` in Eyri first to create the account.
+
+Set `FINANCE_MCP_URL` to the Eyri Streamable HTTP endpoint reachable by the bot.
+Local development defaults to `http://127.0.0.1:8000/mcp`. For Compose, point
+it at Eyri on a shared container network, or a reachable host endpoint; the
+bot container's loopback address does not reach Eyri on the host. Disabled
+users cause no MCP connection or discovery calls.
+
 ## Threaded DMs
 
 Enable **Threaded Mode** for the bot in BotFather to use separate topics in

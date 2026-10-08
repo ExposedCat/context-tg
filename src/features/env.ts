@@ -44,6 +44,8 @@ export const APP_ENV = {
   MEDIA_CACHE_CHAT_ID: getOptionalNumberEnv("MEDIA_CACHE_CHAT_ID"),
   LLM_BASE_URL: getRequiredEnv("LLM_BASE_URL"),
   LLM_API_KEY: getRequiredEnv("LLM_API_KEY"),
+  FINANCE_MCP_URL:
+    getOptionalEnv("FINANCE_MCP_URL") ?? "http://127.0.0.1:8000/mcp",
   KEENABLE_API_KEY: getRequiredEnv("KEENABLE_API_KEY"),
   LLM_TEMPERATURE: getRequiredNumberEnv("LLM_TEMPERATURE"),
   EMBEDDER_BASE_URL: getRequiredEnv("EMBEDDER_BASE_URL"),

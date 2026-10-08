@@ -40,8 +40,13 @@ import {
   type ChatUsageTable,
   migrateUsage,
 } from "./usage.ts";
+import {
+  migrateUserSettings,
+  type UserSettingsTable,
+} from "./user-settings.ts";
 
 export type DatabaseSchema = {
+  user_settings: UserSettingsTable;
   threads: ThreadsTable;
   guest_response_threads: GuestResponseThreadsTable;
   llm_chat_responses: LlmResponseHistoryTable;
@@ -95,6 +100,7 @@ export function initDatabase() {
     await migrateThreads(database);
     await migrateLlmResponseHistory(database);
     await migrateLlmSettings(database);
+    await migrateUserSettings(database);
     await migrateTasks(database);
     await migrateSchedules(database);
     await migrateUsage(database);

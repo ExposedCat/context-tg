@@ -1,4 +1,4 @@
-command-settings-description = Изменить настройки чата
+command-settings-description = Изменить настройки чата и личные настройки
 command-debug-description = Включить или выключить отладку
 command-packs-description = Показать наборы эмодзи
 command-tasks-description = Показать последние задачи
@@ -96,6 +96,8 @@ settings-usage-prices =
     Сброс ежедневно в 00:00 UTC.
 
 configure-button = Настроить
+configure-finance-mcp = Finance MCP
+configure-user-settings-own = Откройте /settings, чтобы изменить свои настройки пользователя.
 configure-enabled = Включено
 configure-disabled = Выключено
 configure-emoji = Эмодзи
