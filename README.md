@@ -13,11 +13,29 @@ tools. The bot supplies the requesting user's Telegram ID itself; the model
 cannot choose another portfolio. In groups, report answers are sent to that
 group. Open `/start` in Eyri first to create the account.
 
-Set `FINANCE_MCP_URL` to the Eyri Streamable HTTP endpoint reachable by the bot.
-Local development defaults to `http://127.0.0.1:8000/mcp`. For Compose, point
-it at Eyri on a shared container network, or a reachable host endpoint; the
-bot container's loopback address does not reach Eyri on the host. Disabled
-users cause no MCP connection or discovery calls.
+Local development defaults to `http://127.0.0.1:8000/mcp`. Disabled users cause
+no MCP connection or discovery calls.
+
+For PM3 (Podman Compose), both projects' Compose files connect their app service
+to the external `finance-mcp` network. Context defaults to
+`http://eyri_app:8000/mcp`. Create the network once before starting either app. Set
+`FINANCE_MCP_NETWORK` and `FINANCE_MCP_URL` in `.env` to override the network
+name and endpoint. Set the same network override in Eyri's `.env` too. PM3's
+down/up restarts leave this external network intact, allowing either app to
+restart independently. Both apps retain their existing volumes and PM3 projects.
+
+On `kitkat@server.local`, the PM3 projects are named `eyri` and `context`:
+
+```sh
+podman network exists finance-mcp || podman network create finance-mcp
+pm3 restart eyri -y -g
+pm3 restart context -y -g
+```
+
+Use these restarts after both updated repositories are available to PM3. The
+Compose network change requires recreating both app containers; merely restarting the
+Deno process does not attach the network. Eyri's host port stays bound to
+loopback; Context accesses MCP directly over the container network.
 
 ## Threaded DMs
 

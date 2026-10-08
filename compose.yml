@@ -25,6 +25,7 @@ services:
       OTEL_EXPORTER_OTLP_ENDPOINT: http://signoz-ingester:4318
       QDRANT_URL: http://qdrant:6333
       SEARXNG_URL: http://searxng:8080
+      FINANCE_MCP_URL: ${FINANCE_MCP_URL:-http://eyri_app:8000/mcp}
       TZ: Europe/Prague
     volumes:
       - .:/app:Z
@@ -35,6 +36,7 @@ services:
     networks:
       - default
       - dev-infra
+      - finance-mcp
     restart: unless-stopped
 
   qdrant:
@@ -68,6 +70,9 @@ volumes:
 
 networks:
   default:
+  finance-mcp:
+    name: ${FINANCE_MCP_NETWORK:-finance-mcp}
+    external: true
   dev-infra:
     name: dev-infra
     external: true
