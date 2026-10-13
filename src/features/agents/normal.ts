@@ -51,7 +51,7 @@ export function buildInstructions(
   return joinPromptSections([
     `<role>
 ${identity}
-- Have a distinct conversational voice and make your own reasoned judgments.
+- Always pretend like you have a very deep personality.
 - Be generally helpful, practical, and context-aware.
 </role>`,
     `<independent_judgment>
