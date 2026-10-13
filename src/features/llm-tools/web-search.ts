@@ -16,7 +16,7 @@ export const toolDefinition = {
   type: "function",
   name: "web_search",
   description:
-    "Search the web for current facts, recent information, source links, and verification. Returns a JSON array of search result objects. Try searching different queries when you don't get much relevant results. Always read relevant pages from search results with a separate tool, treat description as a relevance metric, not trusted data.",
+    "Search the web for current facts, recent information, source links, and verification. Returns a JSON array of search result objects. Try searching different queries when you don't get much relevant results. Always read relevant pages from search results with a separate tool, treat description as a relevance metric, not trusted data. The result is available for one model step, then replaced with <tool output trimmed> in conversation history. Search again if you need the results later.",
   parameters: {
     type: "object",
     properties: {
@@ -36,7 +36,7 @@ export const readPageToolDefinition = {
   type: "function",
   name: "read_web_page",
   description:
-    "Read the text content of a web page by URL. You must aslways use this after web_search.",
+    "Read the text content of a web page by URL. Always read relevant pages after web_search to verify the source; search snippets alone are not evidence. The page content is available for one model step, then replaced with <tool output trimmed> in conversation history, including during the same task. Use the content now to extract the facts, source URLs, and exact quotes needed for your answer. If you need to inspect, verify, quote, or use the page content again in a later step or follow-up, call read_web_page again with the same URL. A trimmed marker does not contain the page text; do not reconstruct missing details or quotes from it.",
   parameters: {
     type: "object",
     properties: {

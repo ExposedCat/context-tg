@@ -15,6 +15,7 @@ const TEST_ENV = {
   MEDIA_CACHE_CHAT_ID: "-10042",
   LLM_BASE_URL: "https://llm.test/v1",
   LLM_API_KEY: "test",
+  LLM_COMPACT_THRESHOLD: "100000",
   KEENABLE_API_KEY: "test",
   LLM_TEMPERATURE: "0.2",
   EMBEDDER_BASE_URL: "https://embedder.test/v1",
@@ -38,6 +39,11 @@ const [
 ]);
 
 type ResponseOutput =
+  | {
+      id: string;
+      type: "compaction";
+      encrypted_content: string;
+    }
   | {
       id: string;
       type: "function_call";
@@ -299,6 +305,9 @@ Deno.test("requestLlm uses Responses items through a function-call round", async
     const firstRequest = requests[0];
     strictEqual(firstRequest.model, "test-model");
     strictEqual(firstRequest.store, false);
+    deepStrictEqual(firstRequest.context_management, [
+      { type: "compaction", compact_threshold: 100_000 },
+    ]);
     deepStrictEqual(firstRequest.include, ["reasoning.encrypted_content"]);
     ok(typeof firstRequest.instructions === "string");
     deepStrictEqual(firstRequest.tools, [
@@ -362,6 +371,321 @@ Deno.test("requestLlm uses Responses items through a function-call round", async
     );
   } finally {
     globalThis.fetch = originalFetch;
+  }
+});
+
+Deno.test("native compaction prunes checkpoints and survives tool rounds, restarts and branches", async () => {
+  setLlmDeploymentName("small", "test-model");
+  const database = await initDatabase()();
+  const { getLlmResponseInputItems, saveLlmResponseInputItems } = await import(
+    "./llm-chat-responses.ts"
+  );
+  const originalFetch = globalThis.fetch;
+  const requests: Array<{ input: Array<Record<string, unknown>> }> = [];
+  const firstCompaction: ResponseOutput = {
+    id: "cmp_first",
+    type: "compaction",
+    encrypted_content: "opaque-first-state",
+  };
+  const secondCompaction: ResponseOutput = {
+    id: "cmp_second",
+    type: "compaction",
+    encrypted_content: "opaque-second-state",
+  };
+  const answer: ResponseOutput = {
+    id: "msg_compacted_answer",
+    type: "message",
+    role: "assistant",
+    status: "completed",
+    content: [{ type: "output_text", text: "Done", annotations: [] }],
+  };
+  globalThis.fetch = (async (input, init) => {
+    requests.push(await new Request(input, init).json());
+    const index = requests.length;
+    const output: ResponseOutput[] =
+      index === 1
+        ? [
+            firstCompaction,
+            {
+              id: "fc_after_compaction",
+              type: "function_call",
+              call_id: "call_after_compaction",
+              name: "set_reply_message_id",
+              arguments: '{"message_id":42}',
+              status: "completed",
+            },
+          ]
+        : index === 2
+          ? [secondCompaction, answer]
+          : [answer];
+    return Response.json(createApiResponse(`resp_compacted_${index}`, output));
+  }) as typeof fetch;
+  try {
+    const options = { database, context: { chatId: 501, messageId: 1 } };
+    const first = await requestLlm(
+      "Old context to compact",
+      ["set_reply_message_id"],
+      undefined,
+      options,
+    );
+    deepStrictEqual(requests[1].input[0], firstCompaction);
+    ok(!JSON.stringify(requests[1].input).includes("Old context to compact"));
+    strictEqual(requests[1].input[1].type, "function_call");
+    strictEqual(requests[1].input[2].type, "function_call_output");
+    strictEqual(requests[1].input[2].call_id, "call_after_compaction");
+    strictEqual(first.replyMessageId, 42);
+    ok(first.response_id);
+    const saved = await getLlmResponseInputItems(database, first.response_id);
+    deepStrictEqual(saved, [secondCompaction, answer]);
+    ok(saved);
+
+    // An uncached ID exercises the same SQLite load used after a restart.
+    await saveLlmResponseInputItems(database, {
+      responseId: "resp_compacted_restart",
+      inputItems: saved,
+    });
+    await requestLlm("Continue", [], "resp_compacted_restart", options);
+    deepStrictEqual(requests[2].input.slice(0, 2), saved);
+    ok(!JSON.stringify(requests[2].input).includes("opaque-first-state"));
+
+    // Replying to an older checkpoint retains that branch's compaction state.
+    await requestLlm("Branch", [], "resp_compacted_1", options);
+    deepStrictEqual(requests[3].input[0], firstCompaction);
+    const interrupted = requests[3].input.find(
+      (item) => item.type === "function_call_output",
+    );
+    strictEqual(interrupted?.call_id, "call_after_compaction");
+    ok(String(interrupted?.output).includes("Tool execution interrupted"));
+    deepStrictEqual(
+      await getLlmResponseInputItems(database, first.response_id),
+      saved,
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+    await database.destroy();
+  }
+});
+
+Deno.test("retrieval outputs are consumed once, then trimmed during tools and restart continuation", async () => {
+  setLlmDeploymentName("small", "test-model");
+  const database = await initDatabase()();
+  const { getLlmResponseInputItems, saveLlmResponseInputItems } = await import(
+    "./llm-chat-responses.ts"
+  );
+  const call = (
+    name: string,
+    id: string,
+    args: string,
+  ): Extract<ResponseOutput, { type: "function_call" }> => ({
+    id: `fc_${id}`,
+    type: "function_call",
+    call_id: id,
+    name,
+    arguments: args,
+    status: "completed",
+  });
+  const answer: ResponseOutput = {
+    id: "msg_retrieval_answer",
+    type: "message",
+    role: "assistant",
+    status: "completed",
+    content: [{ type: "output_text", text: "Verified", annotations: [] }],
+  };
+  await saveLlmResponseInputItems(database, {
+    responseId: "resp_legacy_retrieval",
+    inputItems: [
+      call(
+        "search_chat",
+        "chat_lookup",
+        '{"queries":["plans"],"target":"group"}',
+      ),
+      {
+        type: "function_call_output",
+        call_id: "chat_lookup",
+        output: "CHAT_SEARCH_PAYLOAD",
+      },
+      call("read_last_messages", "recent", '{"count":1,"target":"group"}'),
+      {
+        type: "function_call_output",
+        call_id: "recent",
+        output: "RETAINED_RECENT_MESSAGES",
+      },
+      answer,
+    ],
+  });
+  const originalFetch = globalThis.fetch;
+  const requests: Array<{ input: Array<Record<string, unknown>> }> = [];
+  globalThis.fetch = (async (input, init) => {
+    const request = new Request(input, init);
+    if (request.url === "https://api.keenable.ai/v1/search") {
+      return Response.json({
+        results: [
+          {
+            url: "https://source.test/page",
+            description: "FRESH_WEB_SEARCH_PAYLOAD",
+          },
+        ],
+      });
+    }
+    if (request.url.startsWith("https://api.keenable.ai/v1/fetch?")) {
+      return Response.json({ content: "FRESH_PAGE_PAYLOAD" });
+    }
+    strictEqual(request.url, "https://llm.test/v1/responses");
+    requests.push(await request.json());
+    const output: ResponseOutput[] =
+      requests.length === 1
+        ? [call("web_search", "web_lookup", '{"query":"source"}')]
+        : requests.length === 2
+          ? [
+              call(
+                "read_web_page",
+                "page_lookup",
+                '{"url":"https://source.test/page"}',
+              ),
+            ]
+          : requests.length === 3
+            ? [
+                call(
+                  "set_reply_message_id",
+                  "reply_lookup",
+                  '{"message_id":42}',
+                ),
+              ]
+            : [answer];
+    return Response.json(
+      createApiResponse(`resp_retrieval_${requests.length}`, output),
+    );
+  }) as typeof fetch;
+  const outputFor = (index: number, id: string) =>
+    requests[index].input.find(
+      (item) => item.type === "function_call_output" && item.call_id === id,
+    )?.output;
+  try {
+    const options = { database, context: { chatId: 502, messageId: 1 } };
+    const first = await requestLlm(
+      "Verify the source",
+      ["web_search", "read_web_page", "set_reply_message_id"],
+      "resp_legacy_retrieval",
+      options,
+    );
+    strictEqual(
+      outputFor(0, "chat_lookup"),
+      '<tool_response tool="search_chat" trimmed="true">\n<tool output trimmed>\n</tool_response>',
+    );
+    strictEqual(outputFor(0, "recent"), "RETAINED_RECENT_MESSAGES");
+    ok(String(outputFor(1, "web_lookup")).includes("FRESH_WEB_SEARCH_PAYLOAD"));
+    strictEqual(
+      outputFor(2, "web_lookup"),
+      '<tool_response tool="web_search" trimmed="true">\n<tool output trimmed>\n</tool_response>',
+    );
+    ok(String(outputFor(2, "page_lookup")).includes("FRESH_PAGE_PAYLOAD"));
+    strictEqual(
+      outputFor(3, "page_lookup"),
+      '<tool_response tool="read_web_page" trimmed="true">\n<tool output trimmed>\n</tool_response>',
+    );
+    ok(
+      String(outputFor(3, "reply_lookup")).includes(
+        'tool="set_reply_message_id"',
+      ),
+    );
+    ok(!String(outputFor(3, "reply_lookup")).includes("trimmed"));
+    ok(first.response_id);
+    const saved = await getLlmResponseInputItems(database, first.response_id);
+    ok(saved);
+    ok(!JSON.stringify(saved).includes("FRESH_"));
+    ok(!JSON.stringify(saved).includes("CHAT_SEARCH_PAYLOAD"));
+    ok(JSON.stringify(saved).includes("https://source.test/page"));
+    await saveLlmResponseInputItems(database, {
+      responseId: "resp_retrieval_restart",
+      inputItems: saved,
+    });
+    await requestLlm("Continue", [], "resp_retrieval_restart", options);
+    strictEqual(outputFor(4, "page_lookup"), outputFor(3, "page_lookup"));
+    strictEqual(outputFor(4, "recent"), "RETAINED_RECENT_MESSAGES");
+  } finally {
+    globalThis.fetch = originalFetch;
+    await database.destroy();
+  }
+});
+
+Deno.test("failed model steps preserve unconsumed retrieval results alongside compaction state", async () => {
+  setLlmDeploymentName("small", "test-model");
+  const database = await initDatabase()();
+  const { getLlmResponseInputItems, saveLlmResponseInputItems } = await import(
+    "./llm-chat-responses.ts"
+  );
+  const compaction = {
+    id: "cmp_failed_retrieval",
+    type: "compaction" as const,
+    encrypted_content: "opaque-retry-state",
+  };
+  await saveLlmResponseInputItems(database, {
+    responseId: "resp_unconsumed_retrieval",
+    inputItems: [
+      compaction,
+      // The native compaction state can replace a call before its result arrives.
+      {
+        type: "function_call_output",
+        call_id: "page_retry",
+        output:
+          '<tool_response tool="read_web_page">\nUNCONSUMED_PAGE_PAYLOAD\n</tool_response>',
+      },
+    ],
+  });
+  const originalFetch = globalThis.fetch;
+  const requests: Array<{ input: Array<Record<string, unknown>> }> = [];
+  globalThis.fetch = (async (input, init) => {
+    requests.push(await new Request(input, init).json());
+    return requests.length === 1
+      ? Response.json(
+          {
+            error: {
+              message: "Step failed",
+              type: "invalid_request_error",
+              code: "test_failure",
+            },
+          },
+          { status: 400 },
+        )
+      : Response.json(
+          createApiResponse("resp_consumed_after_retry", [
+            {
+              id: "msg_retry",
+              type: "message",
+              role: "assistant",
+              status: "completed",
+              content: [{ type: "output_text", text: "Read", annotations: [] }],
+            },
+          ]),
+        );
+  }) as typeof fetch;
+  try {
+    const options = { database, context: { chatId: 503, messageId: 1 } };
+    let checkpoint: string | undefined;
+    await assertRejects(
+      () =>
+        requestLlm("Use the page", [], "resp_unconsumed_retrieval", options),
+      (error: unknown) => {
+        ok(error instanceof LlmRequestError);
+        checkpoint = error.lastResponseId;
+        return true;
+      },
+    );
+    ok(checkpoint);
+    const savedFailure = await getLlmResponseInputItems(database, checkpoint);
+    ok(JSON.stringify(savedFailure).includes("UNCONSUMED_PAGE_PAYLOAD"));
+    await requestLlm("Retry", [], checkpoint, options);
+    deepStrictEqual(requests[1].input[0], compaction);
+    ok(JSON.stringify(requests[1].input).includes("UNCONSUMED_PAGE_PAYLOAD"));
+    const savedSuccess = await getLlmResponseInputItems(
+      database,
+      "resp_consumed_after_retry",
+    );
+    ok(!JSON.stringify(savedSuccess).includes("UNCONSUMED_PAGE_PAYLOAD"));
+    ok(JSON.stringify(savedSuccess).includes("<tool output trimmed>"));
+  } finally {
+    globalThis.fetch = originalFetch;
+    await database.destroy();
   }
 });
 

@@ -57,6 +57,27 @@ DM topic through `target=topic_thread`; `target=group` searches the whole chat.
 Conversation links persist in SQLite across restarts. Enable the BotFather
 option that lets users create threads if users should manage their own topics.
 
+## Conversation context
+
+Conversation requests use native Responses API compaction with `store: false`.
+Set `LLM_COMPACT_THRESHOLD` to a positive integer token threshold (default:
+100,000). Choose a value below the smallest conversation deployment's context
+window, leaving room for instructions, tool definitions, tool results, and
+generation. The configured deployments must support native compaction.
+
+When the API returns a `compaction` item, the bot retains that encrypted item
+and everything after it as the next context window. The compacted window and
+memory state are saved in SQLite, so continuation and replies to older
+checkpoints keep working across restarts.
+
+`web_search`, `search_chat`, and `read_web_page` outputs are available for one
+successful model step. Their bodies are then replaced in continuation history
+with `<tool output trimmed>` inside a `<tool_response tool="..." trimmed="true">`
+wrapper. Function calls and their arguments remain until native compaction;
+other tool results are retained. The agent must repeat a search or page read
+when it needs that source content again, including during the same task.
+Failed-step checkpoints retain unconsumed results for retry.
+
 ## Trigger names
 
 Set `NAMES` to a comma-separated list of normal-agent aliases, for example

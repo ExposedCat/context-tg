@@ -252,6 +252,11 @@ const INVALID_IMAGE_DATA_ERROR_PATTERN =
 const CORRUPTED_IMAGE_REMOVAL_NOTICE_PATTERN =
   /\b\d+ attached images were removed due to corrupted contents\./;
 const MARKDOWN_TOOL_OUTPUTS = new Set<string>(["read_web_page"]);
+const TRIMMED_TOOL_OUTPUTS = new Set<string>([
+  "web_search",
+  "search_chat",
+  "read_web_page",
+]);
 
 type LlmRequestState = {
   financeMcp?: FinanceMcpTools;
@@ -1258,7 +1263,7 @@ async function loadPreviousResponseInput(
 
   const cachedInput = responseInputCache.get(responseId);
   if (cachedInput) {
-    return closePendingToolCalls(cloneResponseInputItems(cachedInput));
+    return preparePreviousResponseInput(cloneResponseInputItems(cachedInput));
   }
 
   if (!options.database) {
@@ -1277,7 +1282,7 @@ async function loadPreviousResponseInput(
   }
 
   responseInputCache.set(responseId, cloneResponseInputItems(inputItems));
-  return closePendingToolCalls(inputItems);
+  return preparePreviousResponseInput(inputItems);
 }
 
 async function saveResponseInput(
@@ -1315,13 +1320,69 @@ function getReplayableOutputItems(response: ApiResponse): ResponseInputItem[] {
     if (
       item.type === "message" ||
       item.type === "reasoning" ||
-      item.type === "function_call"
+      item.type === "function_call" ||
+      item.type === "compaction"
     ) {
       inputItems.push(item);
     }
   }
 
   return inputItems;
+}
+
+function trimConsumedToolOutputs(
+  inputItems: ResponseInputItem[],
+  consumedThrough = inputItems.length,
+): ResponseInputItem[] {
+  const toolNames = new Map<string, string>();
+  return inputItems.map((item, index) => {
+    if (item.type === "function_call") {
+      toolNames.set(item.call_id, item.name);
+    }
+    if (item.type !== "function_call_output" || index >= consumedThrough) {
+      return item;
+    }
+    // Compaction can replace the original call while a subsequent result still
+    // exists. Our tool_response wrapper retains the tool name in that case.
+    const outputText =
+      typeof item.output === "string" ? item.output : undefined;
+    const toolName =
+      toolNames.get(item.call_id) ??
+      outputText?.match(/^<tool_response tool="([^"]+)"(?:\s|>)/)?.[1];
+    if (!toolName || !TRIMMED_TOOL_OUTPUTS.has(toolName)) return item;
+    return {
+      ...item,
+      output: [
+        `<tool_response tool="${toolName}" trimmed="true">`,
+        "<tool output trimmed>",
+        "</tool_response>",
+      ].join("\n"),
+    };
+  });
+}
+
+function pruneCompactedInput(
+  inputItems: ResponseInputItem[],
+): ResponseInputItem[] {
+  const index = inputItems.findLastIndex((item) => item.type === "compaction");
+  return index < 0 ? inputItems : inputItems.slice(index);
+}
+
+function preparePreviousResponseInput(
+  inputItems: ResponseInputItem[],
+): ResponseInputItem[] {
+  // Legacy histories can still contain consumed retrieval results. Leave results
+  // after the last model output intact: they may belong to a failed-step checkpoint.
+  const consumedThrough = inputItems.findLastIndex(
+    (item) =>
+      item.type === "function_call" ||
+      item.type === "reasoning" ||
+      item.type === "compaction" ||
+      (item.type === "message" && item.role === "assistant"),
+  );
+  return closePendingToolCalls(
+    pruneCompactedInput(trimConsumedToolOutputs(inputItems, consumedThrough)),
+  );
 }
 
 async function recordResponse(
@@ -1332,11 +1393,15 @@ async function recordResponse(
   options: LlmRequestOptions,
 ): Promise<string> {
   const responseId = getLocalResponseId(response);
-  const inputItems = [
-    ...state.inputItems,
-    ...input,
-    ...getReplayableOutputItems(response),
-  ];
+  // Only trim after a successful model step has consumed the tool results.
+  // Failed-step checkpoints retain fresh results so retries can still use them.
+  const inputItems = pruneCompactedInput(
+    trimConsumedToolOutputs([
+      ...state.inputItems,
+      ...input,
+      ...getReplayableOutputItems(response),
+    ]),
+  );
 
   state.inputItems = inputItems;
   state.lastResponseId = responseId;
@@ -1379,6 +1444,12 @@ async function createLlmResponse(
       tools: toolDefinitions.length > 0 ? toolDefinitions : undefined,
       tool_choice: toolDefinitions.length > 0 ? "auto" : undefined,
       store: false,
+      context_management: [
+        {
+          type: "compaction",
+          compact_threshold: APP_ENV.LLM_COMPACT_THRESHOLD,
+        },
+      ],
       ...(model.withReasoning
         ? { include: ["reasoning.encrypted_content"] as const }
         : {}),

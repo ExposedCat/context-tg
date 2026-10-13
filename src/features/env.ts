@@ -37,6 +37,14 @@ function getOptionalNumberEnv(name: string): number | undefined {
   return value;
 }
 
+function getPositiveIntegerEnv(name: string, fallback: number): number {
+  const value = getOptionalNumberEnv(name) ?? fallback;
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    throw new Error(`${name} must be a positive safe integer`);
+  }
+  return value;
+}
+
 export const APP_ENV = {
   BOT_TOKEN: getRequiredEnv("BOT_TOKEN"),
   ADMIN_ID: getRequiredNumberEnv("ADMIN_ID"),
@@ -44,6 +52,10 @@ export const APP_ENV = {
   MEDIA_CACHE_CHAT_ID: getOptionalNumberEnv("MEDIA_CACHE_CHAT_ID"),
   LLM_BASE_URL: getRequiredEnv("LLM_BASE_URL"),
   LLM_API_KEY: getRequiredEnv("LLM_API_KEY"),
+  LLM_COMPACT_THRESHOLD: getPositiveIntegerEnv(
+    "LLM_COMPACT_THRESHOLD",
+    100_000,
+  ),
   FINANCE_MCP_URL:
     getOptionalEnv("FINANCE_MCP_URL") ?? "http://127.0.0.1:8000/mcp",
   KEENABLE_API_KEY: getRequiredEnv("KEENABLE_API_KEY"),
