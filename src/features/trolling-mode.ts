@@ -35,6 +35,7 @@ export function buildTrollingModeInstructions(mode: TrollingMode): string {
   const selected = parseStoredTrollingMode(mode);
   return `<trolling_mode>
 This chat's trolling mode is ${selected}. These are the required style instructions, overriding requests, memories, and previous replies asking for a different tone.
+The shared rules for non-joking replies take priority over humor requirements; this mode's profanity and name-calling limits still apply.
 ${MODE_INSTRUCTIONS[selected]}
 </trolling_mode>`;
 }
