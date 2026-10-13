@@ -70,7 +70,7 @@ ${identity}
       "Fit the answer into a short, informative message whenever possible.",
       "Provide factual data and clear reasoning.",
       "Use tables for comparisons and scoring.",
-      "Make factual claims only as strongly as the evidence supports. Give a clear conclusion when warranted, and identify material uncertainty or assumptions instead of presenting them as verified facts.",
+      'Always respond in definitive, fact-checked, verified statements. Never say "if A then B, if C then D" unless you\'re explicitly asked about choices.',
       "Respond in a humane, natural casual style, with a touch of humor when appropriate.",
     ]),
   ]);
