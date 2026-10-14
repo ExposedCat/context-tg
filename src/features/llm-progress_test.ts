@@ -1,10 +1,16 @@
 import { deepStrictEqual, strictEqual } from "node:assert";
 import type { LlmProgressSegment } from "./llm.ts";
-import { createProgressUpdates, PROGRESS_INTERVAL_MS } from "./llm-progress.ts";
+import {
+  createProgressUpdates,
+  PROGRESS_INTERVAL_MS,
+  PROGRESS_PLACEHOLDER_INTERVAL_MS,
+} from "./llm-progress.ts";
 
 function clock() {
   let callback: (() => void) | undefined;
+  let now = 0;
   return {
+    now: () => now,
     schedule(fn: () => void, delay: number) {
       strictEqual(delay, 10_000);
       callback = fn;
@@ -16,6 +22,7 @@ function clock() {
       callback = undefined;
     },
     async tick() {
+      now += 10_000;
       const fn = callback;
       callback = undefined;
       fn?.();
@@ -56,9 +63,13 @@ Deno.test("progress batches preserve each segment's tools and drain after each i
   ]);
   updates.add([{ tools: ["read_web_page", "read_web_page"] }]);
   await timer.tick();
+  strictEqual(messages.length, 1);
+  await timer.tick();
   deepStrictEqual(messages[1], [
     { text: "Thinking...", tools: ["read_web_page"] },
   ]);
+  await timer.tick();
+  strictEqual(messages.length, 2);
   await timer.tick();
   deepStrictEqual(messages[2], [{ text: "Thinking...", tools: [] }]);
   updates.add([{ text: "Last unsent progress", tools: ["search_chat"] }]);
@@ -69,6 +80,7 @@ Deno.test("progress batches preserve each segment's tools and drain after each i
   await timer.tick();
   strictEqual(messages.length, 3);
   strictEqual(PROGRESS_INTERVAL_MS, 10_000);
+  strictEqual(PROGRESS_PLACEHOLDER_INTERVAL_MS, 20_000);
 });
 
 Deno.test("progress stops on cancellation and waits for an in-flight send", async () => {
@@ -89,6 +101,8 @@ Deno.test("progress stops on cancellation and waits for an in-flight send", asyn
       throw error;
     },
   });
+  await timer.tick();
+  strictEqual(sent, 0);
   await timer.tick();
   let stopped = false;
   const stopping = updates.stop().then(() => {

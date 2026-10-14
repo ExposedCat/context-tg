@@ -1077,8 +1077,9 @@ Deno.test("exhausted balances skip proactive and troll work before context looku
   }
 });
 
-Deno.test("combined progress renders each tool footer directly below its own text", async () => {
+Deno.test("combined progress has a separate final icon line ending with the progress marker", async () => {
   const { formatProgressSegments } = await import("./chat.ts");
+  const marker = "![⏳](tg://emoji?id=5427181942934088912)";
   const markdown = formatProgressSegments([
     { text: "Found relevant articles.", tools: ["web_search"] },
     { text: "I'll check sources.", tools: ["read_web_page"] },
@@ -1087,17 +1088,42 @@ Deno.test("combined progress renders each tool footer directly below its own tex
   deepStrictEqual(
     markdown,
     [
-      "Found relevant articles.\n![🌐](tg://emoji?id=5879585266426973039)",
-      "I'll check sources.\n![📝](tg://emoji?id=5960551395730919906)",
+      "Found relevant articles.",
+      "I'll check sources.",
       "Got it. Writing final response.",
+      `![🌐](tg://emoji?id=5879585266426973039) ![📝](tg://emoji?id=5960551395730919906) ${marker}`,
     ].join("\n\n"),
   );
   strictEqual(
     formatProgressSegments([
       { text: "Reading context", tools: ["get_message_context"] },
     ]),
-    "Reading context\n`get_message_context`",
+    `Reading context\n\n\`get_message_context\` ${marker}`,
   );
+  strictEqual(
+    formatProgressSegments([{ text: "Thinking...", tools: [] }]),
+    `Thinking...\n\n${marker}`,
+  );
+});
+
+Deno.test("oversized Unicode progress reserves room for tools and appends the marker to every chunk", async () => {
+  const { formatProgressSegments, splitProgressSegments } = await import(
+    "./chat.ts"
+  );
+  const text = "текст🙂".repeat(10_000);
+  const segments = splitProgressSegments([
+    { text, tools: ["web_search", "read_web_page"] },
+  ]);
+  ok(segments.length > 1);
+  strictEqual(segments.map((segment) => segment.text).join(""), text);
+  for (const segment of segments) {
+    const message = formatProgressSegments([segment]);
+    ok(new TextEncoder().encode(message).length <= 30_000);
+    ok(message.endsWith("![⏳](tg://emoji?id=5427181942934088912)"));
+    ok(message.includes("\n\n"));
+  }
+  deepStrictEqual(segments[0].tools, ["web_search", "read_web_page"]);
+  ok(segments.slice(1).every((segment) => segment.tools.length === 0));
 });
 
 Deno.test("chat progress sends one message per tick in the originating topic and respects the chat toggle", async () => {
@@ -1235,6 +1261,9 @@ Deno.test("chat progress sends one message per tick in the originating topic and
         strictEqual(sent.length, 1);
         ok(sent[0].markdown.startsWith("Checking sources."));
         ok(sent[0].markdown.includes("`set_reply_message_id`"));
+        ok(
+          sent[0].markdown.endsWith("![⏳](tg://emoji?id=5427181942934088912)"),
+        );
       } else {
         strictEqual(tick, undefined);
         strictEqual(sent.length, 0);
@@ -1261,6 +1290,7 @@ Deno.test("chat progress sends one message per tick in the originating topic and
       strictEqual(sent.length, enabled ? 2 : 1);
       ok(sent.at(-1)?.markdown.startsWith("Final answer."));
       ok(sent.at(-1)?.markdown.includes("`set_reply_message_id`"));
+      ok(!sent.at(-1)?.markdown.includes("5427181942934088912"));
       ok(sent.every((message) => message.topic === 77));
     }
   } finally {

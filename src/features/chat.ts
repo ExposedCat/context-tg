@@ -1295,15 +1295,35 @@ function formatToolUsageMarkdown(
   return emojis.join(" ");
 }
 
+const PROGRESS_USAGE_EMOJI = "![⏳](tg://emoji?id=5427181942934088912)";
+
 export function formatProgressSegments(segments: LlmProgressSegment[]): string {
-  return segments
-    .map((segment) =>
-      [segment.text?.trim(), formatToolUsageMarkdown(segment.tools, false)]
-        .filter(Boolean)
-        .join("\n"),
-    )
+  const text = segments
+    .map((segment) => segment.text?.trim())
     .filter(Boolean)
     .join("\n\n");
+  const tools = formatToolUsageMarkdown(
+    segments.flatMap((segment) => segment.tools),
+    false,
+  );
+  const footer = [tools, PROGRESS_USAGE_EMOJI].filter(Boolean).join(" ");
+  return [text, footer].filter(Boolean).join("\n\n");
+}
+
+/** Reserve space for the full icon footer before splitting oversized progress text. */
+export function splitProgressSegments(
+  segments: LlmProgressSegment[],
+): LlmProgressSegment[] {
+  return segments.flatMap((segment) => {
+    const footerBytes = getUtf8ByteLength(
+      formatProgressSegments([{ tools: segment.tools }]),
+    );
+    const content = normalizeRichMarkdown(segment.text ?? "");
+    return splitRichMarkdownMessage(
+      content,
+      TELEGRAM_RICH_MESSAGE_CHUNK_SIZE_BYTES - footerBytes - 2,
+    ).map((text, index) => ({ text, tools: index === 0 ? segment.tools : [] }));
+  });
 }
 
 function formatMarkdownBlockquote(text: string): string {
@@ -2252,21 +2272,7 @@ async function handleChatRequest(
             onProgress: async (progress) => {
               progressResponseId = progress.responseId ?? progressResponseId;
               if (progress.segments)
-                progressUpdates?.add(
-                  progress.segments.flatMap((segment) =>
-                    splitRichMarkdownMessage(
-                      segment.text ?? "",
-                      TELEGRAM_RICH_MESSAGE_CHUNK_SIZE_BYTES -
-                        getUtf8ByteLength(
-                          formatToolUsageMarkdown(segment.tools, false),
-                        ) -
-                        256,
-                    ).map((text, index) => ({
-                      text,
-                      tools: index === 0 ? segment.tools : [],
-                    })),
-                  ),
-                );
+                progressUpdates?.add(splitProgressSegments(progress.segments));
             },
             onWarning: (details: string) =>
               sendLlmWarning(ctx, message, details),
@@ -2333,7 +2339,10 @@ async function handleChatRequest(
 
     if (pendingProgress.some((segment) => segment.text?.trim())) {
       formattedResponse.richMarkdown = [
-        formatProgressSegments(pendingProgress),
+        pendingProgress
+          .map((segment) => segment.text?.trim())
+          .filter(Boolean)
+          .join("\n\n"),
         formattedResponse.richMarkdown,
       ].join("\n\n");
     }

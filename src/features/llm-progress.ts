@@ -1,6 +1,7 @@
 import type { LlmProgressSegment } from "./llm.ts";
 
 export const PROGRESS_INTERVAL_MS = 10_000;
+export const PROGRESS_PLACEHOLDER_INTERVAL_MS = 20_000;
 export const PROGRESS_PLACEHOLDERS = [
   "Thinking...",
   "Working...",
@@ -16,6 +17,7 @@ export function createProgressUpdates(options: {
   schedule?: (callback: () => void, delay: number) => () => void;
   random?: () => number;
   batchSize?: (segments: LlmProgressSegment[]) => number;
+  now?: () => number;
 }) {
   const schedule =
     options.schedule ??
@@ -24,6 +26,9 @@ export function createProgressUpdates(options: {
       return () => clearTimeout(timeout);
     });
   const random = options.random ?? Math.random;
+  const now = options.now ?? (() => performance.now());
+  let lastRealProgressAt = now();
+  let lastPlaceholderAt = lastRealProgressAt;
   let pending: LlmProgressSegment[] = [];
   let stopped = false;
   let timer: (() => void) | undefined;
@@ -39,6 +44,15 @@ export function createProgressUpdates(options: {
 
   async function flush() {
     if (stopped) return;
+    const hasText = pending.some((segment) => segment.text?.trim());
+    if (
+      !hasText &&
+      now() - Math.max(lastRealProgressAt, lastPlaceholderAt) <
+        PROGRESS_PLACEHOLDER_INTERVAL_MS
+    ) {
+      arm();
+      return;
+    }
     const count = options.batchSize?.(pending) ?? pending.length;
     const batch = pending.slice(0, count);
     pending = pending.slice(count);
@@ -46,7 +60,8 @@ export function createProgressUpdates(options: {
       PROGRESS_PLACEHOLDERS[
         Math.floor(random() * PROGRESS_PLACEHOLDERS.length)
       ];
-    const segments = batch.some((segment) => segment.text?.trim())
+    const hasRealText = batch.some((segment) => segment.text?.trim());
+    const segments = hasRealText
       ? batch
       : [
           {
@@ -56,6 +71,8 @@ export function createProgressUpdates(options: {
         ];
     try {
       await options.send(segments);
+      if (hasRealText) lastRealProgressAt = now();
+      else lastPlaceholderAt = now();
     } catch (error) {
       pending = [...batch, ...pending];
       options.onError(error);
@@ -76,13 +93,15 @@ export function createProgressUpdates(options: {
 
   return {
     add(segments: LlmProgressSegment[]) {
-      if (!stopped)
-        pending.push(
-          ...segments.map((segment) => ({
-            ...segment,
-            tools: [...segment.tools],
-          })),
-        );
+      if (stopped) return;
+      if (segments.some((segment) => segment.text?.trim()))
+        lastRealProgressAt = now();
+      pending.push(
+        ...segments.map((segment) => ({
+          ...segment,
+          tools: [...segment.tools],
+        })),
+      );
     },
     async stop(): Promise<LlmProgressSegment[]> {
       halt();
