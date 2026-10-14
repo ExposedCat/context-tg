@@ -2,17 +2,19 @@ import { deepStrictEqual, strictEqual } from "node:assert";
 import type { LlmProgressSegment } from "./llm.ts";
 import {
   createProgressUpdates,
+  formatProgressToolSummary,
   PROGRESS_INTERVAL_MS,
   PROGRESS_PLACEHOLDER_INTERVAL_MS,
 } from "./llm-progress.ts";
 
 function clock() {
   let callback: (() => void) | undefined;
+  let scheduledDelay = 0;
   let now = 0;
   return {
     now: () => now,
     schedule(fn: () => void, delay: number) {
-      strictEqual(delay, 10_000);
+      scheduledDelay = delay;
       callback = fn;
       return () => {
         callback = undefined;
@@ -22,7 +24,7 @@ function clock() {
       callback = undefined;
     },
     async tick() {
-      now += 10_000;
+      now += scheduledDelay;
       const fn = callback;
       callback = undefined;
       fn?.();
@@ -63,15 +65,22 @@ Deno.test("progress batches preserve each segment's tools and drain after each i
   ]);
   updates.add([{ tools: ["read_web_page", "read_web_page"] }]);
   await timer.tick();
-  strictEqual(messages.length, 1);
-  await timer.tick();
+  strictEqual(timer.now(), 60_000);
   deepStrictEqual(messages[1], [
-    { text: "Thinking...", tools: ["read_web_page"] },
+    {
+      text: "Searched web, read 3 webpages",
+      tools: ["web_search", "read_web_page"],
+    },
   ]);
   await timer.tick();
   strictEqual(messages.length, 2);
   await timer.tick();
-  deepStrictEqual(messages[2], [{ text: "Thinking...", tools: [] }]);
+  deepStrictEqual(messages[2], [
+    {
+      text: "Searched web, read 3 webpages",
+      tools: ["web_search", "read_web_page"],
+    },
+  ]);
   updates.add([{ text: "Last unsent progress", tools: ["search_chat"] }]);
   deepStrictEqual(await updates.stop(), [
     { text: "Last unsent progress", tools: ["search_chat"] },
@@ -79,8 +88,106 @@ Deno.test("progress batches preserve each segment's tools and drain after each i
   strictEqual(timer.armed(), false);
   await timer.tick();
   strictEqual(messages.length, 3);
-  strictEqual(PROGRESS_INTERVAL_MS, 10_000);
-  strictEqual(PROGRESS_PLACEHOLDER_INTERVAL_MS, 20_000);
+  strictEqual(PROGRESS_INTERVAL_MS, 30_000);
+  strictEqual(PROGRESS_PLACEHOLDER_INTERVAL_MS, 40_000);
+});
+
+Deno.test("idle progress uses random placeholders only until tools are called", async () => {
+  const timer = clock();
+  const messages: LlmProgressSegment[][] = [];
+  let randomCalls = 0;
+  const updates = createProgressUpdates({
+    ...timer,
+    send: async (segments) => {
+      messages.push(segments);
+    },
+    onError: (error) => {
+      throw error;
+    },
+    random: () => {
+      randomCalls++;
+      return 0.25;
+    },
+  });
+  await timer.tick();
+  strictEqual(timer.now(), 30_000);
+  strictEqual(messages.length, 0);
+  await timer.tick();
+  strictEqual(timer.now(), 40_000);
+  deepStrictEqual(messages[0], [{ text: "Working...", tools: [] }]);
+  updates.add([
+    {
+      tools: [
+        "web_search",
+        "read_web_page",
+        "read_web_page",
+        "read_web_page",
+        "read_last_messages",
+      ],
+    },
+  ]);
+  await timer.tick();
+  strictEqual(timer.now(), 70_000);
+  deepStrictEqual(messages[1], [
+    {
+      text: "Searched web, read 3 webpages, read recent messages",
+      tools: ["web_search", "read_web_page", "read_last_messages"],
+    },
+  ]);
+  await timer.tick();
+  strictEqual(messages.length, 2);
+  await timer.tick();
+  strictEqual(timer.now(), 110_000);
+  deepStrictEqual(messages[2], messages[1]);
+  strictEqual(randomCalls, 1);
+  await updates.stop();
+});
+
+Deno.test("tool summaries cover built-in and dynamic finance tools", () => {
+  strictEqual(formatProgressToolSummary([]), "");
+  strictEqual(
+    formatProgressToolSummary(["web_search", "read_web_page"]),
+    "Searched web, read webpage",
+  );
+  strictEqual(
+    formatProgressToolSummary([
+      "web_search",
+      "web_search",
+      "get_message_context",
+      "finance_portfolio",
+      "finance_positions",
+    ]),
+    "Searched web 2 times, read message context, read 2 finance reports",
+  );
+});
+
+Deno.test("retrying an idle tool summary does not count calls twice", async () => {
+  const timer = clock();
+  const attempts: LlmProgressSegment[][] = [];
+  let errors = 0;
+  const updates = createProgressUpdates({
+    ...timer,
+    send: async (segments) => {
+      attempts.push(segments);
+      if (attempts.length === 1) throw new Error("Telegram unavailable");
+    },
+    onError: () => {
+      errors++;
+    },
+    random: () => {
+      throw new Error("Tools should replace the placeholder");
+    },
+  });
+  updates.add([{ tools: ["read_web_page", "read_web_page", "read_web_page"] }]);
+  await timer.tick();
+  await timer.tick();
+  await timer.tick();
+  deepStrictEqual(attempts, [
+    [{ text: "Read 3 webpages", tools: ["read_web_page"] }],
+    [{ text: "Read 3 webpages", tools: ["read_web_page"] }],
+  ]);
+  strictEqual(errors, 1);
+  deepStrictEqual(await updates.stop(), []);
 });
 
 Deno.test("progress stops on cancellation and waits for an in-flight send", async () => {

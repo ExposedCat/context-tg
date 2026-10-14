@@ -2688,6 +2688,7 @@ Deno.test("Azure progress segments keep their own tools; timing spans the comple
           ? [
               message("intro", "Found relevant articles."),
               tool("reply1"),
+              tool("reply1b"),
               message("checking", "I'll check sources."),
               tool("reply2"),
               message("writing", "Got it. Writing final response."),
@@ -2716,14 +2717,17 @@ Deno.test("Azure progress segments keep their own tools; timing spans the comple
       },
     );
     deepStrictEqual(progress, [
-      { text: "Found relevant articles.", tools: ["set_reply_message_id"] },
+      {
+        text: "Found relevant articles.",
+        tools: ["set_reply_message_id", "set_reply_message_id"],
+      },
       { text: "I'll check sources.", tools: ["set_reply_message_id"] },
       { text: "Got it. Writing final response.", tools: [] },
       { tools: ["set_reply_message_id"] },
     ]);
     strictEqual(result.response, "Here is the answer.");
     deepStrictEqual(result.tools, ["set_reply_message_id"]);
-    strictEqual(result.tool_call_count, 3);
+    strictEqual(result.tool_call_count, 4);
     strictEqual(events.length, 1);
     strictEqual(events[0].duration_ms, 12000);
     deepStrictEqual(events[0].progress_intervals_ms, [2500, 4500]);

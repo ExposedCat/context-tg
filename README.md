@@ -41,18 +41,21 @@ loopback; Context accesses MCP directly over the container network.
 
 **Progress updates** is a per-chat `/settings` toggle, enabled by default and
 controlled by chat admins (or the user in a private chat). During conversation
-requests, the bot sends at most one progress message every 10 seconds. Azure's
+requests, the bot sends at most one progress message every 30 seconds. Azure's
 intermediate assistant messages are combined in order, with their tools on a
 separate final line. Every progress message ends that icon list with custom emoji
 `5427181942934088912`, including split messages and updates without tools.
-Each update includes only tools from those new parts;
+Updates with assistant text include only tools from those new parts;
 a repeated tool appears again if called again. The final answer retains all tools
 used across the request. Tool names without a configured icon are shown as text.
 
-After 20 seconds without real assistant text, the bot randomly sends `Thinking...`,
-`Working...`, `Analyzing...`, or `Processing...`, with any newly called tools.
-Further placeholders are at least 20 seconds apart; incoming or delivered real
-text restarts the idle wait. Tools alone do not reset that wait.
+New tool calls can produce a summary at the next 30-second progress interval,
+for example `Searched web, read 3 webpages`, with their icons below. Repeated
+calls are counted. After 40 seconds without real assistant text or a delivered
+idle update, the bot repeats the tool summary, or randomly sends `Thinking...`,
+`Working...`, `Analyzing...`, or `Processing...` if no tools have been called.
+Further idle updates are at least 40 seconds apart; incoming or delivered real
+text restarts the idle wait.
 Queued text at completion is included with the final answer. Oversized batches
 are carried into later intervals to keep each progress update a single Telegram
 message. Cancellation and completion stop the timer; failed progress deliveries

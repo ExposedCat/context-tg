@@ -1142,7 +1142,7 @@ Deno.test("chat progress sends one message per tick in the originating topic and
     delay?: number,
     ...args: unknown[]
   ) => {
-    if (delay === 10_000) {
+    if (delay === 30_000) {
       tick = callback;
       return originalSetTimeout(() => {}, 0);
     }

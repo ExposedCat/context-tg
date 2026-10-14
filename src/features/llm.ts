@@ -485,7 +485,7 @@ function getResponseProgressSegments(
     ) {
       if (segments.length === 0) segments.push({ tools: [] });
       const segment = segments[segments.length - 1];
-      if (!segment.tools.includes(item.name)) segment.tools.push(item.name);
+      segment.tools.push(item.name);
     }
   }
   return segments;
