@@ -7,11 +7,8 @@ import {
 } from "@kysely/kysely";
 import type { Context } from "../bot.ts";
 import { padDatePart } from "../utils/date.ts";
-import {
-  escapeHtml,
-  escapeSingleDollarSigns,
-  normalizeWhitespace,
-} from "../utils/text.ts";
+import { normalizeRichMarkdown } from "../utils/markdown.ts";
+import { escapeHtml, normalizeWhitespace } from "../utils/text.ts";
 import type { Database } from "./database.ts";
 import { resolveRichMessageImageMedia } from "./images.ts";
 import { disabledLinkPreviewOptions as linkPreviewOptions } from "./telegram.ts";
@@ -587,7 +584,7 @@ export async function sendScheduledRichMessage(
     "chat_id" | "message" | "thread_id"
   >,
 ): Promise<void> {
-  const markdown = escapeSingleDollarSigns(row.message);
+  const markdown = normalizeRichMarkdown(row.message);
   const media = await resolveRichMessageImageMedia(database, markdown);
 
   await api.sendRichMessage(

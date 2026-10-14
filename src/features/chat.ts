@@ -1,10 +1,10 @@
 import { createDebug } from "@grammyjs/debug";
 import { Composer, InputFile } from "grammy";
 import type { Context } from "../bot.ts";
+import { normalizeRichMarkdown } from "../utils/markdown.ts";
 import {
   escapeHtml,
   escapeHtmlAttribute,
-  escapeSingleDollarSigns,
   normalizeHtmlFilename,
   normalizeWhitespace,
   truncateCodePoints,
@@ -1659,7 +1659,7 @@ async function sendRichMarkdownResponse(
   }
 
   const sentMessages: SentRichMarkdownMessage[] = [];
-  const content = escapeSingleDollarSigns(
+  const content = normalizeRichMarkdown(
     richMarkdown.trim() ? richMarkdown : "Done.",
   );
 
@@ -1697,7 +1697,7 @@ function formatGuestResultDescription(richMarkdown: string): string {
 }
 
 function getGuestArticleRichMarkdown(richMarkdown: string): string {
-  const content = escapeSingleDollarSigns(
+  const content = normalizeRichMarkdown(
     richMarkdown.trim() ? richMarkdown : "Done.",
   );
 

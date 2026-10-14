@@ -1004,6 +1004,21 @@ Deno.test("unavailable rich-message photos are retried without user diagnostics"
   ok(!prompt.includes("RICH_MESSAGE_PHOTO_NO_MEDIA_FOUND"));
 });
 
+Deno.test("guest rich messages repair flattened tables before delivery", async () => {
+  const database = await initDatabase()();
+  try {
+    deepStrictEqual(
+      await buildGuestRichMessage(
+        database,
+        "Intro | A | B | | --- | --- | | 1 | 2 |",
+      ),
+      { markdown: "Intro\n\n| A | B |\n| --- | --- |\n| 1 | 2 |" },
+    );
+  } finally {
+    await database.destroy();
+  }
+});
+
 Deno.test("guest rich messages include saved image media mappings", async () => {
   const database = await initDatabase()();
 
