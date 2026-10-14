@@ -21,9 +21,8 @@ for (const [key, value] of Object.entries({
 
 const { configureComposer } = await import("./configure.ts");
 const { initDatabase } = await import("./database.ts");
-const { getChatReasoningEffort, getChatDebugMode } = await import(
-  "./llm-models.ts"
-);
+const { getChatReasoningEffort, getChatDebugMode, getChatProgressEnabled } =
+  await import("./llm-models.ts");
 const { getTrollingSettings, setTrollingInterval } = await import(
   "./trolling.ts"
 );
@@ -123,6 +122,16 @@ Deno.test("rich configure navigation, persistence and authorization", async () =
       html(),
       /Finance MCP <tg-button[^>]+style="danger" data="cfg:finance:1:on"/,
     );
+    match(
+      html(),
+      /Progress updates <tg-button[^>]+style="success" data="cfg:progress:off"/,
+    );
+    strictEqual(await getChatProgressEnabled(database, chat.id), true);
+    await click("cfg:progress:off", 2);
+    strictEqual(await getChatProgressEnabled(database, chat.id), false);
+    strictEqual(await getChatProgressEnabled(database, -200), true);
+    await click("cfg:progress:on", 2);
+    strictEqual(await getChatProgressEnabled(database, chat.id), true);
     strictEqual(await getFinanceMcpEnabled(database, 3), false);
     calls.length = 0;
     await bot.handleUpdate({
@@ -143,6 +152,7 @@ Deno.test("rich configure navigation, persistence and authorization", async () =
       "debug",
       "trolling",
       "proactive",
+      "progress",
       "effort",
     ]) {
       ok(!html().includes(`data="cfg:${action}`));
@@ -155,6 +165,8 @@ Deno.test("rich configure navigation, persistence and authorization", async () =
       );
       await click("cfg:menu", 3);
     }
+    await click("cfg:progress:off", 3);
+    strictEqual(await getChatProgressEnabled(database, chat.id), true);
     await click("cfg:finance:1:on", 3);
     strictEqual(await getFinanceMcpEnabled(database, 1), false);
     ok(
@@ -185,7 +197,27 @@ Deno.test("rich configure navigation, persistence and authorization", async () =
       },
     });
     match(html(), /data="cfg:finance:3:off"/);
+    match(html(), /data="cfg:progress:off"/);
     ok(!calls.some((call) => call.method === "getChatMember"));
+    calls.length = 0;
+    await bot.handleUpdate({
+      update_id: ++updateId,
+      callback_query: {
+        id: String(updateId),
+        from: from(3),
+        chat_instance: "private",
+        data: "cfg:progress:off",
+        message: {
+          message_id: 42,
+          date: 1,
+          chat: { id: 3, type: "private", first_name: "user" },
+          text: "settings",
+        },
+      },
+    });
+    strictEqual(await getChatProgressEnabled(database, 3), false);
+    strictEqual(await getChatProgressEnabled(database, chat.id), true);
+    match(html(), /data="cfg:progress:on"/);
     await click("cfg:finance:3:off", 3);
     strictEqual(await getFinanceMcpEnabled(database, 3), false);
     await click("cfg:finance:3:invalid", 3);

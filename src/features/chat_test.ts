@@ -1076,3 +1076,197 @@ Deno.test("exhausted balances skip proactive and troll work before context looku
     await database.destroy();
   }
 });
+
+Deno.test("combined progress renders each tool footer directly below its own text", async () => {
+  const { formatProgressSegments } = await import("./chat.ts");
+  const markdown = formatProgressSegments([
+    { text: "Found relevant articles.", tools: ["web_search"] },
+    { text: "I'll check sources.", tools: ["read_web_page"] },
+    { text: "Got it. Writing final response.", tools: [] },
+  ]);
+  deepStrictEqual(
+    markdown,
+    [
+      "Found relevant articles.\n![🌐](tg://emoji?id=5879585266426973039)",
+      "I'll check sources.\n![📝](tg://emoji?id=5960551395730919906)",
+      "Got it. Writing final response.",
+    ].join("\n\n"),
+  );
+  strictEqual(
+    formatProgressSegments([
+      { text: "Reading context", tools: ["get_message_context"] },
+    ]),
+    "Reading context\n`get_message_context`",
+  );
+});
+
+Deno.test("chat progress sends one message per tick in the originating topic and respects the chat toggle", async () => {
+  const { persistChatProgressEnabled } = await import("./llm-models.ts");
+  const { setLlmDeploymentName } = await import("./llm-deployments.ts");
+  const database = await initDatabase()();
+  const originalFetch = globalThis.fetch;
+  const originalSetTimeout = globalThis.setTimeout;
+  let tick: (() => void) | undefined;
+  function fireTick() {
+    if (!tick) throw new Error("Progress timer was not armed");
+    tick();
+  }
+  globalThis.setTimeout = ((
+    callback: (...args: unknown[]) => void,
+    delay?: number,
+    ...args: unknown[]
+  ) => {
+    if (delay === 10_000) {
+      tick = callback;
+      return originalSetTimeout(() => {}, 0);
+    }
+    return originalSetTimeout(() => callback(...args), delay);
+  }) as typeof setTimeout;
+  const chat = { id: -901, type: "supergroup", title: "Test" } as const;
+  const bot = {
+    id: 42,
+    is_bot: true,
+    first_name: "Test",
+    username: "test_bot",
+  } as Context["me"];
+  let nextMessageId = 100;
+  try {
+    setLlmDeploymentName("small", "progress-chat-test");
+    for (const enabled of [true, false]) {
+      await persistChatProgressEnabled(database, chat.id, enabled);
+      tick = undefined;
+      const sent: Array<{ markdown: string; topic?: number }> = [];
+      const api = new Api("test");
+      api.config.use((_previous, method) =>
+        Promise.reject(new Error(`Unexpected Telegram API call: ${method}`)),
+      );
+      let delivered!: () => void;
+      api.sendRichMessage = (_chatId, content, options) => {
+        strictEqual(_chatId, chat.id);
+        sent.push({
+          markdown: content.markdown ?? "",
+          topic: options?.message_thread_id,
+        });
+        delivered?.();
+        return Promise.resolve({
+          message_id: ++nextMessageId,
+          date: 0,
+          chat,
+          from: bot,
+          rich_message: { blocks: [] },
+        });
+      };
+      api.sendChatAction = () => Promise.resolve(true);
+      let waiting!: () => void;
+      const secondRequest = new Promise<void>((resolve) => {
+        waiting = resolve;
+      });
+      let finish!: (response: Response) => void;
+      let calls = 0;
+      globalThis.fetch = (() => {
+        calls++;
+        if (calls === 2) {
+          waiting();
+          return new Promise<Response>((resolve) => {
+            finish = resolve;
+          });
+        }
+        return Promise.resolve(
+          Response.json({
+            id: `chat_progress_${enabled}`,
+            object: "response",
+            status: "completed",
+            output: [
+              {
+                id: "intro",
+                type: "message",
+                role: "assistant",
+                status: "completed",
+                content: [
+                  {
+                    type: "output_text",
+                    text: "Checking sources.",
+                    annotations: [],
+                  },
+                ],
+              },
+              {
+                id: "reply",
+                type: "function_call",
+                call_id: "reply",
+                name: "set_reply_message_id",
+                arguments: '{"message_id":42}',
+                status: "completed",
+              },
+            ],
+          }),
+        );
+      }) as typeof fetch;
+      const ctx = new GrammyContext(
+        {
+          update_id: enabled ? 1 : 2,
+          message: {
+            message_id: enabled ? 1 : 2,
+            date: 0,
+            chat,
+            text: "laylo help",
+            message_thread_id: 77,
+            is_topic_message: true,
+            from: { id: 1, is_bot: false, first_name: "User" },
+          },
+        },
+        api,
+        bot,
+      ) as Context;
+      ctx.database = database;
+      ctx.telemetry = { event: () => {} } as Context["telemetry"];
+      const handling = chatComposer.middleware()(ctx, () => Promise.resolve());
+      await secondRequest;
+      if (enabled) {
+        ok(tick);
+        const update = new Promise<void>((resolve) => {
+          delivered = resolve;
+        });
+        fireTick();
+        await update;
+        await Promise.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+        strictEqual(sent.length, 1);
+        ok(sent[0].markdown.startsWith("Checking sources."));
+        ok(sent[0].markdown.includes("`set_reply_message_id`"));
+      } else {
+        strictEqual(tick, undefined);
+        strictEqual(sent.length, 0);
+      }
+      finish(
+        Response.json({
+          id: `chat_final_${enabled}`,
+          object: "response",
+          status: "completed",
+          output: [
+            {
+              id: "final",
+              type: "message",
+              role: "assistant",
+              status: "completed",
+              content: [
+                { type: "output_text", text: "Final answer.", annotations: [] },
+              ],
+            },
+          ],
+        }),
+      );
+      await handling;
+      strictEqual(sent.length, enabled ? 2 : 1);
+      ok(sent.at(-1)?.markdown.startsWith("Final answer."));
+      ok(sent.at(-1)?.markdown.includes("`set_reply_message_id`"));
+      ok(sent.every((message) => message.topic === 77));
+    }
+  } finally {
+    globalThis.fetch = originalFetch;
+    globalThis.setTimeout = originalSetTimeout;
+    setLlmDeploymentName("small", "");
+    await database.destroy();
+  }
+});

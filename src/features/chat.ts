@@ -32,6 +32,7 @@ import {
   type LlmCitation,
   type LlmDebugInfo,
   type LlmImageInput,
+  type LlmProgressSegment,
   type LlmReport,
   LlmRequestError,
   type LlmRequestInput,
@@ -44,7 +45,8 @@ import {
   requestThreadName,
   type ToolName,
 } from "./llm.ts";
-import { getChatDebugMode } from "./llm-models.ts";
+import { getChatDebugMode, getChatProgressEnabled } from "./llm-models.ts";
+import { createProgressUpdates } from "./llm-progress.ts";
 import {
   formatPromptMessageXml,
   formatSystemPromptMessageXml,
@@ -1066,7 +1068,10 @@ function getUtf8ByteLength(text: string): number {
   return new TextEncoder().encode(text).length;
 }
 
-function splitRichMarkdownMessage(text: string): string[] {
+function splitRichMarkdownMessage(
+  text: string,
+  maxBytes = TELEGRAM_RICH_MESSAGE_CHUNK_SIZE_BYTES,
+): string[] {
   const chunks: string[] = [];
   let chunk = "";
   let chunkBytes = 0;
@@ -1074,10 +1079,7 @@ function splitRichMarkdownMessage(text: string): string[] {
   for (const character of text) {
     const characterBytes = getUtf8ByteLength(character);
 
-    if (
-      chunk &&
-      chunkBytes + characterBytes > TELEGRAM_RICH_MESSAGE_CHUNK_SIZE_BYTES
-    ) {
+    if (chunk && chunkBytes + characterBytes > maxBytes) {
       chunks.push(chunk);
       chunk = "";
       chunkBytes = 0;
@@ -1280,15 +1282,28 @@ function formatToolUsageMarkdown(
   for (const tool of tools) {
     const emoji = TOOL_USAGE_EMOJIS[tool];
 
-    if (!emoji || usedEmojiIds.has(emoji.id)) {
+    if (!emoji) {
+      if (!emojis.includes(`\`${tool}\``)) emojis.push(`\`${tool}\``);
       continue;
     }
+    if (usedEmojiIds.has(emoji.id)) continue;
 
     usedEmojiIds.add(emoji.id);
     emojis.push(`![${emoji.fallback}](tg://emoji?id=${emoji.id})`);
   }
 
   return emojis.join(" ");
+}
+
+export function formatProgressSegments(segments: LlmProgressSegment[]): string {
+  return segments
+    .map((segment) =>
+      [segment.text?.trim(), formatToolUsageMarkdown(segment.tools, false)]
+        .filter(Boolean)
+        .join("\n"),
+    )
+    .filter(Boolean)
+    .join("\n\n");
 }
 
 function formatMarkdownBlockquote(text: string): string {
@@ -2135,6 +2150,8 @@ async function handleChatRequest(
   let activeAgent: AgentDefinition = normalAgent;
   let activeAgentName = normalAgent.name[0];
   let threadNaming: Promise<void> | undefined;
+  let progressUpdates: ReturnType<typeof createProgressUpdates> | undefined;
+  let pendingProgress: LlmProgressSegment[] = [];
   const taskAbortController = createTaskAbortController(taskKey);
 
   try {
@@ -2177,6 +2194,47 @@ async function handleChatRequest(
     const agentTools = requestedTools;
     const toolContext = getLlmToolContext(chatId, message);
     const slowResponseReaction = createSlowResponseReactionTracker(ctx);
+    if (await getChatProgressEnabled(ctx.database, chatId)) {
+      progressUpdates = createProgressUpdates({
+        signal: taskAbortController.signal,
+        batchSize: (segments) => {
+          let count = 0;
+          while (
+            count < segments.length &&
+            getUtf8ByteLength(
+              normalizeRichMarkdown(
+                formatProgressSegments(segments.slice(0, count + 1)),
+              ),
+            ) <= TELEGRAM_RICH_MESSAGE_CHUNK_SIZE_BYTES
+          )
+            count++;
+          return count;
+        },
+        send: async (segments) => {
+          const sentMessage = await ctx.api.sendRichMessage(
+            chatId,
+            {
+              markdown: normalizeRichMarkdown(formatProgressSegments(segments)),
+            },
+            getReplyDeliveryOptions(message, undefined),
+            taskAbortController.signal as unknown as Parameters<
+              Context["api"]["sendRichMessage"]
+            >[3],
+          );
+          await saveContinuationMessageThread(
+            ctx,
+            chatId,
+            sentMessage.message_id,
+            threadId,
+            agent,
+            agentName,
+            progressResponseId,
+          );
+        },
+        onError: (error) =>
+          logError("Failed to send progress update", { error }),
+      });
+    }
     const llmResponse = await (async () => {
       try {
         return await withTypingAction(ctx, async () => {
@@ -2193,6 +2251,22 @@ async function handleChatRequest(
             ),
             onProgress: async (progress) => {
               progressResponseId = progress.responseId ?? progressResponseId;
+              if (progress.segments)
+                progressUpdates?.add(
+                  progress.segments.flatMap((segment) =>
+                    splitRichMarkdownMessage(
+                      segment.text ?? "",
+                      TELEGRAM_RICH_MESSAGE_CHUNK_SIZE_BYTES -
+                        getUtf8ByteLength(
+                          formatToolUsageMarkdown(segment.tools, false),
+                        ) -
+                        256,
+                    ).map((text, index) => ({
+                      text,
+                      tools: index === 0 ? segment.tools : [],
+                    })),
+                  ),
+                );
             },
             onWarning: (details: string) =>
               sendLlmWarning(ctx, message, details),
@@ -2248,6 +2322,7 @@ async function handleChatRequest(
         });
       } finally {
         slowResponseReaction.stop();
+        pendingProgress = (await progressUpdates?.stop()) ?? [];
       }
     })();
 
@@ -2255,6 +2330,13 @@ async function handleChatRequest(
     const formattedResponse = formatLlmResponse(llmResponse, {
       debug: await getChatDebugMode(ctx.database, chatId),
     });
+
+    if (pendingProgress.some((segment) => segment.text?.trim())) {
+      formattedResponse.richMarkdown = [
+        formatProgressSegments(pendingProgress),
+        formattedResponse.richMarkdown,
+      ].join("\n\n");
+    }
 
     if (llmResponse.report) {
       sentMessages.push(
@@ -2408,6 +2490,7 @@ async function handleChatRequest(
     );
     await options.onUnhandledError?.();
   } finally {
+    await progressUpdates?.stop();
     deleteTaskAbortController(taskKey);
     if (taskCreated) {
       try {

@@ -15,6 +15,7 @@ export type ReasoningEffort =
   | "xhigh";
 export type ReasoningSetting = ReasoningEffort | null;
 export type ChatLlmSettingKey = "reasoning" | "debug";
+type StoredChatLlmSettingKey = ChatLlmSettingKey | "progress";
 export type LlmSettingsDeployment = LlmDeploymentId | "all";
 export type LlmSettingsTable = {
   key: string;
@@ -279,7 +280,7 @@ async function getDirectChatLlmSetting(
   database: LlmSettingsDatabase,
   chatId: number,
   deployment: LlmSettingsDeployment,
-  key: ChatLlmSettingKey,
+  key: StoredChatLlmSettingKey,
 ): Promise<string | null | undefined> {
   const row = await database
     .selectFrom("chat_llm_settings")
@@ -314,7 +315,7 @@ async function persistChatLlmSetting(
   database: LlmSettingsDatabase,
   chatId: number,
   deployment: LlmSettingsDeployment,
-  key: ChatLlmSettingKey,
+  key: StoredChatLlmSettingKey,
   value: string | null,
 ) {
   const persist = (target: LlmSettingsDatabase) =>
@@ -380,6 +381,30 @@ export async function getChatReasoningEffort(
   return setting === undefined
     ? await getGlobalReasoningEffort(database, deployment)
     : setting;
+}
+
+export async function getChatProgressEnabled(
+  database: LlmSettingsDatabase,
+  chatId: number,
+): Promise<boolean> {
+  return (
+    (await getDirectChatLlmSetting(database, chatId, "all", "progress")) !==
+    "off"
+  );
+}
+
+export async function persistChatProgressEnabled(
+  database: LlmSettingsDatabase,
+  chatId: number,
+  enabled: boolean,
+): Promise<void> {
+  await persistChatLlmSetting(
+    database,
+    chatId,
+    "all",
+    "progress",
+    enabled ? "on" : "off",
+  );
 }
 
 export async function getChatDebugMode(

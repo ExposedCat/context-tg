@@ -37,6 +37,50 @@ Compose network change requires recreating both app containers; merely restartin
 Deno process does not attach the network. Eyri's host port stays bound to
 loopback; Context accesses MCP directly over the container network.
 
+## Progress updates and timing
+
+**Progress updates** is a per-chat `/settings` toggle, enabled by default and
+controlled by chat admins (or the user in a private chat). During conversation
+requests, the bot sends at most one progress message every 10 seconds. Azure's
+intermediate assistant messages are combined in order, with each part's own tool
+footer directly below it. Each update includes only tools from those new parts;
+a repeated tool appears again if called again. The final answer retains all tools
+used across the request. Tool names without a configured icon are shown as text.
+
+If no new assistant text is available, the bot randomly sends `Thinking...`,
+`Working...`, `Analyzing...`, or `Processing...`, with any newly called tools.
+Queued text at completion is included with the final answer. Oversized batches
+are carried into later intervals to keep each progress update a single Telegram
+message. Cancellation and completion stop the timer; failed progress deliveries
+retain their queued text. Automatic trolling quality checks and guest-query
+answers do not publish intermediate chat messages.
+
+Each `llm_call` telemetry event includes `duration_ms` for the entire model/tool
+loop, including retries, tools, and final generation. Timing is also recorded on
+failed calls and trolling validation calls. `progress_intervals_ms` records gaps
+between Azure responses that continue into tool calls (or contain explicit
+`commentary` messages); the first gap starts at request start. These timings are
+collected even with progress delivery disabled.
+Telegram batching, placeholders and bookkeeping callbacks do not add samples.
+`progress_count`, `progress_total_ms`, `progress_median_ms`, `progress_min_ms`,
+and `progress_max_ms` summarize those intervals for each full call. Calls without
+intermediate responses have zero samples; their final wait is still included in
+`duration_ms`. Durations use a monotonic clock.
+
+New SigNoz SQL panels retain the existing time-range and `bucket`, `chat_type`,
+`mode`, `status`, and `tools` filtering conventions, and display seconds:
+
+- [Call duration](docs/signoz-call-duration.sql): bucketed median/minimum/maximum
+  full-call time, grouped by chat type, mode and status.
+- [Progress timings](docs/signoz-progress-timings.sql): bucketed Azure interval
+  statistics and total progress time. Each call has equal weight in the median
+  of per-call medians; extrema cover all included calls.
+- [Per-call timings](docs/signoz-call-timings.sql): one table row per full call,
+  with duration and its own progress count, total, median, minimum and maximum.
+
+Historical events without duration fields are excluded. Progress charts exclude
+calls without intervals; the per-call table displays NULL for their statistics.
+
 ## Threaded DMs
 
 Enable **Threaded Mode** for the bot in BotFather to use separate topics in

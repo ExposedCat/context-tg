@@ -6,11 +6,13 @@ import { listEmojiPacks, removeEmojiPack } from "./emoji-packs.ts";
 import { LLM_DEPLOYMENT_OPTIONS } from "./llm-deployments.ts";
 import {
   getChatDebugMode,
+  getChatProgressEnabled,
   getChatReasoningEffort,
   isLlmSettingsDeployment,
   type LlmSettingsDeployment,
   parseReasoningSetting,
   persistChatDebugMode,
+  persistChatProgressEnabled,
   persistChatReasoningEffort,
 } from "./llm-models.ts";
 import {
@@ -72,6 +74,15 @@ export async function buildRichConfigureMessage(
       const enabled = await getChatDebugMode(ctx.database, ctx.chat.id);
       rows.push(
         `<p>${t("settings-kind-debug")} ${toggle(ctx, `debug:${enabled ? "off" : "on"}`, enabled)}</p>`,
+      );
+    }
+    if (canConfigure || ctx.chat.type === "private") {
+      const progressEnabled = await getChatProgressEnabled(
+        ctx.database,
+        chatId,
+      );
+      rows.push(
+        `<p>${t("configure-progress")} ${toggle(ctx, `progress:${progressEnabled ? "off" : "on"}`, progressEnabled)}</p>`,
       );
     }
     if (canConfigure) {
@@ -157,7 +168,9 @@ configureComposer.callbackQuery(/^cfg:/, async (ctx) => {
   if (
     !ctx.chat ||
     !ctx.from ||
-    (!["menu", "finance"].includes(action) && !(await canConfigureChat(ctx)))
+    (!["menu", "finance"].includes(action) &&
+      !(action === "progress" && ctx.chat.type === "private") &&
+      !(await canConfigureChat(ctx)))
   ) {
     await ctx.answerCallbackQuery({
       text: ctx.t("settings-admin-warning-chat"),
@@ -194,6 +207,12 @@ configureComposer.callbackQuery(/^cfg:/, async (ctx) => {
       return;
     }
     await setFinanceMcpEnabled(ctx.database, ctx.from.id, value === "on");
+  } else if (action === "progress" && (target === "on" || target === "off")) {
+    await persistChatProgressEnabled(
+      ctx.database,
+      ctx.chat.id,
+      target === "on",
+    );
   } else if (action === "debug" && (target === "on" || target === "off")) {
     await persistChatDebugMode(ctx.database, ctx.chat.id, target === "on");
   } else if (

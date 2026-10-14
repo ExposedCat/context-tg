@@ -119,3 +119,5 @@ configure-trolling-mode = Режим тролінгу
 trolling-mode-aggressive = Агресивний
 trolling-mode-mild = М’який
 trolling-mode-clean = Без обзивань
+
+configure-progress = Оновлення перебігу роботи

@@ -61,6 +61,7 @@ import type {
   LlmCallTelemetry,
   LlmCallTelemetryPayload,
 } from "./telemetry.ts";
+import { createLlmCallTiming } from "./telemetry.ts";
 import {
   buildTrollingModeInstructions,
   getTrollingModeInstructions,
@@ -123,7 +124,13 @@ type FunctionToolName = keyof typeof FUNCTION_TOOL_RUNNERS | FinanceToolName;
 
 export const DEFAULT_LLM_TOOLS = Object.keys(TOOL_DEFINITIONS) as ToolName[];
 
+export type LlmProgressSegment = {
+  text?: string;
+  tools: ToolName[];
+};
+
 export type LlmProgress = {
+  segments?: LlmProgressSegment[];
   toolCallCount: number;
   responseId?: string;
 };
@@ -259,6 +266,7 @@ const TRIMMED_TOOL_OUTPUTS = new Set<string>([
 ]);
 
 type LlmRequestState = {
+  timing: ReturnType<typeof createLlmCallTiming>;
   financeMcp?: FinanceMcpTools;
   lastResponseId?: string;
   replyMessageId?: number | null;
@@ -398,7 +406,23 @@ function isFunctionToolCall(
 }
 
 function getResponseText(response: ApiResponse): string | undefined {
-  return response.output_text || undefined;
+  if (
+    !response.output.some(
+      (item) => item.type === "message" && item.phase === "commentary",
+    )
+  )
+    return response.output_text || undefined;
+  return (
+    response.output
+      .flatMap((item) =>
+        item.type === "message" && item.phase !== "commentary"
+          ? item.content.flatMap((part) =>
+              part.type === "output_text" ? [part.text] : [],
+            )
+          : [],
+      )
+      .join("") || undefined
+  );
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -410,7 +434,7 @@ function getCitations(response: ApiResponse): LlmCitation[] {
   let textOffset = 0;
 
   for (const item of response.output) {
-    if (item.type !== "message") {
+    if (item.type !== "message" || item.phase === "commentary") {
       continue;
     }
 
@@ -436,6 +460,35 @@ function getCitations(response: ApiResponse): LlmCitation[] {
   }
 
   return citations;
+}
+
+/** Associate calls with the preceding public assistant message, in output order. */
+function getResponseProgressSegments(
+  response: ApiResponse,
+  commentaryOnly = false,
+): LlmProgressSegment[] {
+  const segments: LlmProgressSegment[] = [];
+  for (const item of response.output) {
+    if (
+      item.type === "message" &&
+      (!commentaryOnly || item.phase === "commentary")
+    ) {
+      const text = item.content
+        .flatMap((part) => (part.type === "output_text" ? [part.text] : []))
+        .join("\n")
+        .trim();
+      if (text) segments.push({ text, tools: [] });
+    } else if (
+      !commentaryOnly &&
+      item.type === "function_call" &&
+      isFunctionToolName(item.name)
+    ) {
+      if (segments.length === 0) segments.push({ tools: [] });
+      const segment = segments[segments.length - 1];
+      if (!segment.tools.includes(item.name)) segment.tools.push(item.name);
+    }
+  }
+  return segments;
 }
 
 function getWebSearchSourceLinks(response: ApiResponse): string[] {
@@ -676,6 +729,7 @@ function getLlmCallTelemetryPayload(
   );
 
   return {
+    ...state.timing.snapshot(),
     chat_type: telemetry.chatType,
     input_tokens: modelUsage.input_tokens + state.toolUsage.input_tokens,
     cached_tokens: modelUsage.cached_tokens + state.toolUsage.cached_tokens,
@@ -1505,6 +1559,14 @@ async function createLlmResponseWithRetries(
         throw responseError;
       }
 
+      if (
+        getFunctionToolCalls(response).length > 0 ||
+        response.output.some(
+          (item) => item.type === "message" && item.phase === "commentary",
+        )
+      ) {
+        state.timing.progress();
+      }
       state.receivedResponse = true;
       currentResponseId = await recordResponse(
         response,
@@ -1655,8 +1717,22 @@ async function resolveFunctionToolCalls(
     const functionCalls = getFunctionToolCalls(response);
 
     if (functionCalls.length === 0) {
+      const segments = getResponseProgressSegments(response, true);
+      if (segments.length > 0) {
+        await options.onProgress?.({
+          toolCallCount,
+          responseId: state.lastResponseId,
+          segments,
+        });
+      }
       break;
     }
+
+    await options.onProgress?.({
+      toolCallCount,
+      responseId: state.lastResponseId,
+      segments: getResponseProgressSegments(response),
+    });
 
     const toolCallResults = await Promise.all(
       functionCalls.map((call) =>
@@ -1726,6 +1802,7 @@ async function requestLlmWithInstructions(
   model: AgentModel = normalAgent.MODEL,
 ): Promise<LlmResponse> {
   const state: LlmRequestState = {
+    timing: createLlmCallTiming(),
     lastResponseId: responseId ?? undefined,
     inputItems: [],
     receivedResponse: false,
@@ -1744,6 +1821,7 @@ async function requestLlmWithInstructions(
     },
   };
 
+  let status: LlmCallStatus = "failed";
   try {
     logDebug("Sending request to LLM", { tools, responseId, model });
     const client = getClient();
@@ -1829,17 +1907,17 @@ async function requestLlmWithInstructions(
       debug: state.debug,
     };
 
-    emitLlmCallTelemetryEvent(
-      state,
-      options,
-      state.hadToolErrors ? "with_errors" : "success",
-    );
+    status = state.hadToolErrors ? "with_errors" : "success";
     return result;
-  } catch (error) {
-    emitLlmCallTelemetryEvent(state, options, "failed");
-    throw error;
   } finally {
-    await state.financeMcp?.close();
+    try {
+      await state.financeMcp?.close().catch((error) => {
+        status = "failed";
+        throw error;
+      });
+    } finally {
+      emitLlmCallTelemetryEvent(state, options, status);
+    }
   }
 }
 
@@ -1883,6 +1961,7 @@ export async function requestTrollingValidation(
   input: TrollingValidationInput,
   options: Pick<LlmRequestOptions, "signal" | "telemetry"> = {},
 ): Promise<{ valid: boolean }> {
+  const timing = createLlmCallTiming();
   let response: ApiResponse | undefined;
   let status: LlmCallStatus = "failed";
   try {
@@ -1967,6 +2046,7 @@ Return only the boolean verdict through the required structured output.`,
     if (options.telemetry) {
       const usage = response ? getResponseUsage(response) : undefined;
       emitLlmCallTelemetryPayload(options.telemetry, {
+        ...timing.snapshot(),
         chat_type: options.telemetry.chatType,
         input_tokens: usage?.input_tokens ?? 0,
         cached_tokens: usage?.cached_tokens ?? 0,

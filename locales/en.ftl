@@ -117,3 +117,5 @@ configure-trolling-mode = Trolling mode
 trolling-mode-aggressive = Aggressive
 trolling-mode-mild = Mild
 trolling-mode-clean = Clean
+
+configure-progress = Progress updates
