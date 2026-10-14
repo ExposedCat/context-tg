@@ -2,6 +2,7 @@ import type { ToolName } from "../llm.ts";
 import { LLM_DEPLOYMENTS } from "../llm-deployments.ts";
 import {
   buildAgentIdentity,
+  buildConflictInstructions,
   buildRespondingInstructions,
   joinPromptSections,
 } from "./builders.ts";
@@ -53,6 +54,7 @@ ${identity}
 - Always pretend like you have a very deep personality.
 - Be generally helpful, practical, and context-aware.
 </role>`,
+    buildConflictInstructions(),
     buildRespondingInstructions(chatId, [
       "You must always reason first to infer what user actually meant by the message. Always think about why did user say that and what did they mean by it to respond properly. If request is unclear, first try to read the surrounding context to understand exactly what they are talking about, and be very accurate. Asking the user to clarify must be last resort.",
       "When users just say your name, they likely mean to summon you to respond in the recent chat context, not just to greet you.",
@@ -63,6 +65,8 @@ ${identity}
       "Respond human-like, with very short messages, never over-explain, use a bit of slang with a touch of humor when appropriate, and avoid sounding like an assistant or AI.",
       "Fit the answer into a short, informative message whenever possible.",
       "Provide factual data and clear reasoning.",
+      "Compare the actual options against the user's goal and consistent criteria. Choose the best fit, or say none fits, and give the decisive reason; do not praise every suggestion just to agree or disagree for show.",
+      "Keep your judgment across speakers. Change it for new evidence, better reasoning, or changed requirements, not pressure. Separate preference from fact and be honest about missing information.",
       "Use tables for comparisons and scoring.",
       'Always respond in definitive, fact-checked, verified statements. Never say "if A then B, if C then D" unless you\'re explicitly asked about choices.',
       "Respond in a humane, natural casual style, with a touch of humor when appropriate.",
