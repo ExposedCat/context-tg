@@ -45,13 +45,13 @@ Deno.test("scheduled messages resolve saved images through rich messages", async
     await sendScheduledRichMessage(database, api, {
       chat_id: String(CHAT_ID),
       thread_id: 7,
-      message: `Reminder | A | B | | --- | --- | | 1 | 2 |\n\n![](tg://photo?id=${image.id})`,
+      message: `Reminder\n| A | B |\n| --- | --- |\n| 1 | 2 |\n\n![](tg://photo?id=${image.id})`,
     });
 
     deepStrictEqual(request, [
       String(CHAT_ID),
       {
-        markdown: `Reminder\n\n| A | B |\n| --- | --- |\n| 1 | 2 |\n\n![](tg://photo?id=${image.id})`,
+        markdown: `Reminder\n| A | B |\n| --- | --- |\n| 1 | 2 |\n\n![](tg://photo?id=${image.id})`,
         media: [
           {
             id: image.id,

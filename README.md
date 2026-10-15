@@ -194,6 +194,20 @@ the vision model. `read_image` also accepts a saved image ID from a
 URLs can be inserted into a response with `![](URL)` or
 `![](URL "caption")`.
 
+## Response formatting
+
+Agents generate Telegram Rich Markdown, with real Markdown lists (`- item`),
+blank lines between paragraphs and block elements, and `<br>` for explicit line
+breaks inside a paragraph. Tables use `<table bordered striped>` without
+`compact`, with text columns aligned left and numeric columns aligned right.
+Table cells use HTML inline formatting because Telegram does not parse Markdown
+inside HTML tables.
+
+These rules are part of the shared agent instructions. Delivery preserves source
+whitespace and markup; it does not infer missing line breaks or repair lists and
+tables. Ordinary dollar signs are escaped so Telegram does not parse currency as
+LaTeX.
+
 ## Saved images
 
 Set `MEDIA_CACHE_CHAT_ID` to a private group or channel where the bot can send

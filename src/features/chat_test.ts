@@ -39,6 +39,110 @@ const [
   import("./images.ts"),
 ]);
 
+Deno.test("raw model newlines survive chat delivery and Telegram HTTP serialization", async () => {
+  const { setLlmDeploymentName } = await import("./llm-deployments.ts");
+  const { createEmojiPackTransformer } = await import("./emoji-packs.ts");
+  const database = await initDatabase()();
+  const originalFetch = globalThis.fetch;
+  const chat = { id: -1, type: "supergroup", title: "Test" } as const;
+  const bot = {
+    id: 42,
+    is_bot: true,
+    first_name: "Test",
+    username: "test_bot",
+  } as Context["me"];
+  const sent: string[] = [];
+  const api = new Api("test", {
+    fetch: async (url: string | URL | Request, init?: RequestInit) => {
+      if (String(url).endsWith("/sendRichMessage")) {
+        // Inspect the serialized HTTP body, after grammY and API transformers.
+        const payload = JSON.parse(String(init?.body));
+        sent.push(payload.rich_message.markdown);
+        return Response.json({
+          ok: true,
+          result: {
+            message_id: 100 + sent.length,
+            date: 0,
+            chat,
+            from: bot,
+            rich_message: { blocks: [{ type: "paragraph", text: "Sent" }] },
+          },
+        });
+      }
+      ok(String(url).endsWith("/sendChatAction"));
+      return Response.json({ ok: true, result: true });
+    },
+  });
+  api.config.use(createEmojiPackTransformer(database, api));
+  const fixtures = [
+    // Actual assistant text recovered from the reported response's history.
+    [
+      "**Основа реальная, но «ни одно фото не отредактировано» — не доказано.**",
+      "",
+      "• Слева — Барбера Торнхилл: такой портрет действительно опубликован [Госдепом](https://x.com/StateDRL/status/2109999025604698420). Официальная публикация, однако, не гарантирует отсутствие ретуши.",
+      "• В центре — Келли Леффлер, глава SBA. Кадр связан с [роликом официального аккаунта ведомства](https://www.tiktok.com/@sbagov/video/7673494995348884749), который [разбирала Mediaite](https://mediaite.com/media/news/trump-appointee-roasted-over-video-of-her-stiffly-walking-by-pics-of-herself-this-has-to-be-ai-right). Само существование ролика не доказывает, что пропорции в этом меме не меняли.",
+      "• Правая фотография обрезана — её по этому скрину надёжно не проверить.",
+      "",
+      "**Итог: не очевидный ИИ-фейк, но подпись выдаёт непроверенное утверждение за факт.**",
+    ].join("\n"),
+    "Intro\n| A | B |\n| --- | --- |\n| 1 | 2 |\n\nConclusion",
+    "First line\nsecond line\n\nNext paragraph\n\n- First\n- Second",
+    "First **line**<br>second line\n\nNext paragraph",
+    'Intro\n\n<table bordered striped>\n<tr><th align="left">Item</th><th align="right">Value</th></tr>\n<tr><td align="left">Example</td><td align="right"><b>42</b></td></tr>\n</table>\n\nConclusion',
+  ];
+  let responseText = "";
+  globalThis.fetch = (async () =>
+    Response.json({
+      id: `resp_newlines_${sent.length}`,
+      object: "response",
+      created_at: 1,
+      status: "completed",
+      output: [
+        {
+          id: `msg_newlines_${sent.length}`,
+          type: "message",
+          role: "assistant",
+          status: "completed",
+          content: [
+            { type: "output_text", text: responseText, annotations: [] },
+          ],
+        },
+      ],
+    })) as typeof fetch;
+
+  try {
+    setLlmDeploymentName("small", "test-model");
+    for (const [index, fixture] of fixtures.entries()) {
+      responseText = fixture;
+      const ctx = new GrammyContext(
+        {
+          update_id: index + 1,
+          message: {
+            message_id: index + 1,
+            date: 0,
+            from: { id: 1, is_bot: false, first_name: "User" },
+            chat,
+            text: "лейло check formatting",
+          },
+        },
+        api,
+        bot,
+      ) as Context;
+      ctx.database = database;
+      ctx.telemetry = { event: () => {} } as Context["telemetry"];
+      await chatComposer.middleware()(ctx, () => {
+        throw new Error("Named trigger should be handled");
+      });
+      strictEqual(sent.length, index + 1);
+      strictEqual(sent[index], fixture);
+    }
+  } finally {
+    globalThis.fetch = originalFetch;
+    setLlmDeploymentName("small", "");
+    await database.destroy();
+  }
+});
+
 Deno.test("messages dropped for missing mentions still emit analytics once", async () => {
   const ctx = new GrammyContext(
     {
@@ -1004,27 +1108,15 @@ Deno.test("unavailable rich-message photos are retried without user diagnostics"
   ok(!prompt.includes("RICH_MESSAGE_PHOTO_NO_MEDIA_FOUND"));
 });
 
-Deno.test("guest rich messages repair flattened tables before delivery", async () => {
+Deno.test("guest rich messages preserve table source before delivery", async () => {
   const database = await initDatabase()();
   try {
     deepStrictEqual(
       await buildGuestRichMessage(
         database,
-        "Intro | A | B | | --- | --- | | 1 | 2 |",
+        "Intro\n| A | B |\n| --- | --- |\n| 1 | 2 |",
       ),
-      { markdown: "Intro\n\n| A | B |\n| --- | --- |\n| 1 | 2 |" },
-    );
-  } finally {
-    await database.destroy();
-  }
-});
-
-Deno.test("guest rich messages preserve Unicode list structure before delivery", async () => {
-  const database = await initDatabase()();
-  try {
-    deepStrictEqual(
-      await buildGuestRichMessage(database, "Intro\n• First\n• Second\nAfter"),
-      { markdown: "Intro\n\n- First\n- Second\n\nAfter" },
+      { markdown: "Intro\n| A | B |\n| --- | --- |\n| 1 | 2 |" },
     );
   } finally {
     await database.destroy();

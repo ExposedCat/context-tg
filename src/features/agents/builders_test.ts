@@ -6,6 +6,7 @@ Deno.test("responding instructions describe Telegram rich formatting", () => {
   const supportedExamples = [
     "When sending multiple images, prefer tg-collage (all visible) or tg-slideshow (carousel) wrappers.",
     "**bold text**",
+    "A line with **Markdown formatting**<br>Another line in the same paragraph.",
     "||spoiler||",
     "[inline mention of a user](tg://user?id=123456789)",
     "# Heading 1",
@@ -16,7 +17,9 @@ Deno.test("responding instructions describe Telegram rich formatting", () => {
     "![](tg://photo?id=IMAGE_ID)",
     "![](tg://document?id=IMAGE_ID)",
     "Always preserve the exact URI and ID",
-    "|:---------|:--------:|",
+    "<table bordered striped>",
+    '<tr><th align="left">Item</th><th align="right">Value</th></tr>',
+    '<td align="right"><b>42</b> <sup>ms</sup></td>',
     "[^id1]: Definition of the first footnote.",
     "$$E = mc^2$$",
     "<details open><summary>Summary with **bold text**</summary>",
