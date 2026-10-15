@@ -333,6 +333,7 @@ function getClient(): OpenAI {
   return new OpenAI({
     apiKey: APP_ENV.LLM_API_KEY,
     baseURL: APP_ENV.LLM_BASE_URL,
+    timeout: 90_000,
   });
 }
 

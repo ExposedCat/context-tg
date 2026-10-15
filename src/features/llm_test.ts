@@ -192,6 +192,106 @@ Respond with a name for this thread. Don't use formatting, don't add anything el
   }
 });
 
+Deno.test("stalled model attempts retry after 90 seconds without repeating tools", async (t) => {
+  setLlmDeploymentName("small", "test-model");
+  const originalFetch = globalThis.fetch;
+  const originalSetTimeout = globalThis.setTimeout;
+  const attemptTimeouts: number[] = [];
+  // Exercise the SDK's real timeout and retry path without waiting 90 seconds.
+  globalThis.setTimeout = ((callback, delay, ...args) => {
+    if (delay !== undefined && delay >= 90_000) attemptTimeouts.push(delay);
+    return originalSetTimeout(
+      callback,
+      delay !== undefined && delay >= 90_000 ? 5 : delay,
+      ...args,
+    );
+  }) as typeof setTimeout;
+  try {
+    for (const afterTool of [false, true]) {
+      await t.step(
+        afterTool ? "after a tool result" : "initial request",
+        async () => {
+          const requests: string[] = [];
+          attemptTimeouts.length = 0;
+          let completed = 0;
+          let charges = 0;
+          let timedOut = false;
+          globalThis.fetch = (async (input, init) => {
+            const request = new Request(input, init);
+            requests.push(await request.text());
+            if (requests.length === (afterTool ? 2 : 1)) {
+              return await new Promise<Response>((_resolve, reject) => {
+                request.signal.addEventListener(
+                  "abort",
+                  () => {
+                    timedOut = true;
+                    reject(new DOMException("Request timed out", "AbortError"));
+                  },
+                  { once: true },
+                );
+              });
+            }
+            completed++;
+            return Response.json(
+              createApiResponse(
+                `resp_timeout_${completed}`,
+                completed === 1
+                  ? [
+                      {
+                        id: "fc_timeout",
+                        type: "function_call",
+                        call_id: "call_timeout",
+                        name: "set_reply_message_id",
+                        arguments: '{"message_id":7}',
+                        status: "completed",
+                      },
+                    ]
+                  : [
+                      {
+                        id: "msg_timeout",
+                        type: "message",
+                        role: "assistant",
+                        status: "completed",
+                        content: [
+                          {
+                            type: "output_text",
+                            text: "Done.",
+                            annotations: [],
+                          },
+                        ],
+                      },
+                    ],
+              ),
+            );
+          }) as typeof fetch;
+          const response = await requestLlm(
+            "Reply",
+            ["set_reply_message_id"],
+            undefined,
+            {
+              context: { chatId: 1, messageId: 1 },
+              chargeCredits: async () => {
+                charges++;
+              },
+            },
+          );
+          strictEqual(timedOut, true);
+          strictEqual(requests.length, 3);
+          const index = afterTool ? 1 : 0;
+          strictEqual(requests[index], requests[index + 1]);
+          deepStrictEqual(attemptTimeouts, [90_000, 90_000, 90_000]);
+          strictEqual(charges, 1);
+          strictEqual(response.replyMessageId, 7);
+          strictEqual(response.response, "Done.");
+        },
+      );
+    }
+  } finally {
+    globalThis.fetch = originalFetch;
+    globalThis.setTimeout = originalSetTimeout;
+  }
+});
+
 Deno.test("legacy Chat Completions history is converted to Responses items", () => {
   const inputItems = parseLlmResponseInputItems(
     JSON.stringify([

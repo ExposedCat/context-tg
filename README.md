@@ -39,6 +39,11 @@ loopback; Context accesses MCP directly over the container network.
 
 ## Progress updates and timing
 
+Each text-model HTTP attempt has a 90-second timeout, after which the SDK can
+retry using its existing retry policy. The timeout applies separately to each
+model call, including calls after tool results, thread naming and trolling
+validation; it is not a deadline for the entire task.
+
 **Progress updates** is a per-chat `/settings` toggle, enabled by default and
 controlled by chat admins (or the user in a private chat). During conversation
 requests, the bot sends at most one progress message every 30 seconds. Azure's
