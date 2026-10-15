@@ -38,6 +38,7 @@ export function buildConflictInstructions(): string {
 const TELEGRAM_FORMATTING_INSTRUCTIONS = [
   "<formatting>",
   "Telegram supports the following response formatting:",
+  "Use Markdown list markers (-, *, +, or numbered markers), with each item on its own line. Do not use literal • characters as list markers. Separate lists and tables from surrounding paragraphs with blank lines. A single newline inside a paragraph is a soft break and may render as a space; use a blank line for a new paragraph.",
   "",
   "**bold text**",
   "__bold text__",

@@ -1,6 +1,56 @@
 import { strictEqual } from "node:assert";
 import { normalizeRichMarkdown } from "./markdown.ts";
 
+Deno.test("turns Unicode bullet lines into a list with explicit paragraph boundaries", () => {
+  const intro = "Основа реальная, но отсутствие ретуши не доказано.";
+  const items = [
+    "Слева — Барбера Торнхилл: [источник](https://example.com/left).",
+    "В центре — Келли Леффлер. Ролик не доказывает отсутствие ретуши.",
+    "Правая фотография обрезана — её надёжно не проверить.",
+  ];
+  const conclusion = "Итог: подпись выдаёт непроверенное утверждение за факт.";
+  for (const newline of ["\n", "\r\n"]) {
+    const input = [intro, ...items.map((item) => `• ${item}`), conclusion].join(
+      newline,
+    );
+    const expected = [
+      intro,
+      "",
+      ...items.map((item) => `- ${item}`),
+      "",
+      conclusion,
+    ].join(newline);
+    strictEqual(normalizeRichMarkdown(input), expected);
+    strictEqual(normalizeRichMarkdown(expected), expected);
+  }
+});
+
+Deno.test("preserves list spacing, Markdown lists, and literal bullet content", () => {
+  const list = "• First\n• Second";
+  strictEqual(normalizeRichMarkdown(list), "- First\n- Second");
+  strictEqual(
+    normalizeRichMarkdown(`Intro\n\n${list}\n\nAfter`),
+    "Intro\n\n- First\n- Second\n\nAfter",
+  );
+  for (const input of [
+    "Intro\n\n- First\n- Second\n\nAfter",
+    "Symbols: a • b • c",
+    "`• inline code`",
+    "`multiline code\n• literal bullet\n`",
+    `\`\`\`text\n${list}\n\`\`\``,
+    `~~~\n${list}\n~~~`,
+    `<pre>\n${list}\n</pre>`,
+    `<code>\n${list}\n</code>`,
+    "    • indented code",
+    "> • quoted text",
+    "\\• escaped bullet",
+    "•no space",
+    "[link](https://example.com/•path)",
+  ]) {
+    strictEqual(normalizeRichMarkdown(input), input);
+  }
+});
+
 Deno.test("normalizes tables and dollar signs together without changing LaTeX", () => {
   const input = "Prices | Price | Formula | | --- | --- | | $16 | $$x + 1$$ |";
   const expected =

@@ -126,7 +126,36 @@ function normalizeMarkdownTables(text: string): string {
   return result + text.slice(cursor);
 }
 
+/** Unicode bullets are plain paragraph text, so their soft line breaks can vanish. */
+function normalizeMarkdownLists(text: string): string {
+  const lines = text.split(/(?<=\n)/);
+  const maskedLines = maskLiteralMarkdown(text).split(/(?<=\n)/);
+  // Only unambiguous top-level markers; inline bullets may be ordinary prose.
+  const bullet = /^•[ \t]+(?=\S)/;
+  const isBullet = maskedLines.map((line) => bullet.test(line));
+
+  return lines
+    .map((line, index) => {
+      if (!isBullet[index]) return line;
+      const newline = line.endsWith("\r\n") ? "\r\n" : "\n";
+      const before =
+        index > 0 && !isBullet[index - 1] && lines[index - 1].trim()
+          ? newline
+          : "";
+      const after =
+        index + 1 < lines.length &&
+        !isBullet[index + 1] &&
+        lines[index + 1].trim()
+          ? newline
+          : "";
+      return before + line.replace(bullet, "- ") + after;
+    })
+    .join("");
+}
+
 /** Normalize generated Markdown for Telegram rich-message delivery. */
 export function normalizeRichMarkdown(text: string): string {
-  return escapeSingleDollarSigns(normalizeMarkdownTables(text));
+  return escapeSingleDollarSigns(
+    normalizeMarkdownLists(normalizeMarkdownTables(text)),
+  );
 }

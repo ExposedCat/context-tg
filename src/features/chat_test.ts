@@ -1019,6 +1019,18 @@ Deno.test("guest rich messages repair flattened tables before delivery", async (
   }
 });
 
+Deno.test("guest rich messages preserve Unicode list structure before delivery", async () => {
+  const database = await initDatabase()();
+  try {
+    deepStrictEqual(
+      await buildGuestRichMessage(database, "Intro\n• First\n• Second\nAfter"),
+      { markdown: "Intro\n\n- First\n- Second\n\nAfter" },
+    );
+  } finally {
+    await database.destroy();
+  }
+});
+
 Deno.test("guest rich messages include saved image media mappings", async () => {
   const database = await initDatabase()();
 

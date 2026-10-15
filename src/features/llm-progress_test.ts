@@ -5,6 +5,7 @@ import {
   formatProgressToolSummary,
   PROGRESS_INTERVAL_MS,
   PROGRESS_PLACEHOLDER_INTERVAL_MS,
+  PROGRESS_TOOL_INTERVAL_MS,
 } from "./llm-progress.ts";
 
 function clock() {
@@ -33,6 +34,11 @@ function clock() {
     },
     armed: () => callback !== undefined,
   };
+}
+
+async function tickUntil(timer: ReturnType<typeof clock>, time: number) {
+  while (timer.now() < time) await timer.tick();
+  strictEqual(timer.now(), time);
 }
 
 Deno.test("progress batches preserve each segment's tools and drain after each interval", async () => {
@@ -66,21 +72,19 @@ Deno.test("progress batches preserve each segment's tools and drain after each i
   updates.add([{ tools: ["read_web_page", "read_web_page"] }]);
   await timer.tick();
   strictEqual(timer.now(), 60_000);
+  strictEqual(messages.length, 1);
+  await timer.tick();
+  strictEqual(timer.now(), 90_000);
   deepStrictEqual(messages[1], [
     {
-      text: "Searched web, read 3 webpages",
-      tools: ["web_search", "read_web_page"],
+      text: "Read 2 webpages",
+      tools: ["read_web_page"],
     },
   ]);
   await timer.tick();
   strictEqual(messages.length, 2);
-  await timer.tick();
-  deepStrictEqual(messages[2], [
-    {
-      text: "Searched web, read 3 webpages",
-      tools: ["web_search", "read_web_page"],
-    },
-  ]);
+  await tickUntil(timer, 170_000);
+  deepStrictEqual(messages[2], [{ text: "Thinking...", tools: [] }]);
   updates.add([{ text: "Last unsent progress", tools: ["search_chat"] }]);
   deepStrictEqual(await updates.stop(), [
     { text: "Last unsent progress", tools: ["search_chat"] },
@@ -89,10 +93,11 @@ Deno.test("progress batches preserve each segment's tools and drain after each i
   await timer.tick();
   strictEqual(messages.length, 3);
   strictEqual(PROGRESS_INTERVAL_MS, 30_000);
-  strictEqual(PROGRESS_PLACEHOLDER_INTERVAL_MS, 40_000);
+  strictEqual(PROGRESS_TOOL_INTERVAL_MS, 60_000);
+  strictEqual(PROGRESS_PLACEHOLDER_INTERVAL_MS, 80_000);
 });
 
-Deno.test("idle progress uses random placeholders only until tools are called", async () => {
+Deno.test("idle progress summarizes only new tools and returns to placeholders when idle", async () => {
   const timer = clock();
   const messages: LlmProgressSegment[][] = [];
   let randomCalls = 0;
@@ -113,7 +118,10 @@ Deno.test("idle progress uses random placeholders only until tools are called", 
   strictEqual(timer.now(), 30_000);
   strictEqual(messages.length, 0);
   await timer.tick();
-  strictEqual(timer.now(), 40_000);
+  strictEqual(timer.now(), 60_000);
+  strictEqual(messages.length, 0);
+  await timer.tick();
+  strictEqual(timer.now(), 80_000);
   deepStrictEqual(messages[0], [{ text: "Working...", tools: [] }]);
   updates.add([
     {
@@ -127,7 +135,10 @@ Deno.test("idle progress uses random placeholders only until tools are called", 
     },
   ]);
   await timer.tick();
-  strictEqual(timer.now(), 70_000);
+  strictEqual(timer.now(), 110_000);
+  strictEqual(messages.length, 1);
+  await timer.tick();
+  strictEqual(timer.now(), 140_000);
   deepStrictEqual(messages[1], [
     {
       text: "Searched web, read 3 webpages, read recent messages",
@@ -136,10 +147,14 @@ Deno.test("idle progress uses random placeholders only until tools are called", 
   ]);
   await timer.tick();
   strictEqual(messages.length, 2);
-  await timer.tick();
-  strictEqual(timer.now(), 110_000);
-  deepStrictEqual(messages[2], messages[1]);
-  strictEqual(randomCalls, 1);
+  await tickUntil(timer, 220_000);
+  deepStrictEqual(messages[2], [{ text: "Working...", tools: [] }]);
+  updates.add([{ tools: ["web_search", "web_search"] }]);
+  await tickUntil(timer, 280_000);
+  deepStrictEqual(messages[3], [
+    { text: "Searched web 2 times", tools: ["web_search"] },
+  ]);
+  strictEqual(randomCalls, 2);
   await updates.stop();
 });
 
@@ -182,6 +197,7 @@ Deno.test("retrying an idle tool summary does not count calls twice", async () =
   await timer.tick();
   await timer.tick();
   await timer.tick();
+  strictEqual(attempts.length, 2);
   deepStrictEqual(attempts, [
     [{ text: "Read 3 webpages", tools: ["read_web_page"] }],
     [{ text: "Read 3 webpages", tools: ["read_web_page"] }],
@@ -210,6 +226,7 @@ Deno.test("progress stops on cancellation and waits for an in-flight send", asyn
   });
   await timer.tick();
   strictEqual(sent, 0);
+  await timer.tick();
   await timer.tick();
   let stopped = false;
   const stopping = updates.stop().then(() => {
@@ -278,5 +295,63 @@ Deno.test("oversized batches send once per interval and preserve the remaining p
   await timer.tick();
   strictEqual(sent.length, 2);
   deepStrictEqual(sent[1], [{ text: "Second", tools: ["read_web_page"] }]);
+  deepStrictEqual(await updates.stop(), []);
+});
+
+Deno.test("tool summaries include only the delivered batch", async () => {
+  const timer = clock();
+  const sent: LlmProgressSegment[][] = [];
+  const updates = createProgressUpdates({
+    ...timer,
+    batchSize: () => 1,
+    send: async (batch) => {
+      sent.push(batch);
+    },
+    onError: (error) => {
+      throw error;
+    },
+  });
+  updates.add([
+    { tools: ["web_search"] },
+    { tools: ["read_web_page", "read_web_page"] },
+  ]);
+  await tickUntil(timer, 60_000);
+  deepStrictEqual(sent, [[{ text: "Searched web", tools: ["web_search"] }]]);
+  await tickUntil(timer, 120_000);
+  deepStrictEqual(sent[1], [
+    { text: "Read 2 webpages", tools: ["read_web_page"] },
+  ]);
+  deepStrictEqual(await updates.stop(), []);
+});
+
+Deno.test("tools arriving during delivery are retained for the next update", async () => {
+  const timer = clock();
+  const sent: LlmProgressSegment[][] = [];
+  let release!: () => void;
+  const updates = createProgressUpdates({
+    ...timer,
+    send: async (batch) => {
+      sent.push(batch);
+      if (sent.length === 1) {
+        await new Promise<void>((resolve) => {
+          release = resolve;
+        });
+      }
+    },
+    onError: (error) => {
+      throw error;
+    },
+  });
+  updates.add([{ tools: ["web_search"] }]);
+  await tickUntil(timer, 60_000);
+  updates.add([{ tools: ["read_web_page"] }]);
+  release();
+  await Promise.resolve();
+  await Promise.resolve();
+  await tickUntil(timer, 120_000);
+  deepStrictEqual(sent, [
+    [{ text: "Searched web", tools: ["web_search"] }],
+    [{ text: "Read webpage", tools: ["read_web_page"] }],
+  ]);
   deepStrictEqual(await updates.stop(), []);
 });
