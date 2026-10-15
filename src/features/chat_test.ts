@@ -1202,7 +1202,7 @@ Deno.test("combined progress has a separate final icon line ending with the prog
     formatProgressSegments([
       { text: "Reading context", tools: ["get_message_context"] },
     ]),
-    `Reading context\n\n\`get_message_context\` ${marker}`,
+    `Reading context\n\n![💬](tg://emoji?id=5886330010054168711) ${marker}`,
   );
   strictEqual(
     formatProgressSegments([{ text: "Thinking...", tools: [] }]),
@@ -1364,7 +1364,7 @@ Deno.test("chat progress sends one message per tick in the originating topic and
         await Promise.resolve();
         strictEqual(sent.length, 1);
         ok(sent[0].markdown.startsWith("Checking sources."));
-        ok(sent[0].markdown.includes("`set_reply_message_id`"));
+        ok(sent[0].markdown.includes("tg://emoji?id=5877468380125990242"));
         ok(
           sent[0].markdown.endsWith("![⏳](tg://emoji?id=5427181942934088912)"),
         );
@@ -1393,7 +1393,7 @@ Deno.test("chat progress sends one message per tick in the originating topic and
       await handling;
       strictEqual(sent.length, enabled ? 2 : 1);
       ok(sent.at(-1)?.markdown.startsWith("Final answer."));
-      ok(sent.at(-1)?.markdown.includes("`set_reply_message_id`"));
+      ok(sent.at(-1)?.markdown.includes("tg://emoji?id=5877468380125990242"));
       ok(!sent.at(-1)?.markdown.includes("5427181942934088912"));
       ok(sent.every((message) => message.topic === 77));
     }
