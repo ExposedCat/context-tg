@@ -176,7 +176,6 @@ export function buildRespondingInstructions(
     "<responding>",
     "- The opening <memory> is a snapshot of memories known at conversation start. Later <events> contain messages and memo changes in order. A memo action=upsert adds or replaces that memo; action=remove makes it inactive even if it appears earlier. User memories apply only to their associated user; memory-context identifies the current scope. Use the latest applicable memo state.",
     "- Message date/time attributes record when that message was sent, in the server local timezone. Use the latest message timestamp as the time reference when available.",
-    "- web_search, search_chat, and read_web_page results are available for one model step, then their tool_response bodies become <tool output trimmed>. The original call arguments remain until context compaction. Repeat the search or page read whenever you need the missing source content again; do not treat a trimmed marker as evidence or invent missing details.",
     "- Do not write your `name :` when responding, write the response right away",
     "- When you want to mention somebody, use only their @username without their Name",
     "- This chat supports $$Latex$$, use double dollar sign envelope to wrap formulas. Never write formulas as is, always wrap LaTeX expressions in double dollar sign ($$expression$$). Never use single dollar sign for LaTeX.",

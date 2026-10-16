@@ -260,11 +260,6 @@ const INVALID_IMAGE_DATA_ERROR_PATTERN =
 const CORRUPTED_IMAGE_REMOVAL_NOTICE_PATTERN =
   /\b\d+ attached images were removed due to corrupted contents\./;
 const MARKDOWN_TOOL_OUTPUTS = new Set<string>(["read_web_page"]);
-const TRIMMED_TOOL_OUTPUTS = new Set<string>([
-  "web_search",
-  "search_chat",
-  "read_web_page",
-]);
 
 type LlmRequestState = {
   timing: ReturnType<typeof createLlmCallTiming>;
@@ -1386,37 +1381,6 @@ function getReplayableOutputItems(response: ApiResponse): ResponseInputItem[] {
   return inputItems;
 }
 
-function trimConsumedToolOutputs(
-  inputItems: ResponseInputItem[],
-  consumedThrough = inputItems.length,
-): ResponseInputItem[] {
-  const toolNames = new Map<string, string>();
-  return inputItems.map((item, index) => {
-    if (item.type === "function_call") {
-      toolNames.set(item.call_id, item.name);
-    }
-    if (item.type !== "function_call_output" || index >= consumedThrough) {
-      return item;
-    }
-    // Compaction can replace the original call while a subsequent result still
-    // exists. Our tool_response wrapper retains the tool name in that case.
-    const outputText =
-      typeof item.output === "string" ? item.output : undefined;
-    const toolName =
-      toolNames.get(item.call_id) ??
-      outputText?.match(/^<tool_response tool="([^"]+)"(?:\s|>)/)?.[1];
-    if (!toolName || !TRIMMED_TOOL_OUTPUTS.has(toolName)) return item;
-    return {
-      ...item,
-      output: [
-        `<tool_response tool="${toolName}" trimmed="true">`,
-        "<tool output trimmed>",
-        "</tool_response>",
-      ].join("\n"),
-    };
-  });
-}
-
 function pruneCompactedInput(
   inputItems: ResponseInputItem[],
 ): ResponseInputItem[] {
@@ -1427,18 +1391,7 @@ function pruneCompactedInput(
 function preparePreviousResponseInput(
   inputItems: ResponseInputItem[],
 ): ResponseInputItem[] {
-  // Legacy histories can still contain consumed retrieval results. Leave results
-  // after the last model output intact: they may belong to a failed-step checkpoint.
-  const consumedThrough = inputItems.findLastIndex(
-    (item) =>
-      item.type === "function_call" ||
-      item.type === "reasoning" ||
-      item.type === "compaction" ||
-      (item.type === "message" && item.role === "assistant"),
-  );
-  return closePendingToolCalls(
-    pruneCompactedInput(trimConsumedToolOutputs(inputItems, consumedThrough)),
-  );
+  return closePendingToolCalls(pruneCompactedInput(inputItems));
 }
 
 async function recordResponse(
@@ -1449,15 +1402,11 @@ async function recordResponse(
   options: LlmRequestOptions,
 ): Promise<string> {
   const responseId = getLocalResponseId(response);
-  // Only trim after a successful model step has consumed the tool results.
-  // Failed-step checkpoints retain fresh results so retries can still use them.
-  const inputItems = pruneCompactedInput(
-    trimConsumedToolOutputs([
-      ...state.inputItems,
-      ...input,
-      ...getReplayableOutputItems(response),
-    ]),
-  );
+  const inputItems = pruneCompactedInput([
+    ...state.inputItems,
+    ...input,
+    ...getReplayableOutputItems(response),
+  ]);
 
   state.inputItems = inputItems;
   state.lastResponseId = responseId;

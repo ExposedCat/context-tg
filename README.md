@@ -127,13 +127,8 @@ and everything after it as the next context window. The compacted window and
 memory state are saved in SQLite, so continuation and replies to older
 checkpoints keep working across restarts.
 
-`web_search`, `search_chat`, and `read_web_page` outputs are available for one
-successful model step. Their bodies are then replaced in continuation history
-with `<tool output trimmed>` inside a `<tool_response tool="..." trimmed="true">`
-wrapper. Function calls and their arguments remain until native compaction;
-other tool results are retained. The agent must repeat a search or page read
-when it needs that source content again, including during the same task.
-Failed-step checkpoints retain unconsumed results for retry.
+Tool results, including `web_search`, `search_chat`, and `read_web_page`
+outputs, stay in the history until native compaction replaces them.
 
 ## Trigger names
 

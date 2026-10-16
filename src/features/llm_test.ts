@@ -603,7 +603,7 @@ Deno.test("native compaction prunes checkpoints and survives tool rounds, restar
   }
 });
 
-Deno.test("retrieval outputs are consumed once, then trimmed during tools and restart continuation", async () => {
+Deno.test("retrieval outputs are retained during tools and restart continuation", async () => {
   setLlmDeploymentName("small", "test-model");
   const database = await initDatabase()();
   const { getLlmResponseInputItems, saveLlmResponseInputItems } = await import(
@@ -705,32 +705,23 @@ Deno.test("retrieval outputs are consumed once, then trimmed during tools and re
       "resp_legacy_retrieval",
       options,
     );
-    strictEqual(
-      outputFor(0, "chat_lookup"),
-      '<tool_response tool="search_chat" trimmed="true">\n<tool output trimmed>\n</tool_response>',
-    );
+    strictEqual(outputFor(0, "chat_lookup"), "CHAT_SEARCH_PAYLOAD");
     strictEqual(outputFor(0, "recent"), "RETAINED_RECENT_MESSAGES");
     ok(String(outputFor(1, "web_lookup")).includes("FRESH_WEB_SEARCH_PAYLOAD"));
-    strictEqual(
-      outputFor(2, "web_lookup"),
-      '<tool_response tool="web_search" trimmed="true">\n<tool output trimmed>\n</tool_response>',
-    );
+    ok(String(outputFor(2, "web_lookup")).includes("FRESH_WEB_SEARCH_PAYLOAD"));
     ok(String(outputFor(2, "page_lookup")).includes("FRESH_PAGE_PAYLOAD"));
-    strictEqual(
-      outputFor(3, "page_lookup"),
-      '<tool_response tool="read_web_page" trimmed="true">\n<tool output trimmed>\n</tool_response>',
-    );
+    ok(String(outputFor(3, "web_lookup")).includes("FRESH_WEB_SEARCH_PAYLOAD"));
+    ok(String(outputFor(3, "page_lookup")).includes("FRESH_PAGE_PAYLOAD"));
     ok(
       String(outputFor(3, "reply_lookup")).includes(
         'tool="set_reply_message_id"',
       ),
     );
-    ok(!String(outputFor(3, "reply_lookup")).includes("trimmed"));
     ok(first.response_id);
     const saved = await getLlmResponseInputItems(database, first.response_id);
     ok(saved);
-    ok(!JSON.stringify(saved).includes("FRESH_"));
-    ok(!JSON.stringify(saved).includes("CHAT_SEARCH_PAYLOAD"));
+    ok(JSON.stringify(saved).includes("FRESH_PAGE_PAYLOAD"));
+    ok(JSON.stringify(saved).includes("CHAT_SEARCH_PAYLOAD"));
     ok(JSON.stringify(saved).includes("https://source.test/page"));
     await saveLlmResponseInputItems(database, {
       responseId: "resp_retrieval_restart",
@@ -745,7 +736,7 @@ Deno.test("retrieval outputs are consumed once, then trimmed during tools and re
   }
 });
 
-Deno.test("failed model steps preserve unconsumed retrieval results alongside compaction state", async () => {
+Deno.test("failed model steps preserve retrieval results alongside compaction state", async () => {
   setLlmDeploymentName("small", "test-model");
   const database = await initDatabase()();
   const { getLlmResponseInputItems, saveLlmResponseInputItems } = await import(
@@ -818,8 +809,7 @@ Deno.test("failed model steps preserve unconsumed retrieval results alongside co
       database,
       "resp_consumed_after_retry",
     );
-    ok(!JSON.stringify(savedSuccess).includes("UNCONSUMED_PAGE_PAYLOAD"));
-    ok(JSON.stringify(savedSuccess).includes("<tool output trimmed>"));
+    ok(JSON.stringify(savedSuccess).includes("UNCONSUMED_PAGE_PAYLOAD"));
   } finally {
     globalThis.fetch = originalFetch;
     await database.destroy();
