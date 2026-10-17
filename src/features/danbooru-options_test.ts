@@ -40,7 +40,7 @@ Deno.test("Danbooru options accept either order, trailing whitespace, and repeat
 
 Deno.test("explicit rating aliases use the direct-send hint and preserve raw overrides", () => {
   const hint =
-    "(use danbooru, you are strictly unallowed to view images yourself due to licensing, send it to user directly and notify)";
+    "(use only danbooru, don't search web, you are strictly unallowed to view images yourself due to licensing, send it to user directly and notify)";
   for (const rating of ["explicit", "e", "EXPLICIT", "E"]) {
     deepStrictEqual(
       parseDanbooruOptions(`find art /rating:${rating} /order:score`),

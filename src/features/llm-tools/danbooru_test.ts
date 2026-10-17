@@ -280,14 +280,38 @@ Deno.test("Danbooru defaults missing ordering to score and preserves provided so
 Deno.test("explicit Danbooru results instruct direct sending without inspection", async () => {
   const originalFetch = globalThis.fetch;
   let postRating = "g";
-  globalThis.fetch = (async () =>
-    Response.json([{ id: 42, rating: postRating }])) as typeof fetch;
+  const queries: string[] = [];
+  globalThis.fetch = (async (input, init) => {
+    queries.push(
+      new URL(new Request(input, init).url).searchParams.get("tags") ?? "",
+    );
+    return Response.json([
+      {
+        id: 42,
+        rating: postRating,
+        tag_string: "pigeon solo",
+        tag_string_copyright: "series_name",
+        tag_string_artist: "artist_name",
+        file_url: "https://cdn.test/pigeon.jpg",
+      },
+    ]);
+  }) as typeof fetch;
   try {
     for (const args of [
       { tags: "pigeon", rating: "explicit" },
       { tags: "pigeon rating:e" },
     ]) {
       const result = JSON.parse((await execute(args)) as string);
+      strictEqual(result.tags, "");
+      strictEqual(result.posts[0].tags, "");
+      strictEqual(result.posts[0].rating, "g");
+      strictEqual(result.posts[0].copyright, "");
+      strictEqual(result.posts[0].artist, "artist_name");
+      strictEqual(result.posts[0].image_url, "https://cdn.test/pigeon.jpg");
+      strictEqual(
+        result.posts[0].source_url,
+        "https://danbooru.donmai.us/posts/42",
+      );
       strictEqual(result.skip_image_inspection, true);
       strictEqual(
         result.instructions.includes(
@@ -299,6 +323,22 @@ Deno.test("explicit Danbooru results instruct direct sending without inspection"
     postRating = "e";
     const result = JSON.parse((await execute({ tags: "pigeon" })) as string);
     strictEqual(result.skip_image_inspection, true);
+    strictEqual(result.posts[0].tags, "");
+    strictEqual(result.posts[0].rating, "g");
+    strictEqual(result.posts[0].copyright, "");
+    deepStrictEqual(queries, [
+      "pigeon rating:explicit order:score",
+      "pigeon rating:e order:score",
+      "pigeon order:score",
+    ]);
+    postRating = "s";
+    const normal = JSON.parse(
+      (await execute({ tags: "pigeon", rating: "s" })) as string,
+    );
+    strictEqual(normal.tags, "pigeon rating:s order:score");
+    strictEqual(normal.posts[0].tags, "pigeon solo");
+    strictEqual(normal.posts[0].rating, "s");
+    strictEqual(normal.posts[0].copyright, "series_name");
   } finally {
     globalThis.fetch = originalFetch;
   }

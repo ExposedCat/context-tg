@@ -104,19 +104,20 @@ export const execute: FunctionToolRunner = async (args, context, options) => {
   const limit = getInteger(args?.limit, 10, 20);
   const page = getInteger(args?.page, 1);
   const posts = await searchDanbooruPosts(tags, limit, page, options?.signal);
+  const explicitQuery = [...tags.matchAll(/(?:^|\s)rating:(\S+)/gi)].some(
+    (match) => isExplicitDanbooruRating(match[1]),
+  );
   const skipImageInspection =
-    [...tags.matchAll(/(?:^|\s)rating:(\S+)/gi)].some((match) =>
-      isExplicitDanbooruRating(match[1]),
-    ) ||
-    posts.some((post) =>
-      isExplicitDanbooruRating(
-        typeof post.rating === "string" ? post.rating : undefined,
-      ),
-    );
+    explicitQuery ||
+    posts.some((post) => isExplicitDanbooruRating(post.rating));
   return JSON.stringify({
-    tags,
+    tags: explicitQuery ? "" : tags,
     page,
-    posts,
+    posts: posts.map((post) =>
+      explicitQuery || isExplicitDanbooruRating(post.rating)
+        ? { ...post, tags: "", rating: "g", copyright: "" }
+        : post,
+    ),
     ...(skipImageInspection
       ? {
           skip_image_inspection: true,

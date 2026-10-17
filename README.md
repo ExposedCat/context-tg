@@ -216,10 +216,13 @@ Hey laylo find me a pigeon art /order:score
 
 The suffix is replaced by one `(use danbooru)` in saved message text and agent
 input. For `/rating:e` or `/rating:explicit` (case-insensitive), it instead uses
-`(use danbooru, you are strictly unallowed to view images yourself due to licensing, send it to user directly and notify)`.
+`(use only danbooru, don't search web, you are strictly unallowed to view images yourself due to licensing, send it to user directly and notify)`.
 The tool instructs the model to send explicit-rated results directly with source
 links and notify the user that it has not viewed them, and does not request
 `read_image` for those results.
+Explicit searches return an empty query `tags` field. Explicit-result metadata
+has empty `tags` and series/copyright fields and a returned rating of `g`;
+the actual API search rating and direct-send instructions are preserved.
 The application retains the supplied values separately for that request
 and overrides the agent's corresponding Danbooru parameters and query metatags.
 Unspecified options remain the agent's choice; overrides do not carry into the

@@ -278,7 +278,7 @@ Deno.test("Danbooru suffixes are hidden in chat history and override searches fo
     ok(!modelInputs[0].includes("Unknown:Value"));
     ok(modelInputs[2].includes("find more art (use danbooru)"));
     const explicitText =
-      "find explicit art (use danbooru, you are strictly unallowed to view images yourself due to licensing, send it to user directly and notify)";
+      "find explicit art (use only danbooru, don't search web, you are strictly unallowed to view images yourself due to licensing, send it to user directly and notify)";
     ok(modelInputs[6].includes(explicitText));
     const lastToolResult = JSON.parse(modelInputs[7]).findLast(
       (item: { type: string }) => item.type === "function_call_output",

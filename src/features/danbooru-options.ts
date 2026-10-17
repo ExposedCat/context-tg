@@ -3,12 +3,12 @@ export type DanbooruOverrides = {
   order?: string;
 };
 
-export function isExplicitDanbooruRating(rating: string | undefined): boolean {
-  return /^(?:e|explicit)$/i.test(rating ?? "");
+export function isExplicitDanbooruRating(rating: unknown): boolean {
+  return typeof rating === "string" && /^(?:e|explicit)$/i.test(rating);
 }
 
 const EXPLICIT_DANBOORU_HINT =
-  "(use danbooru, you are strictly unallowed to view images yourself due to licensing, send it to user directly and notify)";
+  "(use only danbooru, don't search web, you are strictly unallowed to view images yourself due to licensing, send it to user directly and notify)";
 
 /** Only a contiguous suffix of options belongs to this request. */
 export function parseDanbooruOptions(text: string): {
