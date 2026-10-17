@@ -1,3 +1,4 @@
+import { createDebug } from "@grammyjs/debug";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type OpenAI from "@openai/openai";
@@ -5,6 +6,8 @@ import type { Database } from "./database.ts";
 import { APP_ENV } from "./env.ts";
 import type { FunctionToolRunner } from "./llm-tools/types.ts";
 import { getFinanceMcpEnabled } from "./user-settings.ts";
+
+const logError = createDebug("app:finance-mcp:error");
 
 export type FinanceToolName = `finance_${string}`;
 export type FinanceMcpTools = {
@@ -105,7 +108,13 @@ export async function connectFinanceMcp(
       close: () => client.close(),
     };
   } catch (error) {
-    await client.close();
-    throw error;
+    await client.close().catch((closeError: unknown) => {
+      logError("Failed to close unavailable Finance MCP client", {
+        error: closeError,
+      });
+    });
+    signal?.throwIfAborted();
+    logError("Finance MCP is unavailable; omitting finance tools", { error });
+    return undefined;
   }
 }

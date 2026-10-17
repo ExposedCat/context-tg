@@ -1,4 +1,4 @@
-import { deepStrictEqual, ok, strictEqual } from "node:assert";
+import { deepStrictEqual, ok, rejects, strictEqual } from "node:assert";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import {
@@ -85,11 +85,13 @@ Deno.test("Finance MCP opt-in discovers reports, binds user identity and persist
   const { requestLlm } = await import("./llm.ts");
   const { setLlmDeploymentName } = await import("./llm-deployments.ts");
   const { setFinanceMcpEnabled } = await import("./user-settings.ts");
+  const { connectFinanceMcp } = await import("./finance-mcp.ts");
   const database = await initDatabase()();
   const originalFetch = globalThis.fetch;
   const requests: Array<Record<string, unknown>> = [];
   let callFinance = false;
   let disableDuringCall = false;
+  let financeFailure: "dns" | "discovery" | undefined;
   const answer = {
     type: "message",
     id: "msg",
@@ -98,8 +100,18 @@ Deno.test("Finance MCP opt-in discovers reports, binds user identity and persist
     content: [{ type: "output_text", text: "Done.", annotations: [] }],
   };
   globalThis.fetch = (async (input, init) => {
-    if (!String(input).startsWith("https://llm.test/"))
+    if (!String(input).startsWith("https://llm.test/")) {
+      if (financeFailure === "dns")
+        throw new TypeError(
+          "failed to lookup address information: Name or service not known",
+        );
+      if (financeFailure === "discovery" && init?.body) {
+        const body = JSON.parse(String(init.body));
+        if (body.method === "tools/list" && body.params?.cursor)
+          return new Response("Finance MCP unavailable", { status: 503 });
+      }
       return await originalFetch(input, init);
+    }
     const body = JSON.parse(String(init?.body));
     requests.push(body);
     const output = callFinance
@@ -187,6 +199,30 @@ Deno.test("Finance MCP opt-in discovers reports, binds user identity and persist
       "Finance MCP tool is unavailable for this user.",
     );
     strictEqual(httpRequests, after);
+
+    await setFinanceMcpEnabled(database, 2, true);
+    for (const failure of ["dns", "discovery"] as const) {
+      financeFailure = failure;
+      const unavailable = await run(2);
+      strictEqual(unavailable.response, "Done.");
+      deepStrictEqual(unavailable.errors, []);
+      strictEqual(requests.at(-1)?.tools, undefined);
+      ok(!JSON.stringify(requests.at(-1)).includes("<finance_mcp>"));
+    }
+
+    const controller = new AbortController();
+    const cancellation = new Error("Request cancelled");
+    controller.abort(cancellation);
+    financeFailure = "dns";
+    await rejects(
+      connectFinanceMcp(database, 2, controller.signal),
+      (error) => error === cancellation,
+    );
+
+    // A later request discovers finance tools again once the server recovers.
+    financeFailure = undefined;
+    await run(2);
+    ok(Array.isArray(requests.at(-1)?.tools));
   } finally {
     globalThis.fetch = originalFetch;
     setLlmDeploymentName("small", "");

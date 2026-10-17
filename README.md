@@ -15,6 +15,8 @@ group. Open `/start` in Eyri first to create the account.
 
 Local development defaults to `http://127.0.0.1:8000/mcp`. Disabled users cause
 no MCP connection or discovery calls.
+If Eyri is unavailable or report discovery fails, the request continues without
+finance tools. Later requests try discovery again.
 
 For PM3 (Podman Compose), both projects' Compose files connect their app service
 to the external `finance-mcp` network. Context defaults to
