@@ -13,6 +13,7 @@ for (const [key, value] of Object.entries({
   EMBEDDING_MODEL: "test-embedding",
   QDRANT_URL: "https://qdrant.test",
   DANBOORU_USERNAME: "test-user",
+  DANBOORU_TOKEN: "",
   DANBOORU_API_KEY: "test-key",
 }))
   Deno.env.set(key, value);
@@ -153,5 +154,150 @@ Deno.test("Danbooru failures and cancellation propagate through the tool error p
     );
   } finally {
     globalThis.fetch = originalFetch;
+  }
+});
+
+Deno.test("Danbooru term-limit errors tell the agent to simplify without dropping overrides", async () => {
+  const originalFetch = globalThis.fetch;
+  let limit = 2;
+  globalThis.fetch = (async (input, init) => {
+    const url = new URL(new Request(input, init).url);
+    strictEqual(
+      url.searchParams.get("tags"),
+      "pigeon solo rating:Unknown order:score",
+    );
+    return Response.json(
+      {
+        success: false,
+        error: "PostQuery::TagLimitError",
+        message: `You cannot search for more than ${limit} tags at a time.`,
+      },
+      { status: 422 },
+    );
+  }) as typeof fetch;
+  try {
+    for (limit of [2, 6]) {
+      await rejects(
+        () =>
+          Promise.resolve(
+            execute(
+              { tags: "pigeon solo" },
+              {
+                chatId: 1,
+                messageId: 1,
+                danbooru: { rating: "Unknown", order: "score" },
+              },
+            ),
+          ),
+        (error: Error) => {
+          strictEqual(
+            error.message.includes(
+              `You cannot search for more than ${limit} tags at a time.`,
+            ),
+            true,
+          );
+          strictEqual(
+            error.message.includes(
+              "order: count toward the limit; rating: does not",
+            ),
+            true,
+          );
+          strictEqual(
+            error.message.includes("Keep the user's rating/order overrides"),
+            true,
+          );
+          return true;
+        },
+      );
+    }
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+Deno.test("Danbooru accepts long queries when the API permits them", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (input, init) => {
+    const url = new URL(new Request(input, init).url);
+    strictEqual(
+      url.searchParams.get("tags"),
+      "pigeon solo outdoors flying sky rating:g order:score",
+    );
+    return Response.json([]);
+  }) as typeof fetch;
+  try {
+    const result = await execute({
+      tags: "pigeon solo outdoors flying sky",
+      rating: "g",
+      order: "score",
+    });
+    deepStrictEqual(JSON.parse(result as string), {
+      tags: "pigeon solo outdoors flying sky rating:g order:score",
+      page: 1,
+      posts: [],
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+Deno.test("Danbooru startup auth supports token precedence, legacy keys, anonymous search and missing usernames", async () => {
+  const moduleUrl = new URL("../danbooru.ts", import.meta.url).href;
+  const script = `
+    const { searchDanbooruPosts } = await import(${JSON.stringify(moduleUrl)});
+    globalThis.fetch = async (input, init) => {
+      const url = new URL(input);
+      if (url.searchParams.has('api_key') || url.searchParams.has('login')) throw new Error('Credentials in URL');
+      console.log(JSON.stringify({ authorization: new Headers(init.headers).get('authorization') }));
+      return Response.json([]);
+    };
+    try { await searchDanbooruPosts('pigeon', 1, 1); }
+    catch (error) { console.log(JSON.stringify({ error: error.message })); }
+  `;
+  for (const fixture of [
+    {
+      username: "user",
+      token: "token",
+      key: "",
+      expected: { authorization: `Basic ${btoa("user:token")}` },
+    },
+    {
+      username: "user",
+      token: "token",
+      key: "legacy",
+      expected: { authorization: `Basic ${btoa("user:token")}` },
+    },
+    {
+      username: "user",
+      token: "",
+      key: "legacy",
+      expected: { authorization: `Basic ${btoa("user:legacy")}` },
+    },
+    { username: "", token: "", key: "", expected: { authorization: null } },
+    {
+      username: "",
+      token: "token",
+      key: "",
+      expected: {
+        error:
+          "Danbooru authentication requires DANBOORU_USERNAME and either DANBOORU_TOKEN or DANBOORU_API_KEY. Leave all unset for public searches.",
+      },
+    },
+  ]) {
+    const result = await new Deno.Command(Deno.execPath(), {
+      args: ["eval", script],
+      env: {
+        DANBOORU_USERNAME: fixture.username,
+        DANBOORU_TOKEN: fixture.token,
+        DANBOORU_API_KEY: fixture.key,
+      },
+      stdout: "piped",
+      stderr: "piped",
+    }).output();
+    strictEqual(result.code, 0, new TextDecoder().decode(result.stderr));
+    deepStrictEqual(
+      JSON.parse(new TextDecoder().decode(result.stdout)),
+      fixture.expected,
+    );
   }
 });

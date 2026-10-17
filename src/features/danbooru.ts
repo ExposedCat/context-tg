@@ -16,13 +16,14 @@ async function request(
     Accept: "application/json",
     "User-Agent": "context-tg (Danbooru search)",
   };
-  if (APP_ENV.DANBOORU_USERNAME || APP_ENV.DANBOORU_API_KEY) {
-    if (!APP_ENV.DANBOORU_USERNAME || !APP_ENV.DANBOORU_API_KEY) {
+  const apiKey = APP_ENV.DANBOORU_TOKEN ?? APP_ENV.DANBOORU_API_KEY;
+  if (APP_ENV.DANBOORU_USERNAME || apiKey) {
+    if (!APP_ENV.DANBOORU_USERNAME || !apiKey) {
       throw new Error(
-        "Set both DANBOORU_USERNAME and DANBOORU_API_KEY, or neither.",
+        "Danbooru authentication requires DANBOORU_USERNAME and either DANBOORU_TOKEN or DANBOORU_API_KEY. Leave all unset for public searches.",
       );
     }
-    headers.Authorization = `Basic ${btoa(`${APP_ENV.DANBOORU_USERNAME}:${APP_ENV.DANBOORU_API_KEY}`)}`;
+    headers.Authorization = `Basic ${btoa(`${APP_ENV.DANBOORU_USERNAME}:${apiKey}`)}`;
   }
   const timeout = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
   const response = await fetch(url, {
@@ -30,8 +31,27 @@ async function request(
     signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
   });
   if (!response.ok) {
+    const body = await response.text();
+    let error: { error?: string; message?: unknown } | null = null;
+    try {
+      error = JSON.parse(body);
+    } catch {
+      // Preserve the original response when the API returns a non-JSON error.
+    }
+    if (
+      response.status === 422 &&
+      error?.error === "PostQuery::TagLimitError"
+    ) {
+      const message =
+        typeof error.message === "string"
+          ? error.message
+          : "The query exceeds this account's search-term limit.";
+      throw new Error(
+        `Danbooru returned HTTP 422 (PostQuery::TagLimitError): ${message} Retry with fewer search terms. Tags, excluded tags, wildcards, and order: count toward the limit; rating: does not. Keep the user's rating/order overrides and simplify the other terms.`,
+      );
+    }
     throw new Error(
-      `Danbooru returned HTTP ${response.status}: ${(await response.text()).slice(0, 300)}`,
+      `Danbooru returned HTTP ${response.status}: ${body.slice(0, 300)}`,
     );
   }
   const payload: unknown = await response.json();

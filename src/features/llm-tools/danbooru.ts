@@ -6,14 +6,14 @@ export const toolDefinition = {
   type: "function",
   name: "search_danbooru",
   description:
-    "Search Danbooru for anime, manga, fan art, and other tagged illustrations. Use when the user asks for Danbooru or says '(use danbooru)'. Basic usage: tags='1boy solo', rating='g', order='score'. Tags are space-separated, multiword tags use underscores (blue_hair), and -tag excludes a tag. Prefer one or two focused tags; account search limits apply. Use search_danbooru_tags to discover exact tag names. Ratings: general (g), sensitive (s), questionable (q), explicit (e); order examples: score, rank, id, random. Omitted rating/order keep any metatags in tags, otherwise use Danbooru defaults. User-supplied suffix options are applied by the application and override your rating/order, including metatags in tags. Returns post URLs, direct image_url values, ratings, scores, and tags. Inspect a selected image with read_image before describing it; display images using ![](image_url) and link to source_url for attribution.",
+    "Search Danbooru for anime, manga, fan art, and other tagged illustrations. Use when the user asks for Danbooru or says '(use danbooru)'. Basic usage: tags='1boy', rating='g', order='score'. Tags are space-separated, multiword tags use underscores (blue_hair), and -tag excludes a tag. Use search_danbooru_tags to discover exact tag names. Ratings: general (g), sensitive (s), questionable (q), explicit (e); order examples: score, rank, id, random. Omitted rating/order keep any metatags in tags, otherwise use Danbooru defaults. User-supplied suffix options are applied by the application and override your rating/order, including metatags in tags. Returns post URLs, direct image_url values, ratings, scores, and tags. Inspect a selected image with read_image before describing it; display images using ![](image_url) and link to source_url for attribution.",
   parameters: {
     type: "object",
     properties: {
       tags: {
         type: "string",
         description:
-          "Danbooru tag query, e.g. 'pigeon' or '1boy solo'. Use tags rather than a natural-language sentence.",
+          "Danbooru tag query, e.g. 'pigeon'. Use tags rather than a natural-language sentence.",
       },
       rating: {
         type: "string",

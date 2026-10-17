@@ -65,6 +65,7 @@ export const APP_ENV = {
   EMBEDDING_MODEL: getRequiredEnv("EMBEDDING_MODEL"),
   SEARXNG_URL: getOptionalEnv("SEARXNG_URL") ?? "http://localhost:8080",
   DANBOORU_USERNAME: getOptionalEnv("DANBOORU_USERNAME"),
+  DANBOORU_TOKEN: getOptionalEnv("DANBOORU_TOKEN"),
   DANBOORU_API_KEY: getOptionalEnv("DANBOORU_API_KEY"),
   QDRANT_URL: getRequiredEnv("QDRANT_URL"),
   QDRANT_API_KEY: getOptionalEnv("QDRANT_API_KEY"),

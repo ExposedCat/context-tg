@@ -224,8 +224,16 @@ without validation. Danbooru documents ratings `g`, `s`, `q`, `e` and orders
 such as `score`, `rank`, `id`, and `random`; invalid values are left to the API.
 
 Public searches work without credentials, subject to Danbooru account and tag
-limits. Optionally set both `DANBOORU_USERNAME` and `DANBOORU_API_KEY` for
-authenticated searches. Credentials are sent only to the Danbooru API.
+limits. Query length is left to the API and the authenticated account's limits.
+If the API rejects a query for exceeding its term limit, the model receives the
+API's actual error message and guidance to simplify and retry while preserving
+the user's rating/order overrides.
+
+Optionally set `DANBOORU_USERNAME` and `DANBOORU_TOKEN` for authenticated
+searches. `DANBOORU_TOKEN` is the account's API key, used with the username
+through HTTP Basic authentication; Danbooru does not support token-only Bearer
+authentication. The existing `DANBOORU_API_KEY` remains supported as a fallback
+when `DANBOORU_TOKEN` is unset. Credentials are sent only to the Danbooru API.
 
 ## Response formatting
 
