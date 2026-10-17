@@ -1429,10 +1429,362 @@ Deno.test("media-group input includes the largest photo from every message", () 
       },
     ]),
     [
-      { fileId: "large-1", mimeType: "image/jpeg" },
-      { fileId: "large-2", mimeType: "image/jpeg" },
+      { fileId: "large-1", mimeType: "image/jpeg", mediaType: "photo" },
+      { fileId: "large-2", mimeType: "image/jpeg", mediaType: "photo" },
     ],
   );
+});
+
+Deno.test("rich-message images are collected recursively in block order", () => {
+  const photo = (id: string) => ({
+    type: "photo",
+    photo: [
+      { file_id: `${id}-small`, width: 100, height: 100 },
+      { file_id: id, width: 1200, height: 800 },
+    ],
+  });
+  deepStrictEqual(
+    getMessagesImageAttachments([
+      {
+        rich_message: {
+          blocks: [
+            photo("standalone"),
+            {
+              type: "slideshow",
+              blocks: [
+                photo("slide-1"),
+                {
+                  type: "collage",
+                  blocks: [photo("collage-1"), photo("collage-2")],
+                },
+                photo("slide-2"),
+              ],
+            },
+            {
+              type: "details",
+              blocks: [
+                { type: "list", items: [{ blocks: [photo("list-photo")] }] },
+              ],
+            },
+            {
+              type: "document",
+              document: { file_id: "png", mime_type: "image/png" },
+            },
+            {
+              type: "document",
+              document: { file_id: "webp", file_name: "image.webp" },
+            },
+            {
+              type: "document",
+              document: { file_id: "pdf", mime_type: "application/pdf" },
+            },
+            {
+              type: "video",
+              video: { file_id: "video", thumbnail: photo("thumb").photo[0] },
+            },
+            { type: "photo", photo: [null, {}, { file_id: 1 }] },
+            { type: "document", document: null },
+            null,
+          ],
+        },
+      },
+    ]),
+    [
+      ...[
+        "standalone",
+        "slide-1",
+        "collage-1",
+        "collage-2",
+        "slide-2",
+        "list-photo",
+      ].map((fileId) => ({
+        fileId,
+        mimeType: "image/jpeg",
+        mediaType: "photo",
+      })),
+      { fileId: "png", mimeType: "image/png", mediaType: "document" },
+      { fileId: "webp", mimeType: "image/webp", mediaType: "document" },
+    ],
+  );
+});
+
+Deno.test("normal and guest requests send every rich-message image to the model", async () => {
+  const { setLlmDeploymentName } = await import("./llm-deployments.ts");
+  const { saveThread } = await import("./threads.ts");
+  const originalFetch = globalThis.fetch;
+  const photo = (id: string) => ({
+    type: "photo" as const,
+    photo: [
+      {
+        file_id: `${id}-small`,
+        file_unique_id: `${id}-small`,
+        width: 10,
+        height: 10,
+      },
+      { file_id: id, file_unique_id: id, width: 1000, height: 1000 },
+    ],
+  });
+  const images = [
+    photo("standalone"),
+    {
+      type: "slideshow" as const,
+      blocks: [photo("slide-1"), photo("slide-2")],
+    },
+    {
+      type: "collage" as const,
+      blocks: [photo("collage-1"), photo("collage-2")],
+    },
+    {
+      type: "document" as const,
+      document: {
+        file_id: "png",
+        file_unique_id: "png",
+        mime_type: "image/png",
+      },
+    },
+  ];
+  const fileIds = [
+    "standalone",
+    "slide-1",
+    "slide-2",
+    "collage-1",
+    "collage-2",
+    "png",
+  ];
+  const bot = {
+    id: 42,
+    is_bot: true,
+    first_name: "Test",
+    username: "test_bot",
+  } as Context["me"];
+
+  try {
+    setLlmDeploymentName("small", "rich-image-test");
+    for (const guest of [false, true]) {
+      for (const source of [
+        "current",
+        "image-only",
+        "reply",
+        "quoted-reply",
+        "external-reply",
+        "thread-current",
+        "thread-reply",
+      ]) {
+        const database = await initDatabase()();
+        try {
+          const chat =
+            source === "image-only"
+              ? { id: 1, type: "private" as const, first_name: "User" }
+              : { id: -1, type: "supergroup" as const, title: "Test" };
+          const api = new Api("test");
+          api.config.use((_previous, method) =>
+            Promise.reject(
+              new Error(`Unexpected Telegram API call: ${method}`),
+            ),
+          );
+          let deliveries = 0;
+          api.sendRichMessage = async () => {
+            deliveries++;
+            return {
+              message_id: 100,
+              date: 0,
+              chat,
+              from: bot,
+              rich_message: { blocks: [] },
+            };
+          };
+          api.sendChatAction = async () => true;
+          const downloads: string[] = [];
+          api.getFile = async (id) => {
+            downloads.push(id);
+            return {
+              file_id: id,
+              file_unique_id: id,
+              file_path: `photos/${id}`,
+            };
+          };
+          const inputs: Array<
+            Array<{
+              content:
+                | string
+                | Array<{
+                    type: string;
+                    image_url?: string;
+                    text?: string;
+                  }>;
+            }>
+          > = [];
+          globalThis.fetch = (async (input, init) => {
+            const url = new URL(String(input));
+            if (url.hostname === "api.telegram.org") {
+              const id = url.pathname.split("/").at(-1);
+              ok(id && fileIds.includes(id));
+              return new Response(id, {
+                headers: {
+                  "content-type": id === "png" ? "image/png" : "image/jpeg",
+                },
+              });
+            }
+            strictEqual(url.href, `${TEST_ENV.LLM_BASE_URL}/responses`);
+            inputs.push(JSON.parse(String(init?.body)).input);
+            return Response.json({
+              id: `resp_rich_${guest}_${source}`,
+              object: "response",
+              status: "completed",
+              output: [
+                {
+                  type: "message",
+                  role: "assistant",
+                  status: "completed",
+                  content: [
+                    { type: "output_text", text: "Done.", annotations: [] },
+                  ],
+                },
+              ],
+            });
+          }) as typeof fetch;
+
+          const richMessage = {
+            blocks: [
+              ...(source === "image-only"
+                ? []
+                : [
+                    {
+                      type: "paragraph" as const,
+                      text: "laylo compare these images",
+                    },
+                  ]),
+              ...images,
+            ],
+          };
+          const isCurrent = [
+            "current",
+            "image-only",
+            "thread-current",
+          ].includes(source);
+          const reply = {
+            message_id: 1,
+            date: 0,
+            chat,
+            from: bot,
+            reply_to_message: undefined,
+            ...(isCurrent
+              ? { text: "Earlier response" }
+              : { rich_message: richMessage }),
+          };
+          if (source.startsWith("thread-")) {
+            await saveThread(database, {
+              chat_id: chat.id,
+              message_id: 1,
+              thread_id: 1,
+              response_id: "resp_rich_previous",
+              agent_id: guest ? "guest" : "normal",
+            });
+          }
+          const message = {
+            message_id: 10,
+            date: 10,
+            from: { id: 1, is_bot: false, first_name: "User" },
+            chat,
+            ...(isCurrent
+              ? { rich_message: richMessage }
+              : { text: "laylo compare these images" }),
+            ...(source === "external-reply"
+              ? {
+                  external_reply: {
+                    origin: {
+                      type: "hidden_user" as const,
+                      sender_user_name: "Someone",
+                      date: 0,
+                    },
+                    rich_message: richMessage,
+                  },
+                }
+              : {}),
+            ...([
+              "reply",
+              "quoted-reply",
+              "thread-current",
+              "thread-reply",
+            ].includes(source)
+              ? { reply_to_message: reply }
+              : {}),
+            ...(source === "quoted-reply"
+              ? { quote: { text: "compare", entities: [], position: 0 } }
+              : {}),
+          };
+          const ctx = new GrammyContext(
+            {
+              update_id: 1,
+              ...(guest ? { guest_message: message } : { message }),
+            },
+            api,
+            bot,
+          ) as Context;
+          ctx.database = database;
+          ctx.telemetry = { event: () => {} } as Context["telemetry"];
+          ctx.answerGuestQuery = async () => {
+            deliveries++;
+            return { inline_message_id: "test" };
+          };
+          await chatComposer.middleware()(ctx, () => {
+            throw new Error(
+              `Rich message should be handled: ${guest}/${source}`,
+            );
+          });
+          strictEqual(inputs.length, 1, `${guest}/${source}`);
+          deepStrictEqual(downloads, fileIds, `${guest}/${source}`);
+          const content = inputs[0].flatMap((item) =>
+            typeof item.content === "string"
+              ? [{ type: "input_text", text: item.content }]
+              : item.content,
+          );
+          deepStrictEqual(
+            content
+              .filter((item) => item.type === "input_image")
+              .map((item) => item.image_url),
+            fileIds.map(
+              (id) =>
+                `data:image/${id === "png" ? "png" : "jpeg"};base64,${btoa(id)}`,
+            ),
+          );
+          strictEqual(deliveries, 1);
+          const text = content
+            .filter((item) => item.type === "input_text")
+            .map((item) => item.text)
+            .join("\n");
+          ok(
+            text.includes(
+              source === "image-only"
+                ? "Please respond to the attached image."
+                : "compare these images",
+            ),
+            `${guest}/${source}: ${text}`,
+          );
+          strictEqual(
+            (text.match(/!\[\]\(tg:\/\/(photo|document)\?id=/g) ?? []).length,
+            fileIds.length,
+          );
+          const stored = await database
+            .selectFrom("images")
+            .select(["file_id", "media_type"])
+            .execute();
+          deepStrictEqual(
+            stored,
+            fileIds.map((file_id) => ({
+              file_id,
+              media_type: file_id === "png" ? "document" : "photo",
+            })),
+          );
+        } finally {
+          await database.destroy();
+        }
+      }
+    }
+  } finally {
+    globalThis.fetch = originalFetch;
+    setLlmDeploymentName("small", "");
+  }
 });
 
 Deno.test("unavailable rich-message photos are retried without user diagnostics", () => {

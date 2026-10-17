@@ -25,6 +25,7 @@ import {
   downloadTelegramImageDataUrl,
   formatImageMarkdown,
   resolveRichMessageImageMedia,
+  type SavedImageMediaType,
   saveImageFileId,
   stripRichMessageImages,
 } from "./images.ts";
@@ -218,6 +219,7 @@ type TelegramRichMessage = {
 type TelegramImageAttachment = {
   fileId: string;
   mimeType?: string;
+  mediaType: SavedImageMediaType;
 };
 
 type LlmRequestSourceMessage = {
@@ -289,7 +291,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function getMessageText(message: LlmContextMessage): string | undefined {
-  const text = message.text ?? message.caption;
+  const text =
+    message.text ?? message.caption ?? getRichMessageText(message.rich_message);
   return text === undefined ? undefined : parseDanbooruOptions(text).text;
 }
 
@@ -440,9 +443,7 @@ function buildLlmMessageText(message: LlmContextMessage, text: string): string {
 function getLlmContextText(
   message: LlmContextMessage | undefined,
 ): string | undefined {
-  const text =
-    message &&
-    (getMessageText(message) ?? getRichMessageText(message.rich_message));
+  const text = message && getMessageText(message);
   return message && text && !startsWithCommandPrefix(text)
     ? buildLlmMessageText(message, text)
     : undefined;
@@ -537,23 +538,13 @@ async function getMessageImageMarkdown(
   database: Database,
   message: LlmContextMessage | undefined,
 ): Promise<string | undefined> {
-  const photo = getLargestPhoto(message?.photo);
-
-  if (photo) {
-    const image = await saveImageFileId(database, photo.file_id, "photo");
-    return formatImageMarkdown(image.id, image.media_type);
-  }
-
-  if (message?.document && isImageDocument(message.document)) {
-    const image = await saveImageFileId(
-      database,
-      message.document.file_id,
-      "document",
-    );
-    return formatImageMarkdown(image.id, image.media_type);
-  }
-
-  return undefined;
+  const markdown = await Promise.all(
+    getMessageImageAttachments(message).map(async ({ fileId, mediaType }) => {
+      const image = await saveImageFileId(database, fileId, mediaType);
+      return formatImageMarkdown(image.id, image.media_type);
+    }),
+  );
+  return joinTextParts(markdown, "\n");
 }
 
 async function getMessagesImageMarkdown(
@@ -596,6 +587,56 @@ function isImageDocument(document: TelegramDocument): boolean {
   );
 }
 
+function getRichBlocksImageAttachments(
+  blocks: unknown[],
+): TelegramImageAttachment[] {
+  return blocks.flatMap((block): TelegramImageAttachment[] => {
+    if (!isRecord(block)) {
+      return [];
+    }
+
+    const attachments: TelegramImageAttachment[] = [];
+    if (block.type === "photo" && Array.isArray(block.photo)) {
+      const photos = block.photo.filter(
+        (photo): photo is PhotoSize =>
+          isRecord(photo) &&
+          typeof photo.file_id === "string" &&
+          typeof photo.width === "number" &&
+          typeof photo.height === "number",
+      );
+      attachments.push(...getMessageImageAttachments({ photo: photos }));
+    }
+    if (
+      block.type === "document" &&
+      isRecord(block.document) &&
+      typeof block.document.file_id === "string"
+    ) {
+      attachments.push(
+        ...getMessageImageAttachments({
+          document: {
+            file_id: block.document.file_id,
+            mime_type:
+              typeof block.document.mime_type === "string"
+                ? block.document.mime_type
+                : undefined,
+            file_name:
+              typeof block.document.file_name === "string"
+                ? block.document.file_name
+                : undefined,
+          },
+        }),
+      );
+    }
+    if (Array.isArray(block.blocks)) {
+      attachments.push(...getRichBlocksImageAttachments(block.blocks));
+    }
+    if (Array.isArray(block.items)) {
+      attachments.push(...getRichBlocksImageAttachments(block.items));
+    }
+    return attachments;
+  });
+}
+
 function getMessageImageAttachments(
   message: LlmContextMessage | undefined,
 ): TelegramImageAttachment[] {
@@ -607,16 +648,27 @@ function getMessageImageAttachments(
   const photo = getLargestPhoto(message.photo);
 
   if (photo) {
-    attachments.push({ fileId: photo.file_id, mimeType: "image/jpeg" });
+    attachments.push({
+      fileId: photo.file_id,
+      mimeType: "image/jpeg",
+      mediaType: "photo",
+    });
   }
 
   if (message.document && isImageDocument(message.document)) {
     attachments.push({
       fileId: message.document.file_id,
+      mediaType: "document",
       mimeType:
         message.document.mime_type ??
         getImageMimeTypeFromFilename(message.document.file_name),
     });
+  }
+
+  if (Array.isArray(message.rich_message?.blocks)) {
+    attachments.push(
+      ...getRichBlocksImageAttachments(message.rich_message.blocks),
+    );
   }
 
   return attachments;
@@ -823,8 +875,12 @@ async function buildRootRequestMessages(
   );
   const quoteText = getQuoteReplyContextText(message);
   const replyMessageText =
-    replyContext && !quoteText
-      ? await formatRegularLlmMessage(database, replyContext)
+    replyContext && (!quoteText || hasImageAttachments(replyContext))
+      ? await formatRegularLlmMessage(
+          database,
+          replyContext,
+          quoteText ? "" : undefined,
+        )
       : undefined;
 
   if (replyMessageText) {
@@ -837,20 +893,30 @@ async function buildRootRequestMessages(
   return [{ text: currentMessageText, message, imageMessages }];
 }
 
-async function buildThreadRequest(
+async function buildThreadRequestMessages(
   database: Database,
   message: TextMessage,
   text: string,
   replyContext: LlmContextMessage | undefined,
   imageMessages: LlmContextMessage[] = [message],
-): Promise<string> {
-  return await formatCurrentLlmMessage(
+): Promise<LlmRequestSourceMessage[]> {
+  const currentMessageText = await formatCurrentLlmMessage(
     database,
     message,
     text,
     replyContext,
     imageMessages,
   );
+  const replyMessageText = hasImageAttachments(replyContext)
+    ? await formatRegularLlmMessage(database, replyContext, "")
+    : undefined;
+
+  return [
+    ...(replyMessageText
+      ? [{ text: replyMessageText, message: replyContext }]
+      : []),
+    { text: currentMessageText, message, imageMessages },
+  ];
 }
 
 function getLlmToolContext(
@@ -2315,18 +2381,16 @@ async function handleChatRequest(
           };
 
           if (responseId) {
-            const request = await buildLlmRequestInput(
+            const request = await buildLlmRequestInputs(
               ctx,
-              await buildThreadRequest(
+              await buildThreadRequestMessages(
                 ctx.database,
                 message,
                 text,
                 replyContext,
                 options.imageMessages,
               ),
-              message,
               taskAbortController.signal,
-              options.imageMessages,
             );
 
             return await requestLlm(
@@ -2693,18 +2757,15 @@ async function handleGuestChatRequest(
     const agentTools = guestAgent.tools;
     const toolContext = getLlmToolContext(chatId, message);
     const request = responseId
-      ? await buildLlmRequestInput(
+      ? await buildLlmRequestInputs(
           ctx,
-          await buildThreadRequest(
+          await buildThreadRequestMessages(
             ctx.database,
             message,
             text,
             replyContext,
             imageMessages,
           ),
-          message,
-          undefined,
-          imageMessages,
         )
       : await buildLlmRequestInputs(
           ctx,

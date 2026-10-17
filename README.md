@@ -269,6 +269,12 @@ their existing `file_id` and use persistent `tg://photo` or `tg://document`
 references in live context and newly indexed message-search results. Telegram
 album membership is retained as `media_group_id` in prompt and search metadata.
 
+Incoming rich messages also pass every photo and image document to the model,
+including images nested in slideshows, collages, lists, quotations, and details.
+Each photo uses its largest available size. Normal and guest requests include
+these images from the current message and reply context, including quoted
+replies and thread continuations, and register persistent references for reuse.
+
 Agents receive `![](tg://photo?id=IMAGE_ID)` from the image generation tool and
 can place those references anywhere in rich Markdown, including collages and
 slideshows. Before sending, the bot resolves every referenced ID from SQLite
