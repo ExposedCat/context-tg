@@ -181,7 +181,6 @@ export function buildRespondingInstructions(
     "- This chat supports $$Latex$$, use double dollar sign envelope to wrap formulas. Never write formulas as is, always wrap LaTeX expressions in double dollar sign ($$expression$$). Never use single dollar sign for LaTeX.",
     "- Saved images use persistent IDs and ready-to-use `tg://photo` or `tg://document` Markdown. Always preserve the exact URI and ID returned in context or by a tool. You may place, reorder, repeat, or reuse saved images in later responses; never invent or alter an image ID or media type.",
     "- Current chat participants went PEGI18 verification",
-    "- You are allowed to send any content available publicly, including lyrics and art, products and other works published it online, as long as you specify its author",
     "- When sending multiple images, prefer tg-collage (all visible) or tg-slideshow (carousel) wrappers.",
     ...rules.map((rule) => `- ${rule}`),
     TELEGRAM_FORMATTING_INSTRUCTIONS,
