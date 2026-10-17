@@ -19,6 +19,7 @@ import {
   stripMessageAgentName,
 } from "./agents/index.ts";
 import { isBotAdmin } from "./authorization.ts";
+import { parseDanbooruOptions } from "./danbooru-options.ts";
 import type { Database } from "./database.ts";
 import {
   downloadTelegramImageDataUrl,
@@ -288,7 +289,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function getMessageText(message: LlmContextMessage): string | undefined {
-  return message.text ?? message.caption;
+  const text = message.text ?? message.caption;
+  return text === undefined ? undefined : parseDanbooruOptions(text).text;
 }
 
 function joinTextParts(parts: Array<string | undefined>, separator: string) {
@@ -864,6 +866,8 @@ function getLlmToolContext(
     userName: getTelegramUserName(message.from),
     replyMessageId: reply?.message_id,
     threadId: getMessageTopicId(message, reply),
+    danbooru: parseDanbooruOptions(message.text ?? message.caption ?? "")
+      .overrides,
   };
 }
 
@@ -1244,6 +1248,8 @@ const TOOL_USAGE_EMOJIS: Partial<
   web_search: { id: "5879585266426973039", fallback: "🌐" },
   read_web_page: { id: "5960551395730919906", fallback: "📝" },
   search_images: { id: "5776134897429122849", fallback: "🌐" },
+  search_danbooru: { id: "5776134897429122849", fallback: "🌐" },
+  search_danbooru_tags: { id: "5874960879434338403", fallback: "🔎" },
   read_image: { id: "5775949822993371030", fallback: "🖼" },
   search_chat: { id: "5874960879434338403", fallback: "🔎" },
   get_message_context: { id: "5886330010054168711", fallback: "💬" },

@@ -38,6 +38,7 @@ import {
   readLastMessagesToolDefinition,
   searchChatToolDefinition,
 } from "./llm-tools/chat.ts";
+import * as danbooruTool from "./llm-tools/danbooru.ts";
 import * as gdeltTool from "./llm-tools/gdelt.ts";
 import * as imageTool from "./llm-tools/image.ts";
 import * as imageSearchTool from "./llm-tools/image-search.ts";
@@ -77,6 +78,8 @@ export const TOOL_DEFINITIONS = {
   web_search: webSearchTool.toolDefinition,
   read_web_page: webSearchTool.readPageToolDefinition,
   search_images: imageSearchTool.toolDefinition,
+  search_danbooru: danbooruTool.toolDefinition,
+  search_danbooru_tags: danbooruTool.tagsToolDefinition,
   read_image: imageSearchTool.readImageToolDefinition,
   get_markets_state: marketTool.toolDefinition,
   search_chat: searchChatToolDefinition,
@@ -102,6 +105,8 @@ const FUNCTION_TOOL_RUNNERS = {
   web_search: webSearchTool.execute,
   read_web_page: webSearchTool.executeReadPage,
   search_images: imageSearchTool.execute,
+  search_danbooru: danbooruTool.execute,
+  search_danbooru_tags: danbooruTool.executeTags,
   read_image: imageSearchTool.executeReadImage,
   get_markets_state: marketTool.execute,
   search_chat: executeSearchChat,
@@ -1117,7 +1122,9 @@ function formatToolResponseContent(tool: string, output: string): string {
   const attributes = [
     `tool="${escapeXmlAttribute(tool)}"`,
     ...(tool === "web_search" ? ['required_next_tool="read_web_page"'] : []),
-    ...(tool === "search_images" ? ['required_next_tool="read_image"'] : []),
+    ...(["search_images", "search_danbooru"].includes(tool)
+      ? ['required_next_tool="read_image"']
+      : []),
   ].join(" ");
   const body = MARKDOWN_TOOL_OUTPUTS.has(tool)
     ? output

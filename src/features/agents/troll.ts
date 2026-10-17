@@ -22,6 +22,8 @@ export const tools = [
   "get_message_context",
   "read_last_messages",
   "read_image",
+  "search_danbooru",
+  "search_danbooru_tags",
   "generate_image",
   "set_reply_message_id",
 ] satisfies ToolName[];

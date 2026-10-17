@@ -2,6 +2,7 @@ import { createDebug } from "@grammyjs/debug";
 import OpenAI from "@openai/openai";
 import { Composer } from "grammy";
 import type { Context } from "../bot.ts";
+import { parseDanbooruOptions } from "./danbooru-options.ts";
 import type { Database } from "./database.ts";
 import { APP_ENV } from "./env.ts";
 import { formatImageMarkdown, saveImageFileId } from "./images.ts";
@@ -479,7 +480,8 @@ function getForwardedFromName(message: RememberedMessage): string | undefined {
 }
 
 function getMessageText(message: RememberedMessage): string | undefined {
-  return message.text ?? message.caption;
+  const text = message.text ?? message.caption;
+  return text === undefined ? undefined : parseDanbooruOptions(text).text;
 }
 
 function isImageDocument(

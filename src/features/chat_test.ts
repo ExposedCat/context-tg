@@ -143,6 +143,176 @@ Deno.test("raw model newlines survive chat delivery and Telegram HTTP serializat
   }
 });
 
+Deno.test("Danbooru suffixes are hidden in chat history and override searches for only the current message", async () => {
+  const { setLlmDeploymentName } = await import("./llm-deployments.ts");
+  const database = await initDatabase()();
+  const originalFetch = globalThis.fetch;
+  const chat = { id: 1, type: "private", first_name: "User" } as const;
+  const bot = {
+    id: 42,
+    is_bot: true,
+    first_name: "Test",
+    username: "test_bot",
+  } as Context["me"];
+  const searches: string[] = [];
+  const modelInputs: string[] = [];
+  let modelCalls = 0;
+  let sent = 0;
+  const api = new Api("test", {
+    fetch: async (url: string | URL | Request) => {
+      if (String(url).endsWith("/sendRichMessage")) {
+        sent++;
+        return Response.json({
+          ok: true,
+          result: {
+            message_id: 100 + sent,
+            date: 0,
+            chat,
+            from: bot,
+            rich_message: { blocks: [{ type: "paragraph", text: "Found it" }] },
+          },
+        });
+      }
+      ok(String(url).endsWith("/sendChatAction"));
+      return Response.json({ ok: true, result: true });
+    },
+  });
+  globalThis.fetch = (async (input, init) => {
+    const request = new Request(input, init);
+    const url = new URL(request.url);
+    if (url.hostname === "danbooru.donmai.us") {
+      searches.push(url.searchParams.get("tags") ?? "");
+      return Response.json([]);
+    }
+    strictEqual(url.href, `${TEST_ENV.LLM_BASE_URL}/responses`);
+    const body = await request.json();
+    modelInputs.push(JSON.stringify(body.input));
+    ok(
+      body.tools.some(
+        (tool: { name: string }) => tool.name === "search_danbooru",
+      ),
+    );
+    ok(
+      body.tools.some(
+        (tool: { name: string }) => tool.name === "search_danbooru_tags",
+      ),
+    );
+    modelCalls++;
+    const output =
+      modelCalls % 2 === 1
+        ? [
+            {
+              id: `fc_danbooru_${modelCalls}`,
+              type: "function_call",
+              call_id: `call_danbooru_${modelCalls}`,
+              name: "search_danbooru",
+              arguments: JSON.stringify({
+                tags: "pigeon rating:e order:random",
+                rating: "q",
+                order: "id",
+              }),
+              status: "completed",
+            },
+          ]
+        : [
+            {
+              id: `msg_danbooru_${modelCalls}`,
+              type: "message",
+              role: "assistant",
+              status: "completed",
+              content: [
+                { type: "output_text", text: "Found it", annotations: [] },
+              ],
+            },
+          ];
+    return Response.json({
+      id: `resp_danbooru_${modelCalls}`,
+      object: "response",
+      created_at: 1,
+      status: "completed",
+      output,
+    });
+  }) as typeof fetch;
+
+  try {
+    setLlmDeploymentName("small", "test-model");
+    const cases = [
+      { text: "find pigeon art /rating:Unknown:Value /order:score" },
+      { caption: "find more art /order:rank", video: {} },
+      { text: "find another pigeon" },
+    ];
+    for (const [index, fixture] of cases.entries()) {
+      const ctx = new GrammyContext(
+        {
+          update_id: index + 1,
+          message: {
+            message_id: index + 1,
+            date: 0,
+            from: { id: 1, is_bot: false, first_name: "User" },
+            chat,
+            ...fixture,
+          },
+        } as ConstructorParameters<typeof GrammyContext>[0],
+        api,
+        bot,
+      ) as Context;
+      ctx.database = database;
+      ctx.telemetry = { event: () => {} } as Context["telemetry"];
+      await chatComposer.middleware()(ctx, () => {
+        throw new Error("Private request should be handled");
+      });
+      strictEqual(sent, index + 1);
+    }
+    deepStrictEqual(searches, [
+      "pigeon rating:Unknown:Value order:score",
+      "pigeon rating:q order:rank",
+      "pigeon rating:q order:id",
+    ]);
+    ok(modelInputs[0].includes("find pigeon art (use danbooru)"));
+    ok(!modelInputs[0].includes("Unknown:Value"));
+    ok(modelInputs[2].includes("find more art (use danbooru)"));
+    for (const input of modelInputs) {
+      ok(!input.includes("/rating:"));
+      ok(!input.includes("/order:"));
+    }
+    const history = await database
+      .selectFrom("llm_chat_responses")
+      .select("messages")
+      .execute();
+    ok(
+      history.some((row) =>
+        row.messages.includes("find pigeon art (use danbooru)"),
+      ),
+    );
+    ok(
+      history.some((row) =>
+        row.messages.includes("find more art (use danbooru)"),
+      ),
+    );
+    for (const row of history) {
+      ok(!row.messages.includes("/rating:"));
+      ok(!row.messages.includes("/order:"));
+    }
+    const tasks = await database
+      .selectFrom("tasks")
+      .select("task_text")
+      .orderBy("message_id")
+      .execute();
+    deepStrictEqual(
+      tasks.map((task) => task.task_text),
+      [
+        "find pigeon art (use danbooru)",
+        "find more art (use danbooru)",
+        "find another pigeon",
+      ],
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+    setLlmDeploymentName("small", "");
+    await database.destroy();
+  }
+});
+
 Deno.test("messages dropped for missing mentions still emit analytics once", async () => {
   const ctx = new GrammyContext(
     {

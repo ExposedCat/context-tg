@@ -196,6 +196,37 @@ the vision model. `read_image` also accepts a saved image ID from a
 URLs can be inserted into a response with `![](URL)` or
 `![](URL "caption")`.
 
+## Danbooru search
+
+All conversation agents have `search_danbooru` for illustration searches and
+`search_danbooru_tags` for discovering tag names. Use space-separated tags with
+underscores for multiword names, for example `1boy solo` or `blue_hair`;
+`-tag` excludes a tag and `*pigeon*` looks up matching tag names. Post search
+returns direct image URLs for `read_image` and Markdown image display, plus
+post links, ratings, scores, and tags. Results default to 10, with a maximum
+of 20 per call and page-based pagination.
+
+Add `/rating:VALUE`, `/order:VALUE`, or both at the end of a message or image
+caption, in either order:
+
+```text
+Hey laylo find me anime boy /rating:s /order:score
+Hey laylo find me a pigeon art /order:score
+```
+
+The suffix is replaced by one `(use danbooru)` in saved message text and agent
+input. The application retains the supplied values separately for that request
+and overrides the agent's corresponding Danbooru parameters and query metatags.
+Unspecified options remain the agent's choice; overrides do not carry into the
+next message. Options inside the message body are ordinary text, and the last
+occurrence of a repeated suffix option wins. Values are passed through unchanged
+without validation. Danbooru documents ratings `g`, `s`, `q`, `e` and orders
+such as `score`, `rank`, `id`, and `random`; invalid values are left to the API.
+
+Public searches work without credentials, subject to Danbooru account and tag
+limits. Optionally set both `DANBOORU_USERNAME` and `DANBOORU_API_KEY` for
+authenticated searches. Credentials are sent only to the Danbooru API.
+
 ## Response formatting
 
 Agents generate Telegram Rich Markdown, with real Markdown lists (`- item`),

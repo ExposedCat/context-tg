@@ -1,6 +1,7 @@
 import type OpenAI from "@openai/openai";
 import type { Api } from "grammy";
 import type { AgentId } from "../agents/index.ts";
+import type { DanbooruOverrides } from "../danbooru-options.ts";
 import type { Database } from "../database.ts";
 import type { CreditCharge } from "../usage.ts";
 
@@ -11,6 +12,7 @@ export type LlmToolContext = {
   userName?: string;
   replyMessageId?: number;
   threadId?: number;
+  danbooru?: DanbooruOverrides;
 };
 
 export type LlmImageInput = {

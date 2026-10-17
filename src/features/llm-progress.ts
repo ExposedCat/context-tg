@@ -14,6 +14,11 @@ const TOOL_PROGRESS_LABELS = {
   web_search: ["searched web", "searched web {count} times"],
   read_web_page: ["read webpage", "read {count} webpages"],
   search_images: ["searched images", "searched images {count} times"],
+  search_danbooru: ["searched Danbooru", "searched Danbooru {count} times"],
+  search_danbooru_tags: [
+    "looked up Danbooru tags",
+    "looked up Danbooru tags {count} times",
+  ],
   read_image: ["read image", "read {count} images"],
   search_chat: ["searched chat", "searched chat {count} times"],
   get_message_context: [

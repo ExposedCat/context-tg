@@ -72,6 +72,7 @@ Deno.test("slash commands are indexed and reindexed without triggering automatic
       entities?: MessageEntity[];
       caption_entities?: MessageEntity[];
       edited?: boolean;
+      expectedText?: string;
     }> = [
       { text: "/unknown laylo" },
       {
@@ -85,6 +86,19 @@ Deno.test("slash commands are indexed and reindexed without triggering automatic
       },
       { text: "/edited laylo", edited: true },
       { text: "Ordinary conversation" },
+      {
+        text: "laylo art /rating:Raw /order:score",
+        expectedText: "laylo art (use danbooru)",
+      },
+      {
+        caption: "pigeon art /order:rank",
+        expectedText: "pigeon art (use danbooru)",
+      },
+      {
+        text: "edited art /rating:g",
+        edited: true,
+        expectedText: "edited art (use danbooru)",
+      },
     ];
     let nextCalls = 0;
     for (const [index, entry] of cases.entries()) {
@@ -114,11 +128,13 @@ Deno.test("slash commands are indexed and reindexed without triggering automatic
         if (indexed.length === index + 1) break;
       }
       strictEqual(indexed.length, index + 1);
-      strictEqual(indexed[index].text, entry.text ?? entry.caption);
+      const expected = entry.expectedText ?? entry.text ?? entry.caption;
+      strictEqual(indexed[index].text, expected);
+      strictEqual(embedded[index], `User: ${expected}`);
     }
     strictEqual(nextCalls, cases.length);
     strictEqual(embedded.length, cases.length);
-    deepStrictEqual(triggered, [6]);
+    deepStrictEqual(triggered, [6, 7, 8]);
   } finally {
     globalThis.fetch = originalFetch;
     setIndexedTextMessageHandler(async () => {});

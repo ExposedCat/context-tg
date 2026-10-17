@@ -38,13 +38,14 @@ export const readImageToolDefinition = {
   type: "function",
   name: "read_image",
   description:
-    "Load one image into vision so you can inspect its actual visual content. Provide exactly one of url or id: the direct image_url returned by search_images or the exact saved image ID from a tg://photo or tg://document Markdown reference. Do not pass source_url or thumbnail_url.",
+    "Load one image into vision so you can inspect its actual visual content. Provide exactly one of url or id: the direct image_url returned by search_images or search_danbooru, or the exact saved image ID from a tg://photo or tg://document Markdown reference. Do not pass source_url or thumbnail_url.",
   parameters: {
     type: "object",
     properties: {
       url: {
         type: "string",
-        description: "The direct image_url returned by search_images.",
+        description:
+          "The direct image_url returned by search_images or search_danbooru.",
       },
       id: {
         type: "string",

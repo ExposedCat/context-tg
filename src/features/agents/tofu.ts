@@ -14,6 +14,8 @@ export const tools = [
   "web_search",
   "read_web_page",
   "search_images",
+  "search_danbooru",
+  "search_danbooru_tags",
   "read_image",
   "search_chat",
   "get_message_context",
