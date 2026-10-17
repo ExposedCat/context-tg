@@ -1612,11 +1612,14 @@ export function getAzureDownMessage(error: unknown):
   };
 }
 
-function formatModelFailureResponse(
+export function formatModelFailureResponse(
   error: unknown,
   resumeCommand: string | undefined,
+  tools: ToolName[] = [],
+  pendingProgress: LlmProgressSegment[] = [],
 ): string {
   const parts = [
+    ...pendingProgress.map((segment) => segment.text?.trim()).filter(Boolean),
     "Failed to generate response",
     formatHtmlBlockquote(getErrorDetails(error)),
   ];
@@ -1624,6 +1627,8 @@ function formatModelFailureResponse(
   if (resumeCommand) {
     parts.push(resumeCommand);
   }
+
+  parts.push(formatToolUsageMarkdown(tools, true));
 
   return parts.join("\n\n");
 }
@@ -2198,6 +2203,7 @@ async function handleChatRequest(
   let threadNaming: Promise<void> | undefined;
   let progressUpdates: ReturnType<typeof createProgressUpdates> | undefined;
   let pendingProgress: LlmProgressSegment[] = [];
+  const usedTools = new Set<ToolName>();
   const taskAbortController = createTaskAbortController(taskKey);
 
   try {
@@ -2297,6 +2303,9 @@ async function handleChatRequest(
             ),
             onProgress: async (progress) => {
               progressResponseId = progress.responseId ?? progressResponseId;
+              for (const segment of progress.segments ?? []) {
+                for (const tool of segment.tools) usedTools.add(tool);
+              }
               if (progress.segments)
                 progressUpdates?.add(splitProgressSegments(progress.segments));
             },
@@ -2497,32 +2506,36 @@ async function handleChatRequest(
     }
 
     const azureDownMessage = getAzureDownMessage(responseError);
-    const sentMessage = azureDownMessage
-      ? await ctx.reply(azureDownMessage.text, {
-          ...linkPreviewOptions,
-          ...getReplyDeliveryOptions(message, null),
-          entities: azureDownMessage.entities,
-        })
-      : await ctx.reply(
+    const sentMessages = azureDownMessage
+      ? [
+          await ctx.reply(azureDownMessage.text, {
+            ...linkPreviewOptions,
+            ...getReplyDeliveryOptions(message, null),
+            entities: azureDownMessage.entities,
+          }),
+        ]
+      : await sendRichMarkdownResponse(
+          ctx,
+          message,
           formatModelFailureResponse(
             responseError,
             resumable ? getResumeCommand(message.message_id) : undefined,
+            [...usedTools],
+            pendingProgress,
           ),
-          {
-            ...linkPreviewOptions,
-            ...getReplyDeliveryOptions(message, null),
-            parse_mode: "HTML",
-          },
+          null,
         );
-    await saveContinuationMessageThread(
-      ctx,
-      chatId,
-      sentMessage.message_id,
-      threadId,
-      activeAgent,
-      activeAgentName,
-      resumableResponseId,
-    );
+    for (const sentMessage of sentMessages) {
+      await saveContinuationMessageThread(
+        ctx,
+        chatId,
+        sentMessage.message_id,
+        threadId,
+        activeAgent,
+        activeAgentName,
+        resumableResponseId,
+      );
+    }
     await options.onUnhandledError?.();
   } finally {
     await progressUpdates?.stop();

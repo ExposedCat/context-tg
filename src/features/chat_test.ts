@@ -26,6 +26,7 @@ const [
     buildGuestRichMessage,
     chatComposer,
     formatLlmToolError,
+    formatModelFailureResponse,
     getAzureDownMessage,
     getErrorRecoveryPrompt,
     getMessagesImageAttachments,
@@ -1223,6 +1224,158 @@ Deno.test("guest usage commands report and adjust group credits without changing
       });
     }
   } finally {
+    await database.destroy();
+  }
+});
+
+Deno.test("model failures without activity preserve escaped diagnostics and resume commands", () => {
+  strictEqual(
+    formatModelFailureResponse(
+      new Error("status 400: blocked <image> & context"),
+      "/resume_1283340",
+    ),
+    [
+      "Failed to generate response",
+      "<blockquote>status 400: blocked &lt;image&gt; &amp; context</blockquote>",
+      "/resume_1283340",
+      "![⚠️](tg://emoji?id=5881702736843511327)",
+    ].join("\n\n"),
+  );
+});
+
+Deno.test("failed model follow-ups retain tools with progress enabled or disabled", async () => {
+  const { setLlmDeploymentName } = await import("./llm-deployments.ts");
+  const { persistChatProgressEnabled } = await import("./llm-models.ts");
+  const { getThread } = await import("./threads.ts");
+  const database = await initDatabase()();
+  const originalFetch = globalThis.fetch;
+  const chat = { id: -1, type: "supergroup", title: "Test" } as const;
+  const bot = {
+    id: 42,
+    is_bot: true,
+    first_name: "Test",
+    username: "test_bot",
+  } as Context["me"];
+  const api = new Api("test");
+  const sent: string[] = [];
+  let modelCalls = 0;
+  let sentMessageId = 100;
+  api.sendChatAction = async () => true;
+  api.sendRichMessage = async (_chatId, richMessage) => {
+    ok(typeof richMessage.markdown === "string");
+    sent.push(richMessage.markdown);
+    return {
+      message_id: ++sentMessageId,
+      date: 0,
+      chat,
+      from: bot,
+      rich_message: { blocks: [{ type: "paragraph", text: "Sent" }] },
+    };
+  };
+  globalThis.fetch = (async (input) => {
+    strictEqual(String(input), `${TEST_ENV.LLM_BASE_URL}/responses`);
+    modelCalls++;
+    if (modelCalls > 2) {
+      return Response.json(
+        {
+          error: {
+            code: "content_policy_violation",
+            type: "invalid_request_error",
+            message:
+              "Image processing blocked due to content policy violation.",
+          },
+        },
+        { status: 400 },
+      );
+    }
+    return Response.json({
+      id: `resp_failure_progress_${sentMessageId}_${modelCalls}`,
+      object: "response",
+      created_at: 1,
+      status: "completed",
+      output: [
+        ...(modelCalls === 1
+          ? [
+              {
+                type: "message",
+                role: "assistant",
+                phase: "commentary",
+                status: "completed",
+                content: [
+                  {
+                    type: "output_text",
+                    text: "Checking **sources**.",
+                    annotations: [],
+                  },
+                ],
+              },
+            ]
+          : []),
+        {
+          type: "function_call",
+          id: `fc_${modelCalls}`,
+          call_id: `call_${modelCalls}`,
+          name: modelCalls === 1 ? "set_reply_message_id" : "read_image",
+          arguments:
+            modelCalls === 1
+              ? '{"message_id":42}'
+              : '{"url":"https://images.test/example.png"}',
+          status: "completed",
+        },
+      ],
+    });
+  }) as typeof fetch;
+
+  try {
+    setLlmDeploymentName("small", "test-model");
+    for (const [index, progressEnabled] of [true, false].entries()) {
+      await persistChatProgressEnabled(database, chat.id, progressEnabled);
+      modelCalls = 0;
+      sent.length = 0;
+      const messageId = 1283340 + index;
+      const ctx = new GrammyContext(
+        {
+          update_id: index + 1,
+          message: {
+            message_id: messageId,
+            date: 0,
+            from: { id: 1, is_bot: false, first_name: "User" },
+            chat,
+            text: "laylo check this image",
+          },
+        },
+        api,
+        bot,
+      ) as Context;
+      ctx.database = database;
+      ctx.telemetry = { event: () => {} } as Context["telemetry"];
+      await chatComposer.middleware()(ctx, async () => {});
+
+      strictEqual(modelCalls, 13);
+      strictEqual(sent.length, 1);
+      strictEqual(sent[0].includes("Checking **sources**."), progressEnabled);
+      ok(sent[0].includes("Failed to generate response"));
+      ok(sent[0].includes("content_policy_violation"));
+      ok(sent[0].includes(`/resume_${messageId}`));
+      ok(
+        sent[0].endsWith(
+          [
+            "![⚠️](tg://emoji?id=5881702736843511327)",
+            "![↩️](tg://emoji?id=5877468380125990242)",
+            "![🖼](tg://emoji?id=5775949822993371030)",
+          ].join(" "),
+        ),
+      );
+      // Replies to the failure message must still find the saved checkpoint.
+      const thread = await getThread(database, {
+        chat_id: chat.id,
+        message_id: sentMessageId,
+      });
+      ok(thread?.response_id);
+    }
+  } finally {
+    globalThis.fetch = originalFetch;
+    setLlmDeploymentName("small", "");
     await database.destroy();
   }
 });
