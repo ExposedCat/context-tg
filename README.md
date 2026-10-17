@@ -215,10 +215,17 @@ Hey laylo find me a pigeon art /order:score
 ```
 
 The suffix is replaced by one `(use danbooru)` in saved message text and agent
-input. The application retains the supplied values separately for that request
+input. For `/rating:e` or `/rating:explicit` (case-insensitive), it instead uses
+`(use danbooru, you are strictly unallowed to view images yourself due to licensing, send it to user directly and notify)`.
+The tool instructs the model to send explicit-rated results directly with source
+links and notify the user that it has not viewed them, and does not request
+`read_image` for those results.
+The application retains the supplied values separately for that request
 and overrides the agent's corresponding Danbooru parameters and query metatags.
 Unspecified options remain the agent's choice; overrides do not carry into the
-next message. Options inside the message body are ordinary text, and the last
+next message. When the final query has no ordering, `order:score` is added;
+ordering already provided in the query, parameters, or user suffix is preserved.
+Options inside the message body are ordinary text, and the last
 occurrence of a repeated suffix option wins. Values are passed through unchanged
 without validation. Danbooru documents ratings `g`, `s`, `q`, `e` and orders
 such as `score`, `rank`, `id`, and `random`; invalid values are left to the API.

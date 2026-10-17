@@ -206,11 +206,15 @@ Deno.test("Danbooru suffixes are hidden in chat history and override searches fo
               type: "function_call",
               call_id: `call_danbooru_${modelCalls}`,
               name: "search_danbooru",
-              arguments: JSON.stringify({
-                tags: "pigeon rating:e order:random",
-                rating: "q",
-                order: "id",
-              }),
+              arguments: JSON.stringify(
+                modelCalls === 7
+                  ? { tags: "pigeon" }
+                  : {
+                      tags: "pigeon rating:e order:random",
+                      rating: "q",
+                      order: "id",
+                    },
+              ),
               status: "completed",
             },
           ]
@@ -240,6 +244,7 @@ Deno.test("Danbooru suffixes are hidden in chat history and override searches fo
       { text: "find pigeon art /rating:Unknown:Value /order:score" },
       { caption: "find more art /order:rank", video: {} },
       { text: "find another pigeon" },
+      { text: "find explicit art /rating:e" },
     ];
     for (const [index, fixture] of cases.entries()) {
       const ctx = new GrammyContext(
@@ -267,10 +272,19 @@ Deno.test("Danbooru suffixes are hidden in chat history and override searches fo
       "pigeon rating:Unknown:Value order:score",
       "pigeon rating:q order:rank",
       "pigeon rating:q order:id",
+      "pigeon rating:e order:score",
     ]);
     ok(modelInputs[0].includes("find pigeon art (use danbooru)"));
     ok(!modelInputs[0].includes("Unknown:Value"));
     ok(modelInputs[2].includes("find more art (use danbooru)"));
+    const explicitText =
+      "find explicit art (use danbooru, you are strictly unallowed to view images yourself due to licensing, send it to user directly and notify)";
+    ok(modelInputs[6].includes(explicitText));
+    const lastToolResult = JSON.parse(modelInputs[7]).findLast(
+      (item: { type: string }) => item.type === "function_call_output",
+    );
+    ok(lastToolResult.output.includes('"skip_image_inspection":true'));
+    ok(!lastToolResult.output.includes('required_next_tool="read_image"'));
     for (const input of modelInputs) {
       ok(!input.includes("/rating:"));
       ok(!input.includes("/order:"));
@@ -304,6 +318,7 @@ Deno.test("Danbooru suffixes are hidden in chat history and override searches fo
         "find pigeon art (use danbooru)",
         "find more art (use danbooru)",
         "find another pigeon",
+        explicitText,
       ],
     );
   } finally {

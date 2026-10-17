@@ -1,4 +1,5 @@
 import { searchDanbooruPosts, searchDanbooruTags } from "../danbooru.ts";
+import { isExplicitDanbooruRating } from "../danbooru-options.ts";
 import type { FunctionToolRunner } from "./types.ts";
 import { getJsonError, getString } from "./utils.ts";
 
@@ -6,7 +7,7 @@ export const toolDefinition = {
   type: "function",
   name: "search_danbooru",
   description:
-    "Search Danbooru for anime, manga, fan art, and other tagged illustrations. Use when the user asks for Danbooru or says '(use danbooru)'. Basic usage: tags='1boy', rating='g', order='score'. Tags are space-separated, multiword tags use underscores (blue_hair), and -tag excludes a tag. Use search_danbooru_tags to discover exact tag names. Ratings: general (g), sensitive (s), questionable (q), explicit (e); order examples: score, rank, id, random. Omitted rating/order keep any metatags in tags, otherwise use Danbooru defaults. User-supplied suffix options are applied by the application and override your rating/order, including metatags in tags. Returns post URLs, direct image_url values, ratings, scores, and tags. Inspect a selected image with read_image before describing it; display images using ![](image_url) and link to source_url for attribution.",
+    "Search Danbooru for anime, manga, fan art, and other tagged illustrations. Always prefer Danbooru for anime image searches. Use when the user asks for Danbooru or says '(use danbooru)'. Basic usage: tags='1boy', rating='g', order='score'. Tags are space-separated, multiword tags use underscores (blue_hair), and -tag excludes a tag. Use search_danbooru_tags to discover exact tag names. Ratings: general (g), sensitive (s), questionable (q), explicit (e); order examples: score, rank, id, random. Omitted rating keeps any rating metatag in tags, otherwise uses Danbooru defaults. If the final query has no ordering, order:score is added automatically; explicit ordering in tags or parameters is preserved. User-supplied suffix options are applied by the application and override your rating/order, including metatags in tags. Returns post URLs, direct image_url values, ratings, scores, and tags. For explicit-rated results (e or explicit), do not call read_image or view the images yourself: send them directly and notify the user that you have not viewed them. For other ratings, inspect a selected image with read_image before describing it. Display images using ![](image_url). You must provide the corresponding source_url link for every image you send, including every image in a collage or slideshow.",
   parameters: {
     type: "object",
     properties: {
@@ -23,7 +24,7 @@ export const toolDefinition = {
       order: {
         type: "string",
         description:
-          "Optional order metatag value, passed to Danbooru unchanged, e.g. 'score' (highest first), 'rank', 'id' (newest), or 'random'.",
+          "Optional order metatag value, passed to Danbooru unchanged, e.g. 'score' (highest first), 'rank', 'id' (newest), or 'random'. Defaults to score when no ordering appears in the final query.",
       },
       limit: {
         type: "integer",
@@ -94,12 +95,36 @@ export const execute: FunctionToolRunner = async (args, context, options) => {
       "$1",
     );
     tags += ` order:${order}`;
+  } else if (
+    !/(?:^|\s)(?:order|ordfav|ordvote|ordfavgroup|ordpool):\S+/i.test(tags)
+  ) {
+    tags += " order:score";
   }
   tags = tags.trim().replace(/\s+/g, " ");
   const limit = getInteger(args?.limit, 10, 20);
   const page = getInteger(args?.page, 1);
   const posts = await searchDanbooruPosts(tags, limit, page, options?.signal);
-  return JSON.stringify({ tags, page, posts });
+  const skipImageInspection =
+    [...tags.matchAll(/(?:^|\s)rating:(\S+)/gi)].some((match) =>
+      isExplicitDanbooruRating(match[1]),
+    ) ||
+    posts.some((post) =>
+      isExplicitDanbooruRating(
+        typeof post.rating === "string" ? post.rating : undefined,
+      ),
+    );
+  return JSON.stringify({
+    tags,
+    page,
+    posts,
+    ...(skipImageInspection
+      ? {
+          skip_image_inspection: true,
+          instructions:
+            "Do not view or inspect these images yourself. Send them directly to the user with their source links and notify the user that you have not viewed them.",
+        }
+      : {}),
+  });
 };
 
 export const executeTags: FunctionToolRunner = async (

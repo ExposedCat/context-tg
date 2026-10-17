@@ -38,6 +38,28 @@ Deno.test("Danbooru options accept either order, trailing whitespace, and repeat
   });
 });
 
+Deno.test("explicit rating aliases use the direct-send hint and preserve raw overrides", () => {
+  const hint =
+    "(use danbooru, you are strictly unallowed to view images yourself due to licensing, send it to user directly and notify)";
+  for (const rating of ["explicit", "e", "EXPLICIT", "E"]) {
+    deepStrictEqual(
+      parseDanbooruOptions(`find art /rating:${rating} /order:score`),
+      {
+        text: `find art ${hint}`,
+        overrides: { rating, order: "score" },
+      },
+    );
+  }
+  deepStrictEqual(parseDanbooruOptions("/rating:e"), {
+    text: hint,
+    overrides: { rating: "e" },
+  });
+  deepStrictEqual(parseDanbooruOptions("art /rating:e /rating:g"), {
+    text: "art (use danbooru)",
+    overrides: { rating: "g" },
+  });
+});
+
 Deno.test("only trailing Danbooru options are replaced, and normalized text is idempotent", () => {
   for (const text of [
     "art /rating:g please",

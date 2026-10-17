@@ -241,6 +241,69 @@ Deno.test("Danbooru accepts long queries when the API permits them", async () =>
   }
 });
 
+Deno.test("Danbooru defaults missing ordering to score and preserves provided sorting", async () => {
+  const originalFetch = globalThis.fetch;
+  const queries: string[] = [];
+  globalThis.fetch = (async (input, init) => {
+    queries.push(
+      new URL(new Request(input, init).url).searchParams.get("tags") ?? "",
+    );
+    return Response.json([]);
+  }) as typeof fetch;
+  try {
+    await execute({ tags: "pigeon" });
+    await execute({ tags: "pigeon rating:g" });
+    await execute({ tags: "pigeon order:random" });
+    await execute({ tags: "pigeon", order: "id" });
+    await execute(
+      { tags: "pigeon order:id", order: "rank" },
+      {
+        chatId: 1,
+        messageId: 1,
+        danbooru: { order: "Custom:Order" },
+      },
+    );
+    await execute({ tags: "ordpool:123" });
+    deepStrictEqual(queries, [
+      "pigeon order:score",
+      "pigeon rating:g order:score",
+      "pigeon order:random",
+      "pigeon order:id",
+      "pigeon order:Custom:Order",
+      "ordpool:123",
+    ]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+Deno.test("explicit Danbooru results instruct direct sending without inspection", async () => {
+  const originalFetch = globalThis.fetch;
+  let postRating = "g";
+  globalThis.fetch = (async () =>
+    Response.json([{ id: 42, rating: postRating }])) as typeof fetch;
+  try {
+    for (const args of [
+      { tags: "pigeon", rating: "explicit" },
+      { tags: "pigeon rating:e" },
+    ]) {
+      const result = JSON.parse((await execute(args)) as string);
+      strictEqual(result.skip_image_inspection, true);
+      strictEqual(
+        result.instructions.includes(
+          "notify the user that you have not viewed them",
+        ),
+        true,
+      );
+    }
+    postRating = "e";
+    const result = JSON.parse((await execute({ tags: "pigeon" })) as string);
+    strictEqual(result.skip_image_inspection, true);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 Deno.test("Danbooru startup auth supports token precedence, legacy keys, anonymous search and missing usernames", async () => {
   const moduleUrl = new URL("../danbooru.ts", import.meta.url).href;
   const script = `

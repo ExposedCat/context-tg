@@ -1122,7 +1122,9 @@ function formatToolResponseContent(tool: string, output: string): string {
   const attributes = [
     `tool="${escapeXmlAttribute(tool)}"`,
     ...(tool === "web_search" ? ['required_next_tool="read_web_page"'] : []),
-    ...(["search_images", "search_danbooru"].includes(tool)
+    ...(tool === "search_images" ||
+    (tool === "search_danbooru" &&
+      parseJsonObject(output)?.skip_image_inspection !== true)
       ? ['required_next_tool="read_image"']
       : []),
   ].join(" ");

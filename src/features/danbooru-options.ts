@@ -3,6 +3,13 @@ export type DanbooruOverrides = {
   order?: string;
 };
 
+export function isExplicitDanbooruRating(rating: string | undefined): boolean {
+  return /^(?:e|explicit)$/i.test(rating ?? "");
+}
+
+const EXPLICIT_DANBOORU_HINT =
+  "(use danbooru, you are strictly unallowed to view images yourself due to licensing, send it to user directly and notify)";
+
 /** Only a contiguous suffix of options belongs to this request. */
 export function parseDanbooruOptions(text: string): {
   text: string;
@@ -22,8 +29,11 @@ export function parseDanbooruOptions(text: string): {
   }
   if (suffixStart === text.length) return { text };
   const body = text.slice(0, suffixStart).trimEnd();
+  const hint = isExplicitDanbooruRating(overrides.rating)
+    ? EXPLICIT_DANBOORU_HINT
+    : "(use danbooru)";
   return {
-    text: body ? `${body} (use danbooru)` : "(use danbooru)",
+    text: body ? `${body} ${hint}` : hint,
     overrides,
   };
 }
