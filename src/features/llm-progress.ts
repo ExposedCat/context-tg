@@ -2,7 +2,7 @@ import type { LlmProgressSegment, ToolName } from "./llm.ts";
 
 export const PROGRESS_INTERVAL_MS = 30_000;
 export const PROGRESS_TOOL_INTERVAL_MS = 60_000;
-export const PROGRESS_PLACEHOLDER_INTERVAL_MS = 80_000;
+export const PROGRESS_PLACEHOLDER_INTERVAL_MS = 5 * 60_000;
 export const PROGRESS_PLACEHOLDERS = [
   "Thinking...",
   "Working...",

@@ -60,10 +60,10 @@ Without assistant text, new tool calls can produce a summary after 60 seconds
 since the last update,
 for example `Searched web, read 3 webpages`, with their icons below. Repeated
 calls are counted within each batch; previously delivered activity is not repeated.
-After 80 seconds without real assistant text or a delivered idle update, and
+After five minutes without real assistant text or a delivered idle update, and
 with no new tool calls, the bot randomly sends `Thinking...`, `Working...`,
 `Analyzing...`, or `Processing...`. Further idle placeholders are at least
-80 seconds apart; incoming or delivered real text restarts the idle wait.
+five minutes apart; incoming or delivered real text restarts the idle wait.
 Queued text at completion is included with the final answer. Oversized batches
 are carried into later intervals to keep each progress update a single Telegram
 message. Cancellation and completion stop the timer; failed progress deliveries

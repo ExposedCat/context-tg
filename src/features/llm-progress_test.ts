@@ -83,7 +83,7 @@ Deno.test("progress batches preserve each segment's tools and drain after each i
   ]);
   await timer.tick();
   strictEqual(messages.length, 2);
-  await tickUntil(timer, 170_000);
+  await tickUntil(timer, 390_000);
   deepStrictEqual(messages[2], [{ text: "Thinking...", tools: [] }]);
   updates.add([{ text: "Last unsent progress", tools: ["search_chat"] }]);
   deepStrictEqual(await updates.stop(), [
@@ -94,7 +94,7 @@ Deno.test("progress batches preserve each segment's tools and drain after each i
   strictEqual(messages.length, 3);
   strictEqual(PROGRESS_INTERVAL_MS, 30_000);
   strictEqual(PROGRESS_TOOL_INTERVAL_MS, 60_000);
-  strictEqual(PROGRESS_PLACEHOLDER_INTERVAL_MS, 80_000);
+  strictEqual(PROGRESS_PLACEHOLDER_INTERVAL_MS, 300_000);
 });
 
 Deno.test("idle progress summarizes only new tools and returns to placeholders when idle", async () => {
@@ -120,8 +120,10 @@ Deno.test("idle progress summarizes only new tools and returns to placeholders w
   await timer.tick();
   strictEqual(timer.now(), 60_000);
   strictEqual(messages.length, 0);
+  await tickUntil(timer, 270_000);
+  strictEqual(messages.length, 0);
   await timer.tick();
-  strictEqual(timer.now(), 80_000);
+  strictEqual(timer.now(), 300_000);
   deepStrictEqual(messages[0], [{ text: "Working...", tools: [] }]);
   updates.add([
     {
@@ -135,10 +137,10 @@ Deno.test("idle progress summarizes only new tools and returns to placeholders w
     },
   ]);
   await timer.tick();
-  strictEqual(timer.now(), 110_000);
+  strictEqual(timer.now(), 330_000);
   strictEqual(messages.length, 1);
   await timer.tick();
-  strictEqual(timer.now(), 140_000);
+  strictEqual(timer.now(), 360_000);
   deepStrictEqual(messages[1], [
     {
       text: "Searched web, read 3 webpages, read recent messages",
@@ -147,10 +149,10 @@ Deno.test("idle progress summarizes only new tools and returns to placeholders w
   ]);
   await timer.tick();
   strictEqual(messages.length, 2);
-  await tickUntil(timer, 220_000);
+  await tickUntil(timer, 660_000);
   deepStrictEqual(messages[2], [{ text: "Working...", tools: [] }]);
   updates.add([{ tools: ["web_search", "web_search"] }]);
-  await tickUntil(timer, 280_000);
+  await tickUntil(timer, 720_000);
   deepStrictEqual(messages[3], [
     { text: "Searched web 2 times", tools: ["web_search"] },
   ]);
@@ -226,8 +228,7 @@ Deno.test("progress stops on cancellation and waits for an in-flight send", asyn
   });
   await timer.tick();
   strictEqual(sent, 0);
-  await timer.tick();
-  await timer.tick();
+  await tickUntil(timer, 300_000);
   let stopped = false;
   const stopping = updates.stop().then(() => {
     stopped = true;
