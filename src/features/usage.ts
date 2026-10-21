@@ -86,10 +86,9 @@ export async function migrateUsage(database: Database) {
     .addColumn("tokens", "integer", (c) => c.notNull())
     .addColumn("expires_at", "text", (c) => c.notNull())
     .execute();
-  await database
-    .deleteFrom("credit_text_reservations")
-    .where("expires_at", "<=", sql<string>`datetime('now')`)
-    .execute();
+  // Runs at startup in the bot's only process, so every remaining reservation
+  // belongs to a request that died with the previous process.
+  await database.deleteFrom("credit_text_reservations").execute();
 }
 export function getUsageDate(date = new Date()): string {
   return date.toISOString().slice(0, 10);
@@ -170,7 +169,7 @@ export function createTextCreditCharge(
         : await sql<{
             tokens: number;
           }>`insert into credit_text_reservations (id, chat_id, usage_date, tokens, expires_at)
-        select ${id}, ${chatId}, ${date}, min(${maxTokens}, ${remaining}), datetime('now', '+120 seconds')
+        select ${id}, ${chatId}, ${date}, min(${maxTokens}, ${remaining}), datetime('now', '+1 day')
         where ${remaining} > 0 returning cast(tokens as real) as tokens`.execute(
             ctx.database,
           );

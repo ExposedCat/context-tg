@@ -472,107 +472,51 @@ Respond with a name for this thread. Don't use formatting, don't add anything el
   }
 });
 
-test("stalled model attempts retry after 90 seconds without repeating tools", async () => {
+test("slow model responses are never aborted by a time limit", async () => {
   setLlmDeploymentName("small", "test-model");
   const originalFetch = globalThis.fetch;
   const originalSetTimeout = globalThis.setTimeout;
-  const attemptTimeouts: number[] = [];
-  // Exercise the SDK timeout and budgeted application retry without waiting 90 seconds.
+  // Any real limit (a minute up to weeks) fires after 20ms; only the SDK's
+  // ~24.8-day "no timeout" sentinel keeps its delay. The fake model takes
+  // 150ms to answer, so only a limit-free path passes.
   globalThis.setTimeout = ((
     callback: (...args: unknown[]) => void,
     delay?: number,
     ...args: unknown[]
-  ) => {
-    if (delay !== undefined && delay >= 90_000) attemptTimeouts.push(delay);
-    return originalSetTimeout(
+  ) =>
+    originalSetTimeout(
       callback,
-      delay !== undefined && delay >= 90_000 ? 5 : delay,
+      delay !== undefined && delay >= 60_000 && delay < 2 ** 31 - 1
+        ? 20
+        : delay,
       ...args,
-    );
-  }) as typeof setTimeout;
-  try {
-    for (const afterTool of [false, true]) {
-      await step(
-        afterTool ? "after a tool result" : "initial request",
-        async () => {
-          const requests: string[] = [];
-          attemptTimeouts.length = 0;
-          let completed = 0;
-          let charges = 0;
-          let timedOut = false;
-          globalThis.fetch = (async (input, init) => {
-            const request = new Request(input, init);
-            requests.push(await request.text());
-            if (requests.length === (afterTool ? 2 : 1)) {
-              return await new Promise<Response>((_resolve, reject) => {
-                request.signal.addEventListener(
-                  "abort",
-                  () => {
-                    timedOut = true;
-                    reject(new DOMException("Request timed out", "AbortError"));
-                  },
-                  { once: true },
-                );
-              });
-            }
-            completed++;
-            return Response.json(
-              createApiResponse(
-                `resp_timeout_${completed}`,
-                completed === 1
-                  ? [
-                      {
-                        id: "fc_timeout",
-                        type: "function_call",
-                        call_id: "call_timeout",
-                        name: "set_reply_message_id",
-                        arguments: '{"message_id":7}',
-                        status: "completed",
-                      },
-                    ]
-                  : [
-                      {
-                        id: "msg_timeout",
-                        type: "message",
-                        role: "assistant",
-                        status: "completed",
-                        content: [
-                          {
-                            type: "output_text",
-                            text: "Done.",
-                            annotations: [],
-                          },
-                        ],
-                      },
-                    ],
-              ),
-            );
-          }) as typeof fetch;
-          const response = await requestLlm(
-            "Reply",
-            ["set_reply_message_id"],
-            undefined,
-            {
-              context: { chatId: 1, messageId: 1 },
-              chargeCredits: async () => {
-                charges++;
-              },
-            },
-          );
-          strictEqual(timedOut, true);
-          strictEqual(requests.length, 3);
-          const index = afterTool ? 1 : 0;
-          strictEqual(requests[index], requests[index + 1]);
-          deepStrictEqual(attemptTimeouts, [90_000, 90_000, 90_000]);
-          strictEqual(charges, 1);
-          strictEqual(response.replyMessageId, 7);
-          strictEqual(response.response, "Done.");
-        },
+    )) as unknown as typeof setTimeout;
+  globalThis.fetch = (async (_input: unknown, init?: RequestInit) => {
+    await new Promise((resolve, reject) => {
+      originalSetTimeout(resolve, 150);
+      init?.signal?.addEventListener("abort", () =>
+        reject(init.signal?.reason),
       );
-    }
+    });
+    return Response.json(
+      createApiResponse("resp_slow", [
+        {
+          id: "msg_slow",
+          type: "message",
+          role: "assistant",
+          status: "completed",
+          content: [{ type: "output_text", text: "Done.", annotations: [] }],
+        },
+      ]),
+    );
+  }) as unknown as typeof fetch;
+  try {
+    const result = await requestLlm("Slow", [], undefined, {}, "Be brief.");
+    strictEqual(result.response, "Done.");
   } finally {
     globalThis.fetch = originalFetch;
     globalThis.setTimeout = originalSetTimeout;
+    setLlmDeploymentName("small", "");
   }
 });
 

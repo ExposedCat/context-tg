@@ -85,8 +85,9 @@ tokens together; only the funded portion is retained and charged. Non-streaming
 providers instead receive an output cap; streaming is required for live text
 cancellation. Unknown provider-side reasoning costs never become text credits.
 
-The migration preserves existing usage and limits. Reservations expire after
-two minutes if a process crashes, longer than the 90-second model timeout.
+The migration preserves existing usage and limits. A reservation is held for
+as long as its request runs; reservations left by a crashed process are cleared
+at the next startup (a one-day expiry is only a backstop).
 
 ## Per-request token limits
 
@@ -134,11 +135,10 @@ failure after stream events stops without automatic replay of that generation;
 the previous complete context is preserved for an explicit continuation. An
 aborted stream without final usage retains its reserved token allowance.
 
-Each text-model HTTP attempt has a 90-second timeout. The application can retry
-within the shared request budget; SDK retries are disabled so attempts cannot
-bypass accounting. The timeout applies separately to each
-model call, including calls after tool results, thread naming and trolling
-validation; it is not a deadline for the entire task.
+Model calls have no time limit, streaming or not: progress placeholders show
+that a request is still pending, and its `/cancel_<id>` command stops it. The application can
+retry connection failures that happen before any output arrives; SDK retries
+are disabled so attempts cannot bypass accounting.
 
 **Progress updates** is a per-chat `/settings` toggle, enabled by default and
 controlled by chat admins (or the user in a private chat). During conversation

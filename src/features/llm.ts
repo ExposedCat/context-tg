@@ -342,11 +342,17 @@ function createRequestMarker(options: LlmRequestOptions): ResponseInputItem[] {
       ];
 }
 
+// Model calls have no time limit: progress placeholders show the request is
+// pending and users can cancel it. The SDK always arms a timer (default 10
+// minutes) until response headers arrive, and timers above 2^31-1 ms fire
+// after 1 ms, so use the largest valid delay (~24.8 days) rather than Infinity.
+const NO_TIMEOUT_MS = 2 ** 31 - 1;
+
 function getClient(): OpenAI {
   return new OpenAI({
     apiKey: APP_ENV.LLM_API_KEY,
     baseURL: APP_ENV.LLM_BASE_URL,
-    timeout: 90_000,
+    timeout: NO_TIMEOUT_MS,
     // Retry attempts must each reserve budget in the application loop.
     maxRetries: 0,
   });
@@ -365,11 +371,6 @@ async function createModelResponse(
   const textMeter = new TextCreditMeter();
   let abortStream: (() => void) | undefined;
   let receivedEvent = false;
-  let timeout: ReturnType<typeof setTimeout> | undefined;
-  const controller = new AbortController();
-  const requestSignal = signal
-    ? AbortSignal.any([signal, controller.signal])
-    : controller.signal;
   try {
     textReservation = await textCredits?.reserve();
     throwIfAborted(signal);
@@ -393,29 +394,22 @@ async function createModelResponse(
     };
     let response: ApiResponse;
     if (APP_ENV.LLM_STREAMING) {
-      timeout = setTimeout(
-        () =>
-          controller.abort(
-            new DOMException("Model stream timed out", "TimeoutError"),
-          ),
-        90_000,
-      );
       const stream = await client.responses.create(
         { ...modelParams, stream: true },
-        { signal: requestSignal },
+        { signal },
       );
       abortStream = () => stream.controller.abort();
       let terminalResponse: ApiResponse | undefined;
       for await (const event of stream) {
         receivedEvent = true;
-        throwIfAborted(requestSignal);
+        throwIfAborted(signal);
         textMeter.observe(event);
         if (textReservation && textMeter.tokens >= textReservation.tokens) {
           abortStream();
           return textMeter.limitedResponse(textReservation.tokens);
         }
         await onStreamEvent?.(event);
-        throwIfAborted(requestSignal);
+        throwIfAborted(signal);
         if (
           event.type === "response.completed" ||
           event.type === "response.incomplete" ||
@@ -425,7 +419,7 @@ async function createModelResponse(
           break;
         }
       }
-      throwIfAborted(requestSignal);
+      throwIfAborted(signal);
       if (!terminalResponse)
         throw new Error("Response stream ended without a terminal response");
       response = terminalResponse;
@@ -454,6 +448,7 @@ async function createModelResponse(
     if (receivedEvent) {
       // Never replay a generation after receiving stream events: it may have
       // generated tool arguments or text that was already charged.
+      logError("Model stream ended early", { cause: error });
       throw new LlmRequestError(
         "Response stream interrupted",
         "The model connection ended before the response completed. The request was stopped without retrying.",
@@ -462,7 +457,6 @@ async function createModelResponse(
     }
     throw error;
   } finally {
-    if (timeout !== undefined) clearTimeout(timeout);
     abortStream?.();
     await settleTextCredits(textReservation, textMeter.tokens);
   }

@@ -1,7 +1,7 @@
 import { test } from "bun:test";
 import { deepStrictEqual, rejects, strictEqual } from "node:assert";
 import type { TranslateFunction } from "@grammyjs/i18n";
-import { Kysely } from "kysely";
+import { Kysely, sql } from "kysely";
 import type { Context } from "../bot.ts";
 import type { DatabaseSchema } from "./database.ts";
 import { createSqliteDialect, openSqlite } from "./sqlite.ts";
@@ -359,6 +359,26 @@ test("ADMIN_ID has unlimited credits in every chat and guest mode without granti
         strictEqual(status.used > 0, true);
       }
     }
+  } finally {
+    await db.destroy();
+  }
+});
+
+test("reservations last as long as the request and are freed when the bot restarts", async () => {
+  const db = await database();
+  try {
+    await handleUsageCommand(db, -1, "-49", true, t);
+    await textCharge(db).reserve(TOKENS_PER_CREDIT);
+    // A long-running request keeps holding its balance well past two minutes.
+    const [row] = await db
+      .selectFrom("credit_text_reservations")
+      .select(sql<number>`julianday(expires_at) - julianday('now')`.as("days"))
+      .execute();
+    strictEqual(row.days > 0.99, true);
+    strictEqual(await hasUsageRemaining(db, -1), false);
+    // Startup migration: the previous process is gone, so its hold is too.
+    await migrateUsage(db);
+    strictEqual(await hasUsageRemaining(db, -1), true);
   } finally {
     await db.destroy();
   }
