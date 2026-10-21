@@ -48,7 +48,7 @@ import {
   requestThreadName,
   type ToolName,
 } from "./llm.ts";
-import { LlmTokenBudget } from "./llm-budget.ts";
+import { LlmToolBudget } from "./llm-budget.ts";
 import { getChatDebugMode, getChatProgressEnabled } from "./llm-models.ts";
 import { createProgressUpdates } from "./llm-progress.ts";
 import {
@@ -2145,7 +2145,7 @@ async function sendRecoveredErrorResponse(
   responseId: string | undefined,
   signal: AbortSignal,
   saveOriginalMessageThread: boolean,
-  tokenBudget: LlmTokenBudget,
+  toolBudget: LlmToolBudget,
 ): Promise<void> {
   const toolContext = getLlmToolContext(chatId, message);
   const llmResponse = await withTypingAction(
@@ -2156,7 +2156,7 @@ async function sendRecoveredErrorResponse(
         [],
         responseId,
         {
-          tokenBudget,
+          toolBudget,
           textCredits: createTextCreditCharge(ctx),
           database: ctx.database,
           context: toolContext,
@@ -2221,13 +2221,11 @@ async function safelyNamePrivateThread(
   text: string,
   agent: AgentDefinition,
   signal: AbortSignal,
-  tokenBudget: LlmTokenBudget,
 ): Promise<void> {
   if (!ctx.chat) return;
 
   try {
     const name = await requestThreadName(text, agent.MODEL, {
-      tokenBudget,
       database: ctx.database,
       context: { chatId: ctx.chat.id, messageId: ctx.message?.message_id ?? 0 },
       signal,
@@ -2270,7 +2268,7 @@ async function handleChatRequest(
   }
 
   const chatId = ctx.chat.id;
-  const tokenBudget = new LlmTokenBudget();
+  const toolBudget = new LlmToolBudget();
   const reply = options.reply;
   const replyContext = options.replyContext ?? reply;
   const thread = options.thread;
@@ -2334,7 +2332,6 @@ async function handleChatRequest(
         text,
         agent,
         taskAbortController.signal,
-        tokenBudget,
       );
     }
     const requestedTools = options.tools ?? agent.tools;
@@ -2392,7 +2389,7 @@ async function handleChatRequest(
       try {
         return await withTypingAction(ctx, async () => {
           const requestOptions: LlmRequestOptions = {
-            tokenBudget,
+            toolBudget,
             textCredits: createTextCreditCharge(ctx),
             chargeCredits,
             database: ctx.database,
@@ -2589,7 +2586,7 @@ async function handleChatRequest(
           resumableResponseId,
           taskAbortController.signal,
           !resumable || unavailableRichMessagePhoto,
-          tokenBudget,
+          toolBudget,
         );
 
         if (unavailableRichMessagePhoto) {
@@ -2778,7 +2775,7 @@ async function handleGuestChatRequest(
   }
 
   const chatId = ctx.chat.id;
-  const tokenBudget = new LlmTokenBudget();
+  const toolBudget = new LlmToolBudget();
   const chargeCredits = createCreditCharge(ctx, true);
   try {
     await chargeCredits("request");
@@ -2827,7 +2824,7 @@ async function handleGuestChatRequest(
       agentTools,
       responseId,
       {
-        tokenBudget,
+        toolBudget,
         textCredits: createTextCreditCharge(ctx, true),
         chargeCredits,
         database: ctx.database,
@@ -2859,7 +2856,7 @@ async function handleGuestChatRequest(
         [],
         llmResponse.response_id,
         {
-          tokenBudget,
+          toolBudget,
           textCredits: createTextCreditCharge(ctx, true),
           database: ctx.database,
           context: toolContext,

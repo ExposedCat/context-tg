@@ -61,11 +61,6 @@ export const APP_ENV = {
     "LLM_MAX_USER_INPUT_TOKENS",
     5000,
   ),
-  LLM_MAX_OUTPUT_TOKENS: getPositiveIntegerEnv("LLM_MAX_OUTPUT_TOKENS", 8192),
-  LLM_REQUEST_TOKEN_BUDGET: getPositiveIntegerEnv(
-    "LLM_REQUEST_TOKEN_BUDGET",
-    64_000,
-  ),
   LLM_MAX_TOOL_CALLS: getPositiveIntegerEnv("LLM_MAX_TOOL_CALLS", 12),
   FINANCE_MCP_URL:
     getOptionalEnv("FINANCE_MCP_URL") ?? "http://127.0.0.1:8000/mcp",

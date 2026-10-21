@@ -28,7 +28,7 @@ export type TextCreditReservation = {
   settle: (tokens: number) => Promise<void>;
 };
 export type TextCreditCharge = {
-  reserve: (tokens: number) => Promise<TextCreditReservation>;
+  reserve: (tokens?: number) => Promise<TextCreditReservation>;
 };
 export class TextCreditLimitError extends Error {
   constructor() {
@@ -153,18 +153,21 @@ export function createTextCreditCharge(
   const chatId = ctx.chat.id;
   const unlimited = isBotAdmin(ctx);
   return {
-    reserve: async (maxTokens) => {
+    reserve: async (maxTokens = Number.MAX_SAFE_INTEGER) => {
       if (!Number.isSafeInteger(maxTokens) || maxTokens <= 0)
         throw new Error("Invalid token allowance.");
       const id = crypto.randomUUID();
       const date = getUsageDate();
       const remaining = availableTextTokens(chatId, date, unlimited);
-      const result = await sql<{
-        tokens: number;
-      }>`insert into credit_text_reservations (id, chat_id, usage_date, tokens, expires_at)
-        select ${id}, ${chatId}, ${date}, min(${maxTokens}, ${remaining}), datetime('now', '+120 seconds')
+      // Admin requests do not hold the group's finite balance while streaming.
+      const result = unlimited
+        ? undefined
+        : await sql<{
+            tokens: number;
+          }>`insert into credit_text_reservations (id, chat_id, usage_date, tokens, expires_at)
+        select ${id}, ${chatId}, ${date}, cast(min(${maxTokens}, ${remaining}) as real), datetime('now', '+120 seconds')
         where ${remaining} > 0 returning tokens`.execute(ctx.database);
-      const tokens = result.rows[0]?.tokens;
+      const tokens = unlimited ? maxTokens : result?.rows[0]?.tokens;
       if (!tokens) throw new TextCreditLimitError();
       let settlement: Promise<void> | undefined;
       return {

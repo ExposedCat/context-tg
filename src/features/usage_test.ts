@@ -18,6 +18,8 @@ import {
   parseGuestUsageCommand,
 } from "./usage.ts";
 
+Deno.env.set("ADMIN_ID", "1");
+
 async function database() {
   const db = new Kysely<DatabaseSchema>({
     dialect: new DenoSqlite3Dialect({
@@ -283,8 +285,6 @@ Deno.test("each request costs one fixed credit plus one credit per 620 generated
 });
 
 Deno.test("ADMIN_ID has unlimited credits in every chat and guest mode without granting other users an exemption", async () => {
-  const previousAdminId = Deno.env.get("ADMIN_ID");
-  Deno.env.set("ADMIN_ID", "987654321");
   const db = await database();
   try {
     for (const chatId of [10, -10]) {
@@ -294,7 +294,7 @@ Deno.test("ADMIN_ID has unlimited credits in every chat and guest mode without g
         const ctx = {
           database: db,
           chat: { id: chatId, type: chatId > 0 ? "private" : "supergroup" },
-          from: { id: 987654321 },
+          from: { id: 1 },
           telemetry: {
             event: (_name: string, payload: Record<string, unknown>) =>
               events.push(payload),
@@ -338,7 +338,5 @@ Deno.test("ADMIN_ID has unlimited credits in every chat and guest mode without g
     }
   } finally {
     await db.destroy();
-    if (previousAdminId === undefined) Deno.env.delete("ADMIN_ID");
-    else Deno.env.set("ADMIN_ID", previousAdminId);
   }
 });

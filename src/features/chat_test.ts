@@ -1387,11 +1387,11 @@ Deno.test("failed model follow-ups retain tools with progress enabled or disable
       ctx.telemetry = { event: () => {} } as Context["telemetry"];
       await chatComposer.middleware()(ctx, async () => {});
 
-      ok(modelCalls > 2 && modelCalls < 13);
+      strictEqual(modelCalls, 13);
       strictEqual(sent.length, 1);
       strictEqual(sent[0].includes("Checking **sources**."), progressEnabled);
       ok(sent[0].includes("Failed to generate response"));
-      ok(sent[0].includes("token budget"));
+      ok(sent[0].includes("content policy violation"));
       ok(sent[0].includes(`/resume_${messageId}`));
       ok(
         sent[0].endsWith(
@@ -2298,6 +2298,8 @@ Deno.test("automatic response checks allow ADMIN_ID even when the group has no c
   const { setTrollingInterval } = await import("./trolling.ts");
   const { handleUsageCommand } = await import("./usage.ts");
   const database = await initDatabase()();
+  const originalRandom = Math.random;
+  Math.random = () => 0;
   try {
     await handleUsageCommand(database, -100, "-50", true, (key) => key);
     await setProactiveResponseInterval(database, -100, 1);
@@ -2321,6 +2323,7 @@ Deno.test("automatic response checks allow ADMIN_ID even when the group has no c
     ok(await prepareProactiveAgentResponse(ctx, message, chat.id));
     ok(await preparePeriodicTroll(ctx, message, sender, chat.id));
   } finally {
+    Math.random = originalRandom;
     await database.destroy();
   }
 });

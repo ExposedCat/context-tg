@@ -39,7 +39,8 @@ export class TextCreditMeter {
   }
 
   complete(response: Response) {
-    this.parts.clear();
+    const streamedParts = this.parts;
+    this.parts = new Map();
     for (const item of response.output) {
       if (item.type !== "message") continue;
       for (const [index, part] of item.content.entries()) {
@@ -51,10 +52,17 @@ export class TextCreditMeter {
         }
       }
     }
+    // Some incomplete terminal events omit the text already delivered in
+    // deltas. Keep that text instead of replacing it with an empty snapshot.
+    if (response.status === "incomplete" && this.parts.size === 0)
+      this.parts = streamedParts;
     this.snapshot = response;
   }
 
-  limitedResponse(allowance: number): Response {
+  limitedResponse(
+    allowance: number,
+    notice = "Text credit limit reached.",
+  ): Response {
     const output: OpenAI.Responses.ResponseOutputMessage[] = [];
     let remaining = allowance;
     for (const part of this.parts.values()) {
@@ -81,7 +89,7 @@ export class TextCreditMeter {
       content: [
         {
           type: "output_text",
-          text: "\n\nText credit limit reached.",
+          text: `\n\n${notice}`,
           annotations: [],
           logprobs: [],
         },

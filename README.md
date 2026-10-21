@@ -79,24 +79,22 @@ The incoming user message plus its immediate reply text have a combined
 reservations. Captions and rich message text count; reply chains, thread history,
 instructions, tool definitions and media do not. Configure these limits in `.env`:
 
-- `LLM_REQUEST_TOKEN_BUDGET=64000`: cumulative generated tokens, including reasoning,
-  across model calls, tool follow-ups, thread naming and delivery recovery.
-- `LLM_MAX_OUTPUT_TOKENS=8192`: output per model call, including reasoning.
 - `LLM_MAX_USER_INPUT_TOKENS=5000`: combined current message and immediate reply text.
 - `LLM_MAX_TOOL_CALLS=12`: total tool executions per request, including parallel batches.
 
-Before each model call, the app reserves output allowance, then reconciles it
-with provider-reported output usage. Input and replayed context do not consume
-this generation budget. Failed attempts without usage retain their output
-reservation; validation and rate-limit rejections release it. Tool results are
-limited to 16 KB each with an explicit truncation notice. Image generation
-retains its existing credit charges and its reported output tokens count toward
-the remaining generation budget after generation.
+After the tool allowance is used, further tool calls receive a "Tool limit
+reached, wrap up" result. The agent gets one final turn with all tools disabled,
+including Finance MCP, to answer using the results already available. Excess
+calls do not execute or spend credits. Tool results remain limited to 16 KB each.
 
-Budget exhaustion and output-limit responses stop immediately without retries.
-The user receives a short explanation asking for a smaller task. All responding
-agents are instructed to reject meaningless long requests aimed at draining
-tokens, including repetitive generation and excessive reading or tool loops.
+There is no separate application cap on generated tokens for assistant replies.
+Available text credits limit progress and final text; input, hidden
+reasoning, tool arguments and image-tool usage do not spend text credits.
+`ADMIN_ID` has unlimited credits. If the provider itself reaches its output
+limit, partial text is returned with a notice instead of an error that discards
+it. All responding agents are instructed to reject meaningless long requests
+aimed at draining tokens, including repetitive generation and excessive reading
+or tool loops.
 
 ## Progress updates and timing
 

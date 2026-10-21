@@ -4,7 +4,7 @@ import { trollAgent } from "./agents/index.ts";
 import type { Database } from "./database.ts";
 import { readLastMessages } from "./last-messages.ts";
 import { requestLlm, requestTrollingValidation } from "./llm.ts";
-import { LlmTokenBudget } from "./llm-budget.ts";
+import { LlmToolBudget } from "./llm-budget.ts";
 import {
   formatPromptMessageXml,
   formatSystemPromptMessageXml,
@@ -361,13 +361,13 @@ async function sendPeriodicTroll(
     "normal",
     ctx.telemetry.event,
   );
-  const tokenBudget = new LlmTokenBudget();
+  const toolBudget = new LlmToolBudget();
   const response = await requestLlm(
     buildTrollingRequest(formatSenderName(sender), messages),
     ["set_reply_message_id"],
     undefined,
     {
-      tokenBudget,
+      toolBudget,
       textCredits: createTextCreditCharge(ctx),
       database: ctx.database,
       context: {
@@ -410,7 +410,7 @@ async function sendPeriodicTroll(
       mode,
       replyMessageId,
     },
-    { telemetry, tokenBudget },
+    { telemetry },
   );
   if (!valid) return;
 

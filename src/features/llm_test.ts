@@ -54,8 +54,6 @@ const TEST_ENV = {
   LLM_STREAMING: "false",
   LLM_COMPACT_THRESHOLD: "100000",
   LLM_MAX_USER_INPUT_TOKENS: "5000",
-  LLM_MAX_OUTPUT_TOKENS: "8192",
-  LLM_REQUEST_TOKEN_BUDGET: "64000",
   LLM_MAX_TOOL_CALLS: "12",
   KEENABLE_API_KEY: "test",
   LLM_TEMPERATURE: "0.2",
@@ -73,12 +71,10 @@ const [
   { LlmRequestError, requestLlm, requestThreadName },
   { setLlmDeploymentName },
   { initDatabase },
-  { LlmTokenBudget },
 ] = await Promise.all([
   import("./llm.ts"),
   import("./llm-deployments.ts"),
   import("./database.ts"),
-  import("./llm-budget.ts"),
 ]);
 
 type ResponseOutput =
@@ -146,7 +142,7 @@ function budgetTestAnswer(id: string) {
   ]);
 }
 
-Deno.test("large instructions and replayed thread context do not consume the generation budget", async () => {
+Deno.test("large instructions and replayed thread context are not rejected by an application token cap", async () => {
   setLlmDeploymentName("small", "budget-test");
   const { saveLlmResponseInputItems } = await import("./llm-chat-responses.ts");
   const database = await initDatabase()();
@@ -163,25 +159,24 @@ Deno.test("large instructions and replayed thread context do not consume the gen
     requests++;
     ok(JSON.stringify(body.input).length > 100000);
     ok(body.instructions.length > 48000);
-    strictEqual(body.max_output_tokens, 8192);
+    strictEqual(body.max_output_tokens, undefined);
     const response = budgetTestAnswer(`resp_large_context_${requests}`);
     response.usage.input_tokens = 200000;
     return Response.json(response);
   }) as typeof fetch;
   try {
-    const budget = new LlmTokenBudget();
     const first = await requestLlm(
       "Hi",
       [],
       "resp_long_history",
-      { database, tokenBudget: budget },
+      { database },
       "Instructions ".repeat(5000),
     );
     const second = await requestLlm(
       "Hi again",
       [],
       first.response_id,
-      { database, tokenBudget: budget },
+      { database },
       "Instructions ".repeat(5000),
     );
     strictEqual(second.response, "Done.");
@@ -192,84 +187,30 @@ Deno.test("large instructions and replayed thread context do not consume the gen
   }
 });
 
-Deno.test("only generated output including reasoning shares a budget across continuations", async () => {
+Deno.test("provider input and reasoning usage do not impose an application generation cap", async () => {
   setLlmDeploymentName("small", "budget-test");
-  const budget = new LlmTokenBudget({
-    total: 3000,
-    output: 2000,
-    tools: 2,
-  });
   const originalFetch = globalThis.fetch;
-  const caps: number[] = [];
+  let requests = 0;
   globalThis.fetch = (async (_url, init) => {
-    const { max_output_tokens } = JSON.parse(String(init?.body));
-    caps.push(max_output_tokens);
-    const response = budgetTestAnswer(`resp_budget_${caps.length}`);
-    response.usage.input_tokens = 200_000;
-    response.usage.output_tokens = caps.length === 1 ? 1500 : max_output_tokens;
-    response.usage.total_tokens =
-      response.usage.input_tokens + response.usage.output_tokens;
+    strictEqual(JSON.parse(String(init?.body)).max_output_tokens, undefined);
+    const response = budgetTestAnswer(`resp_no_cap_${++requests}`);
+    response.usage.input_tokens = 200000;
+    response.usage.output_tokens = 100000;
     return Response.json(response);
   }) as typeof fetch;
   try {
-    const first = await requestLlm(
-      "Start",
-      [],
-      undefined,
-      { tokenBudget: budget },
-      "Be brief.",
-    );
-    const second = await requestLlm(
-      "Continue",
-      [],
-      first.response_id,
-      { tokenBudget: budget },
-      "Be brief.",
-    );
-    strictEqual(caps[0], 2000);
-    ok(caps[1] >= 256 && caps[1] < 2000);
-    strictEqual(second.response, "Done.");
-    await assertRejects(
-      () =>
-        requestLlm(
-          "Continue again",
-          [],
-          second.response_id,
-          { tokenBudget: budget },
-          "Be brief.",
-        ),
-      (error) =>
-        error instanceof LlmRequestError && error.kind === "token_limit",
-    );
-    strictEqual(caps.length, 2);
+    for (let i = 0; i < 3; i++)
+      strictEqual(
+        (await requestLlm("Continue", [], undefined, {}, "Be brief.")).response,
+        "Done.",
+      );
+    strictEqual(requests, 3);
   } finally {
     globalThis.fetch = originalFetch;
   }
 });
 
-Deno.test("unknown failed attempts retain reservations and parallel reservations cannot overspend", () => {
-  const budget = new LlmTokenBudget({
-    total: 1800,
-    output: 1000,
-    tools: 2,
-  });
-  const attempt = budget.reserve();
-  const parallel = budget.reserve();
-  strictEqual(parallel.maxOutputTokens, 800);
-  let rejected = false;
-  try {
-    budget.reserve();
-  } catch {
-    rejected = true;
-  }
-  strictEqual(rejected, true);
-  attempt.settle();
-  attempt.settle({ input_tokens: 0, output_tokens: 0 });
-  parallel.settle({ output_tokens: 0 });
-  strictEqual(budget.reserve().maxOutputTokens, 800);
-});
-
-Deno.test("tool limits stop repeated rounds and oversized parallel batches before execution", async (t) => {
+Deno.test("tool exhaustion produces a final answer with tools disabled instead of a user error", async (t) => {
   setLlmDeploymentName("small", "budget-test");
   const originalFetch = globalThis.fetch;
   try {
@@ -277,8 +218,19 @@ Deno.test("tool limits stop repeated rounds and oversized parallel batches befor
       await t.step(`batch size ${batchSize}`, async () => {
         let requests = 0;
         let executions = 0;
-        globalThis.fetch = (async () => {
+        globalThis.fetch = (async (_url, init) => {
+          const body = JSON.parse(String(init?.body));
           requests++;
+          if (!body.tools) {
+            ok(body.instructions.includes("Tool limit reached, wrap up"));
+            const denied = body.input.filter(
+              (item: { type: string; output?: string }) =>
+                item.type === "function_call_output" &&
+                item.output?.includes("Tool limit reached"),
+            );
+            strictEqual(denied.length, batchSize === 13 ? 1 : 0);
+            return Response.json(budgetTestAnswer(`resp_wrap_${batchSize}`));
+          }
           return Response.json(
             createApiResponse(
               `resp_tool_budget_${batchSize}_${requests}`,
@@ -293,32 +245,73 @@ Deno.test("tool limits stop repeated rounds and oversized parallel batches befor
             ),
           );
         }) as typeof fetch;
-        await assertRejects(
-          () =>
-            requestLlm(
-              "Repeat forever",
-              ["set_reply_message_id"],
-              undefined,
-              {
-                context: { chatId: 1, messageId: 1 },
-                chargeCredits: async () => {
-                  executions++;
-                },
-              },
-              "Be brief.",
-            ),
-          (error) =>
-            error instanceof LlmRequestError && error.kind === "token_limit",
+        const answer = await requestLlm(
+          "Repeat forever",
+          ["set_reply_message_id"],
+          undefined,
+          {
+            context: { chatId: 1, messageId: 1 },
+            chargeCredits: async () => {
+              executions++;
+            },
+          },
+          "Be brief.",
         );
-        strictEqual(executions, batchSize === 1 ? 12 : 0);
-        strictEqual(requests, batchSize === 1 ? 13 : 1);
+        strictEqual(answer.response, "Done.");
+        strictEqual(executions, 12);
+        strictEqual(requests, batchSize === 1 ? 13 : 2);
       });
   } finally {
     globalThis.fetch = originalFetch;
   }
 });
 
-Deno.test("output token exhaustion never retries, even after a tool round", async (t) => {
+Deno.test("a provider ignoring tools-disabled cannot start another tool loop and partial text is retained", async () => {
+  setLlmDeploymentName("small", "budget-test");
+  const originalFetch = globalThis.fetch;
+  let requests = 0;
+  let executions = 0;
+  globalThis.fetch = (async () => {
+    requests++;
+    const answer = budgetTestAnswer(`resp_rogue_${requests}`);
+    return Response.json({
+      ...answer,
+      output: [
+        ...answer.output,
+        ...Array.from({ length: 13 }, (_, i) => ({
+          type: "function_call",
+          id: `fc_${requests}_${i}`,
+          call_id: `call_${requests}_${i}`,
+          name: "set_reply_message_id",
+          arguments: '{"message_id":7}',
+          status: "completed",
+        })),
+      ],
+    });
+  }) as typeof fetch;
+  try {
+    const answer = await requestLlm(
+      "Work",
+      ["set_reply_message_id"],
+      undefined,
+      {
+        context: { chatId: 1, messageId: 1 },
+        chargeCredits: async () => {
+          executions++;
+        },
+      },
+      "Be brief.",
+    );
+    ok(answer.response?.includes("Done."));
+    ok(answer.response?.includes("Tool limit reached"));
+    strictEqual(executions, 12);
+    strictEqual(requests, 2);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+Deno.test("provider output exhaustion preserves partial text without retries, even after a tool round", async (t) => {
   setLlmDeploymentName("small", "budget-test");
   const originalFetch = globalThis.fetch;
   try {
@@ -327,7 +320,10 @@ Deno.test("output token exhaustion never retries, even after a tool round", asyn
         let requests = 0;
         globalThis.fetch = (async (_url, init) => {
           requests++;
-          strictEqual(JSON.parse(String(init?.body)).max_output_tokens, 8192);
+          strictEqual(
+            JSON.parse(String(init?.body)).max_output_tokens,
+            undefined,
+          );
           if (afterTool && requests === 1) {
             return Response.json(
               createApiResponse("resp_budget_before_limit", [
@@ -343,25 +339,20 @@ Deno.test("output token exhaustion never retries, even after a tool round", asyn
             );
           }
           return Response.json({
-            ...createApiResponse("resp_output_budget_limit", []),
+            ...budgetTestAnswer("resp_output_budget_limit"),
             status: "incomplete",
             incomplete_details: { reason: "max_output_tokens" },
           });
         }) as typeof fetch;
-        await assertRejects(
-          () =>
-            requestLlm(
-              "Use every token",
-              ["set_reply_message_id"],
-              undefined,
-              { context: { chatId: 1, messageId: 1 } },
-              "Be brief.",
-            ),
-          (error) =>
-            error instanceof LlmRequestError &&
-            error.kind === "token_limit" &&
-            error.lastResponseId === "resp_output_budget_limit",
+        const answer = await requestLlm(
+          "Use every token",
+          ["set_reply_message_id"],
+          undefined,
+          { context: { chatId: 1, messageId: 1 } },
+          "Be brief.",
         );
+        ok(answer.response?.includes("Done."));
+        ok(answer.response?.includes("model reached its output limit"));
         strictEqual(requests, afterTool ? 2 : 1);
       });
   } finally {

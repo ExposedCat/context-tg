@@ -224,6 +224,23 @@ Deno.test("Finance MCP opt-in discovers reports, binds user identity and persist
     financeFailure = undefined;
     await run(2);
     ok(Array.isArray(requests.at(-1)?.tools));
+
+    // Wrapping up disables dynamically discovered tools as well as local tools.
+    const { LlmToolBudget } = await import("./llm-budget.ts");
+    callFinance = true;
+    const wrapped = await requestLlm("My portfolio", [], undefined, {
+      database,
+      context: { chatId: -100, messageId: 1, userId: 2 },
+      toolBudget: new LlmToolBudget(1),
+    });
+    strictEqual(wrapped.response, "Done.");
+    ok(Array.isArray(requests.at(-2)?.tools));
+    strictEqual(requests.at(-1)?.tools, undefined);
+    ok(
+      String(requests.at(-1)?.instructions).includes(
+        "Tool limit reached, wrap up",
+      ),
+    );
   } finally {
     globalThis.fetch = originalFetch;
     setLlmDeploymentName("small", "");

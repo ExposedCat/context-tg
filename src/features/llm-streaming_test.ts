@@ -26,9 +26,6 @@ const {
   deleteTaskAbortController,
   getTask,
 } = await import("./tasks.ts");
-const { LlmBudgetExceededError, LlmTokenBudget } = await import(
-  "./llm-budget.ts"
-);
 const { createTextCreditCharge, getUsageStatus, handleUsageCommand } =
   await import("./usage.ts");
 const { countTextTokens, TOKENS_PER_CREDIT } = await import("./text-tokens.ts");
@@ -56,9 +53,9 @@ Deno.test("wallet exhaustion aborts after ten funded text tokens and preserves t
     await spent.settle(TOKENS_PER_CREDIT - 10);
     globalThis.fetch = (async (_url, init) => {
       requests++;
-      // Hidden reasoning keeps the independent model cap. Only visible text
-      // spends the ten remaining token credits.
-      strictEqual(JSON.parse(String(init?.body)).max_output_tokens, 8192);
+      // Only visible text spends the ten remaining token credits; the
+      // application does not cap reasoning or the provider's output size.
+      strictEqual(JSON.parse(String(init?.body)).max_output_tokens, undefined);
       return new Response(
         new ReadableStream<Uint8Array>({
           start(controller) {
@@ -318,7 +315,7 @@ Deno.test("streamed text deltas arrive before completion and the final response 
     const body = JSON.parse(String(init?.body));
     strictEqual(body.stream, true);
     strictEqual(body.store, false);
-    strictEqual(body.max_output_tokens, 8192);
+    strictEqual(body.max_output_tokens, undefined);
     return sse([
       created,
       delta,
@@ -491,64 +488,6 @@ Deno.test("canceling an already-started task closes an idle stream without retri
   }
 });
 
-Deno.test("live stream inspection can abort generation and retains the unknown-usage budget reservation", async () => {
-  setLlmDeploymentName("small", "stream-test");
-  const originalFetch = globalThis.fetch;
-  const budget = new LlmTokenBudget({
-    total: 1000,
-    output: 1000,
-    tools: 2,
-  });
-  let requests = 0;
-  let closed = false;
-  globalThis.fetch = (async () => {
-    requests++;
-    return new Response(
-      new ReadableStream<Uint8Array>({
-        start(controller) {
-          controller.enqueue(frame(created));
-          controller.enqueue(frame(delta));
-        },
-        cancel() {
-          closed = true;
-        },
-      }),
-      { headers: { "content-type": "text/event-stream" } },
-    );
-  }) as typeof fetch;
-  try {
-    await rejects(
-      () =>
-        requestLlm(
-          "Work",
-          [],
-          undefined,
-          {
-            tokenBudget: budget,
-            onStreamEvent: (event) => {
-              if (event.type === "response.output_text.delta")
-                throw new LlmBudgetExceededError();
-            },
-          },
-          "Be brief.",
-        ),
-      (error) =>
-        error instanceof LlmRequestError && error.kind === "token_limit",
-    );
-    strictEqual(requests, 1);
-    strictEqual(closed, true);
-    await rejects(
-      () =>
-        requestLlm("Work", [], undefined, { tokenBudget: budget }, "Be brief."),
-      (error) =>
-        error instanceof LlmRequestError && error.kind === "token_limit",
-    );
-    strictEqual(requests, 1);
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
-});
-
 Deno.test("a dropped stream after partial tool arguments is never retried or executed", async () => {
   setLlmDeploymentName("small", "stream-test");
   const originalFetch = globalThis.fetch;
@@ -590,7 +529,7 @@ Deno.test("a dropped stream after partial tool arguments is never retried or exe
   }
 });
 
-Deno.test("a streamed output-limit response stops without retrying", async () => {
+Deno.test("a streamed provider output limit preserves partial text without retrying", async () => {
   setLlmDeploymentName("small", "stream-test");
   const originalFetch = globalThis.fetch;
   let requests = 0;
@@ -602,7 +541,7 @@ Deno.test("a streamed output-limit response stops without retrying", async () =>
       {
         type: "response.incomplete",
         response: {
-          ...response("resp_stream_limit"),
+          ...response("resp_stream_limit", []),
           status: "incomplete",
           incomplete_details: { reason: "max_output_tokens" },
         },
@@ -610,13 +549,68 @@ Deno.test("a streamed output-limit response stops without retrying", async () =>
     ]);
   }) as typeof fetch;
   try {
-    await rejects(
-      () => requestLlm("Work", [], undefined, {}, "Be brief."),
-      (error) =>
-        error instanceof LlmRequestError && error.kind === "token_limit",
-    );
+    const answer = await requestLlm("Work", [], undefined, {}, "Be brief.");
+    ok(answer.response?.includes("Hello"));
+    ok(answer.response?.includes("model reached its output limit"));
     strictEqual(requests, 1);
   } finally {
     globalThis.fetch = originalFetch;
+  }
+});
+
+Deno.test("an admin stream can exceed 64000 text tokens without an application generation cap", async () => {
+  setLlmDeploymentName("small", "stream-test");
+  const database = await initDatabase()();
+  const originalFetch = globalThis.fetch;
+  const text = "123".repeat(64001);
+  const ctx = {
+    database,
+    from: { id: 1 },
+    chat: { id: -800, type: "supergroup" },
+    telemetry: { event: () => {} },
+  } as unknown as Context;
+  try {
+    await handleUsageCommand(database, -800, "-50", true, (key) => key);
+    globalThis.fetch = (async (_url, init) => {
+      strictEqual(JSON.parse(String(init?.body)).max_output_tokens, undefined);
+      return sse([
+        created,
+        { ...delta, delta: text },
+        {
+          type: "response.completed",
+          response: {
+            ...response("resp_unlimited_text", [
+              {
+                type: "message",
+                id: "msg_unlimited",
+                role: "assistant",
+                status: "completed",
+                content: [{ type: "output_text", text, annotations: [] }],
+              },
+            ]),
+            usage: {
+              input_tokens: 500000,
+              output_tokens: 120000,
+              total_tokens: 620000,
+            },
+          },
+        },
+      ]);
+    }) as typeof fetch;
+    const answer = await requestLlm(
+      "Long answer",
+      [],
+      undefined,
+      { textCredits: createTextCreditCharge(ctx) },
+      "Answer the request.",
+    );
+    strictEqual(answer.response, text);
+    strictEqual(
+      (await getUsageStatus(database, -800)).used,
+      64001 / TOKENS_PER_CREDIT,
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+    await database.destroy();
   }
 });
