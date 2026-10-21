@@ -54,8 +54,23 @@ Deno.test("rich configure navigation, persistence and authorization", async () =
     });
     const calls: Array<{ method: string; payload: Record<string, unknown> }> =
       [];
+    let requireEphemeralReply = false;
     bot.api.config.use((_prev, method, payload) => {
       calls.push({ method, payload: payload as Record<string, unknown> });
+      if (method === "sendRichMessage" && requireEphemeralReply) {
+        const reply = (
+          payload as {
+            reply_parameters?: { ephemeral_message_id?: number };
+          }
+        ).reply_parameters;
+        if (reply?.ephemeral_message_id !== 17) {
+          return Promise.resolve({
+            ok: false,
+            error_code: 400,
+            description: "Bad Request: BOT_NOT_ADMIN",
+          }) as ReturnType<typeof _prev>;
+        }
+      }
       return Promise.resolve({
         ok: true,
         result:
@@ -123,10 +138,13 @@ Deno.test("rich configure navigation, persistence and authorization", async () =
             call.method === "sendRichMessage",
         )?.payload.rich_message as { html: string }
       ).html;
+    requireEphemeralReply = true;
     await bot.handleUpdate({
       update_id: ++updateId,
       message: {
-        message_id: 1,
+        message_id: 0,
+        ephemeral_message_id: 17,
+        receiver_user: from(1),
         date: 1,
         chat,
         from: from(1),
@@ -134,6 +152,12 @@ Deno.test("rich configure navigation, persistence and authorization", async () =
         entities: [{ type: "bot_command", offset: 0, length: 9 }],
       },
     });
+    requireEphemeralReply = false;
+    deepStrictEqual(
+      calls.find((call) => call.method === "sendRichMessage")?.payload
+        .reply_parameters,
+      { ephemeral_message_id: 17 },
+    );
     deepStrictEqual(
       calls.find((call) => call.method === "sendRichMessage")?.payload
         .ephemeral_message_parameters,

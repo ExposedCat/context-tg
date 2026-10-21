@@ -159,6 +159,13 @@ export async function buildRichConfigureMessage(
 configureComposer.command("settings", async (ctx) => {
   if (!ctx.chat || !ctx.from) return;
   await ctx.replyWithRichMessage(await buildRichConfigureMessage(ctx), {
+    ...(ctx.message?.ephemeral_message_id !== undefined
+      ? {
+          reply_parameters: {
+            ephemeral_message_id: ctx.message.ephemeral_message_id,
+          },
+        }
+      : {}),
     ...(ctx.chat.type === "group" || ctx.chat.type === "supergroup"
       ? { ephemeral_message_parameters: { receiver_user_id: ctx.from.id } }
       : {}),
