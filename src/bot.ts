@@ -32,12 +32,20 @@ const TELEGRAM_RATE_LIMIT_RETRY_DELAY_MS = 3000;
 const TELEGRAM_RATE_LIMIT_MAX_RETRIES = 5;
 const BOT_COMMAND_LOCALES = ["ru", "uk", "de"] as const;
 const BOT_COMMANDS = [
-  { command: "settings", descriptionKey: "command-settings-description" },
+  {
+    command: "settings",
+    descriptionKey: "command-settings-description",
+    is_ephemeral: true,
+  },
   { command: "debug", descriptionKey: "command-debug-description" },
   { command: "packs", descriptionKey: "command-packs-description" },
   { command: "tasks", descriptionKey: "command-tasks-description" },
   { command: "schedule", descriptionKey: "command-schedule-description" },
-  { command: "usage", descriptionKey: "command-usage-description" },
+  {
+    command: "usage",
+    descriptionKey: "command-usage-description",
+    is_ephemeral: true,
+  },
 ] as const;
 
 const logDebug = createDebug("app:bot:debug");
@@ -127,10 +135,10 @@ export function initBot(token: string, database: Database) {
   return async () => {
     await bot.init();
     const getLocalizedCommands = (locale: string) =>
-      BOT_COMMANDS.map(({ command, descriptionKey }) => ({
+      BOT_COMMANDS.map(({ command, descriptionKey, ...options }) => ({
         command,
         description: i18n.t(locale, descriptionKey),
-        ...(command === "settings" ? { is_ephemeral: true } : {}),
+        ...options,
       }));
 
     await bot.api.setMyCommands(getLocalizedCommands("en"));

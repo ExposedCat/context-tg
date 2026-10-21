@@ -122,6 +122,22 @@ export function createCreditCharge(ctx: Context, guest = false): CreditCharge {
     });
   };
 }
+export function parseUsageCommand(
+  text: string,
+  botUsername: string,
+): string | undefined {
+  const match = text
+    .trim()
+    .match(/^\/usage(?:@([a-z0-9_]+))?(?:\s+([\s\S]*))?$/i);
+  if (
+    !match ||
+    (match[1] && match[1].toLowerCase() !== botUsername.toLowerCase())
+  ) {
+    return undefined;
+  }
+  return match[2]?.trim() ?? "";
+}
+
 export function parseGuestUsageCommand(
   text: string,
   botUsername: string,
@@ -133,15 +149,7 @@ export function parseGuestUsageCommand(
     return undefined;
   }
 
-  const normalizedCommand = command?.toLocaleLowerCase();
-  if (
-    normalizedCommand !== "/usage" &&
-    normalizedCommand !== `/usage@${normalizedUsername}`
-  ) {
-    return undefined;
-  }
-
-  return args.join(" ");
+  return parseUsageCommand([command, ...args].join(" "), botUsername);
 }
 
 export async function handleUsageCommand(

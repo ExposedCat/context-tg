@@ -43,7 +43,7 @@ import {
   setTrollingEnabled,
   setTrollingInterval,
 } from "./trolling.ts";
-import { handleUsageCommand } from "./usage.ts";
+import { handleUsageCommand, parseUsageCommand } from "./usage.ts";
 
 export const stateComposer = new Composer<Context>();
 
@@ -385,12 +385,15 @@ stateComposer.command("schedule", async (ctx) => {
   await replyWithSchedules(ctx);
 });
 
-stateComposer.command("usage", async (ctx) => {
-  if (!ctx.chat) {
+stateComposer.on(["message", "channel_post"], async (ctx, next) => {
+  const text = ctx.msg?.text ?? ctx.msg?.caption;
+  const args =
+    text === undefined ? undefined : parseUsageCommand(text, ctx.me.username);
+  if (args === undefined || !ctx.chat) {
+    await next();
     return;
   }
 
-  const args = typeof ctx.match === "string" ? ctx.match.trim() : "";
   const response = await handleUsageCommand(
     ctx.database,
     ctx.chat.id,
@@ -399,7 +402,17 @@ stateComposer.command("usage", async (ctx) => {
     ctx.t,
   );
 
-  await ctx.reply(response);
+  await ctx.reply(
+    response,
+    ctx.msg?.ephemeral_message_id !== undefined && ctx.from
+      ? {
+          ephemeral_message_parameters: { receiver_user_id: ctx.from.id },
+          reply_parameters: {
+            ephemeral_message_id: ctx.msg.ephemeral_message_id,
+          },
+        }
+      : {},
+  );
 });
 
 stateComposer.command("model", async (ctx) => {
