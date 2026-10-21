@@ -130,6 +130,7 @@ export function initBot(token: string, database: Database) {
       BOT_COMMANDS.map(({ command, descriptionKey }) => ({
         command,
         description: i18n.t(locale, descriptionKey),
+        ...(command === "settings" ? { is_ephemeral: true } : {}),
       }));
 
     await bot.api.setMyCommands(getLocalizedCommands("en"));

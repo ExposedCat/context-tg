@@ -158,7 +158,11 @@ export async function buildRichConfigureMessage(
 
 configureComposer.command("settings", async (ctx) => {
   if (!ctx.chat || !ctx.from) return;
-  await ctx.replyWithRichMessage(await buildRichConfigureMessage(ctx));
+  await ctx.replyWithRichMessage(await buildRichConfigureMessage(ctx), {
+    ...(ctx.chat.type === "group" || ctx.chat.type === "supergroup"
+      ? { ephemeral_message_parameters: { receiver_user_id: ctx.from.id } }
+      : {}),
+  });
 });
 
 configureComposer.callbackQuery(/^cfg:/, async (ctx) => {
@@ -260,9 +264,12 @@ configureComposer.callbackQuery(/^cfg:/, async (ctx) => {
   }
   await ctx.answerCallbackQuery();
   try {
-    await ctx.editMessageText(
-      await buildRichConfigureMessage(ctx, page, selected),
-    );
+    const message = await buildRichConfigureMessage(ctx, page, selected);
+    if (ctx.msg?.ephemeral_message_id !== undefined) {
+      await ctx.editEphemeralMessageText(message);
+    } else {
+      await ctx.editMessageText(message);
+    }
   } catch (error) {
     if (
       !(error instanceof GrammyError) ||

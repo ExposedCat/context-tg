@@ -2,7 +2,8 @@
 
 ## Finance MCP
 
-Anyone can open `/settings`. The menu shows only controls they may use:
+Anyone can open `/settings`. In groups, the command and menu are ephemeral,
+visible only to the person who opens them. The menu shows only controls they may use:
 chat admins retain Emoji, Trolling and Proactive controls, while Models, Debug
 and Effort remain restricted to the bot admin.
 

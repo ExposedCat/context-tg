@@ -1,4 +1,4 @@
-import { match, ok, strictEqual } from "node:assert";
+import { deepStrictEqual, match, ok, strictEqual } from "node:assert";
 import { Bot } from "grammy";
 import { I18n } from "grammy-i18n";
 import type { Context } from "../bot.ts";
@@ -83,7 +83,7 @@ Deno.test("rich configure navigation, persistence and authorization", async () =
     const chat = { id: -100, type: "supergroup" as const, title: "test" };
     const from = (id: number) => ({ id, is_bot: false, first_name: "user" });
     let updateId = 0;
-    const click = async (data: string, user = 1) => {
+    const click = async (data: string, user = 1, ephemeral = true) => {
       calls.length = 0;
       await bot.handleUpdate({
         update_id: ++updateId,
@@ -92,15 +92,34 @@ Deno.test("rich configure navigation, persistence and authorization", async () =
           from: from(user),
           chat_instance: "test",
           data,
-          message: { message_id: 42, date: 1, chat, text: "settings" },
+          message: {
+            message_id: ephemeral ? 0 : 42,
+            date: 1,
+            chat,
+            text: "settings",
+            ...(ephemeral
+              ? { ephemeral_message_id: 42, receiver_user: from(user) }
+              : {}),
+          },
         },
       });
+      const edit = calls.find(
+        (call) => call.method === "editEphemeralMessageText",
+      );
+      if (edit) {
+        strictEqual(edit.payload.chat_id, chat.id);
+        strictEqual(edit.payload.receiver_user_id, user);
+        strictEqual(edit.payload.ephemeral_message_id, 42);
+      }
+      if (ephemeral)
+        ok(!calls.some((call) => call.method === "editMessageText"));
     };
     const html = () =>
       (
         calls.find(
           (call) =>
             call.method === "editMessageText" ||
+            call.method === "editEphemeralMessageText" ||
             call.method === "sendRichMessage",
         )?.payload.rich_message as { html: string }
       ).html;
@@ -115,7 +134,11 @@ Deno.test("rich configure navigation, persistence and authorization", async () =
         entities: [{ type: "bot_command", offset: 0, length: 9 }],
       },
     });
-    ok(calls.some((call) => call.method === "sendRichMessage"));
+    deepStrictEqual(
+      calls.find((call) => call.method === "sendRichMessage")?.payload
+        .ephemeral_message_parameters,
+      { receiver_user_id: 1 },
+    );
     ok(calls.every((call) => !("reply_markup" in call.payload)));
     match(html(), /<p>Debug <tg-button[^>]+style="danger"/);
     match(
@@ -145,6 +168,11 @@ Deno.test("rich configure navigation, persistence and authorization", async () =
         entities: [{ type: "bot_command", offset: 0, length: 9 }],
       },
     });
+    deepStrictEqual(
+      calls.find((call) => call.method === "sendRichMessage")?.payload
+        .ephemeral_message_parameters,
+      { receiver_user_id: 3 },
+    );
     match(html(), /data="cfg:finance:3:on"/);
     for (const action of [
       "emoji",
@@ -196,6 +224,11 @@ Deno.test("rich configure navigation, persistence and authorization", async () =
         entities: [{ type: "bot_command", offset: 0, length: 9 }],
       },
     });
+    strictEqual(
+      calls.find((call) => call.method === "sendRichMessage")?.payload
+        .ephemeral_message_parameters,
+      undefined,
+    );
     match(html(), /data="cfg:finance:3:off"/);
     match(html(), /data="cfg:progress:off"/);
     ok(!calls.some((call) => call.method === "getChatMember"));
@@ -218,6 +251,9 @@ Deno.test("rich configure navigation, persistence and authorization", async () =
     strictEqual(await getChatProgressEnabled(database, 3), false);
     strictEqual(await getChatProgressEnabled(database, chat.id), true);
     match(html(), /data="cfg:progress:on"/);
+    ok(calls.some((call) => call.method === "editMessageText"));
+    await click("cfg:menu", 1, false);
+    ok(calls.some((call) => call.method === "editMessageText"));
     await click("cfg:finance:3:off", 3);
     strictEqual(await getFinanceMcpEnabled(database, 3), false);
     await click("cfg:finance:3:invalid", 3);
