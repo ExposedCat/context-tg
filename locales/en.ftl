@@ -87,6 +87,7 @@ settings-usage-line = Credits used: {$used} / {$quota}
 settings-usage-usage = /usage · /usage +N · /usage -N · /usage +unlimited · /usage -unlimited
 settings-usage-admin-only = Only the bot admin can change usage limits.
 settings-usage-prices =
+    Request · 1 credit
     Assistant text · 1 credit per {$tokens} tokens (progress + final answer)
     Tool use · 1 credit
     Web search · +1 credit

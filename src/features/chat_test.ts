@@ -1252,12 +1252,8 @@ Deno.test("guest usage commands report and adjust group credits without changing
             ctx.t("settings-usage-title", {
               date: new Date().toISOString().slice(0, 10),
             }),
-            ctx.t("settings-usage-line", { used: 6, quota: expectedQuota }),
-            ctx.t("settings-usage-prices", { tokens: 618 }).split("\n")[0],
-            "Tool use · 1 credit",
-            "Web search · +1 credit",
-            "Image generation · +5 credits per attempt (retries count)",
-            "Resets daily at 00:00 UTC.",
+            ctx.t("settings-usage-line", { used: 7, quota: expectedQuota }),
+            ...ctx.t("settings-usage-prices", { tokens: 620 }).split("\n"),
           ].map((text) => ({ type: "paragraph", text })),
         },
       });
@@ -2291,6 +2287,40 @@ Deno.test("oversized user input is rejected before generation, task creation, or
     );
   } finally {
     globalThis.fetch = originalFetch;
+    await database.destroy();
+  }
+});
+
+Deno.test("automatic response checks allow ADMIN_ID even when the group has no credits", async () => {
+  const { prepareProactiveAgentResponse } = await import("./chat.ts");
+  const { preparePeriodicTroll } = await import("./trolling.ts");
+  const { setProactiveResponseInterval } = await import("./proactive.ts");
+  const { setTrollingInterval } = await import("./trolling.ts");
+  const { handleUsageCommand } = await import("./usage.ts");
+  const database = await initDatabase()();
+  try {
+    await handleUsageCommand(database, -100, "-50", true, (key) => key);
+    await setProactiveResponseInterval(database, -100, 1);
+    await setTrollingInterval(database, -100, 1);
+    const chat = { id: -100, type: "supergroup", title: "Test" } as const;
+    const sender = { id: 1, is_bot: false, first_name: "Admin" };
+    const message = {
+      message_id: 1,
+      date: 0,
+      chat,
+      from: sender,
+      text: "Hello everyone",
+    };
+    const ctx = new GrammyContext({ update_id: 1, message }, new Api("test"), {
+      id: 42,
+      is_bot: true,
+      first_name: "Bot",
+      username: "test_bot",
+    } as Context["me"]) as Context;
+    ctx.database = database;
+    ok(await prepareProactiveAgentResponse(ctx, message, chat.id));
+    ok(await preparePeriodicTroll(ctx, message, sender, chat.id));
+  } finally {
     await database.destroy();
   }
 });

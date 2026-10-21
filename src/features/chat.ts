@@ -2984,7 +2984,7 @@ export async function prepareProactiveAgentResponse(
   message: ProactiveTriggerMessage,
   chatId: number,
 ): Promise<(() => Promise<void>) | undefined> {
-  if (!(await hasUsageRemaining(ctx.database, chatId))) return;
+  if (!(await hasUsageRemaining(ctx.database, chatId, ctx.from?.id))) return;
   const textMessage = message as TextMessage;
 
   if (shouldSkipProactiveAgentResponse(ctx, textMessage)) {

@@ -241,6 +241,7 @@ Deno.test("automatic responses choose one before generation and advance both cou
           Math.abs(
             (await getUsageStatus(database, chat.id)).used -
               before -
+              (test.models.length > 0 ? 1 : 0) -
               expectedTokens / TOKENS_PER_CREDIT,
           ) < 1e-12,
         );
@@ -270,7 +271,7 @@ Deno.test("automatic responses choose one before generation and advance both cou
           database,
           chat,
           telemetry: { event: () => {} },
-        } as unknown as Context).reserve(618);
+        } as unknown as Context).reserve(620);
         await remaining.settle(remaining.tokens);
         await receive();
         const troll = await database

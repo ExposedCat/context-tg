@@ -42,16 +42,23 @@ loopback; Context accesses MCP directly over the container network.
 
 ## Text credits
 
-Assistant progress text and final answers cost **1 credit per 618 tokens**,
-configured by `TOKENS_PER_CREDIT`. This is 1.5 times the supplied reference
-answer's 412 tokens using the `o200k_base` tokenizer. Usage accumulates as exact
-token counts across requests, rather than rounding every reply up to a credit;
-`/usage` displays credits to three decimal places.
+Each request costs **1 credit**, plus **1 credit per 620 tokens** of assistant
+progress text and final answers, configured by `TOKENS_PER_CREDIT`. Text usage
+accumulates as exact token counts across requests, rather than rounding every
+reply up to a credit; `/usage` displays credits to three decimal places.
+For example, 310 generated text tokens cost 1.5 credits including the request fee.
 
-There is no flat request fee. Input, context, hidden reasoning, tool arguments,
-thread titles and automatic validation verdicts do not spend text credits.
+The fixed fee is charged once when accepting a request, including resumed and
+automatic requests, without charging again for model retries or tool follow-ups.
+Input rejected by the user-message limit is not charged. Input, context, hidden
+reasoning, tool arguments, thread titles and automatic validation verdicts do not
+spend text credits.
 Tool charges remain 1 credit per execution, an extra 1 for web search, and
 5 per image-generation attempt. These charges share the same daily balance.
+Requests from `ADMIN_ID` always bypass credit limits in private chats, groups,
+guest mode and automatic responses, including tool and image charges. Their
+usage is still recorded; the exemption never changes the chat's quota or grants
+unlimited usage to other users.
 
 Before generating an answer, the app atomically reserves available text tokens
 so parallel requests and tools cannot spend the same balance. Unused allowance

@@ -323,7 +323,7 @@ export async function preparePeriodicTroll(
   sender: Sender,
   chatId: number,
 ): Promise<(() => Promise<void>) | undefined> {
-  if (!(await hasUsageRemaining(ctx.database, chatId))) return;
+  if (!(await hasUsageRemaining(ctx.database, chatId, ctx.from?.id))) return;
   const { messageCount, enabled, intervalMessageCount } =
     await incrementTrollingMessageCount(ctx.database, chatId);
 

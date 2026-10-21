@@ -229,25 +229,116 @@ Deno.test("guest requests spend group credits and obey the group's usage adjustm
     await charge("tool", "generate_image");
     await charge("image_attempt", "generate_image");
     await charge("image_attempt", "generate_image");
-    strictEqual((await getUsageStatus(db, -1)).used, 11);
+    strictEqual((await getUsageStatus(db, -1)).used, 12);
     strictEqual((await getUsageStatus(db, 2)).used, 0);
     await handleUsageCommand(db, -1, "-50", true, t);
     await rejects(() => charge("tool", "web_search"));
-    strictEqual(events.length, 3);
+    strictEqual(events.length, 4);
     await handleUsageCommand(db, -1, "+50", true, t);
     await charge("request");
-    strictEqual((await getUsageStatus(db, -1)).used, 11);
+    strictEqual((await getUsageStatus(db, -1)).used, 13);
     await handleUsageCommand(db, -1, "+unlimited", true, t);
     await charge("request");
     await charge("tool", "web_search");
-    strictEqual(events[3].payload.usage_limit, "unlimited");
-    strictEqual(events[3].payload.usage_owner, -1);
-    strictEqual(events[3].name, "credit_usage");
+    strictEqual(events[5].payload.usage_limit, "unlimited");
+    strictEqual(events[5].payload.usage_owner, -1);
+    strictEqual(events[5].name, "credit_usage");
     strictEqual(
       events.reduce((sum, e) => sum + Number(e.payload.credits), 0),
-      12,
+      15,
     );
   } finally {
     await db.destroy();
+  }
+});
+
+Deno.test("each request costs one fixed credit plus one credit per 620 generated text tokens", async () => {
+  const db = await database();
+  try {
+    strictEqual(TOKENS_PER_CREDIT, 620);
+    for (const guest of [false, true]) {
+      const chatId = guest ? -2 : -1;
+      const ctx = {
+        database: db,
+        chat: { id: chatId, type: "supergroup" },
+        telemetry: { event: () => {} },
+      } as unknown as Context;
+      const charge = createCreditCharge(ctx, guest);
+      await charge("request");
+      strictEqual((await getUsageStatus(db, chatId)).used, 1);
+      const first = await createTextCreditCharge(ctx, guest).reserve(620);
+      await first.settle(620);
+      strictEqual((await getUsageStatus(db, chatId)).used, 2);
+      await charge("request");
+      const second = await createTextCreditCharge(ctx, guest).reserve(620);
+      await second.settle(310);
+      strictEqual((await getUsageStatus(db, chatId)).used, 3.5);
+      await handleUsageCommand(db, chatId, "-46", true, t);
+      await rejects(() => charge("request"));
+      strictEqual((await getUsageStatus(db, chatId)).used, 3.5);
+    }
+  } finally {
+    await db.destroy();
+  }
+});
+
+Deno.test("ADMIN_ID has unlimited credits in every chat and guest mode without granting other users an exemption", async () => {
+  const previousAdminId = Deno.env.get("ADMIN_ID");
+  Deno.env.set("ADMIN_ID", "987654321");
+  const db = await database();
+  try {
+    for (const chatId of [10, -10]) {
+      await handleUsageCommand(db, chatId, "-100", true, t);
+      for (const guest of [false, true]) {
+        const events: Record<string, unknown>[] = [];
+        const ctx = {
+          database: db,
+          chat: { id: chatId, type: chatId > 0 ? "private" : "supergroup" },
+          from: { id: 987654321 },
+          telemetry: {
+            event: (_name: string, payload: Record<string, unknown>) =>
+              events.push(payload),
+          },
+        } as unknown as Context;
+        strictEqual(await hasUsageRemaining(db, chatId, ctx.from?.id), true);
+        const charge = createCreditCharge(ctx, guest);
+        for (const kind of [
+          "request",
+          "tool",
+          "web_search",
+          "image_attempt",
+        ] as const)
+          await charge(kind);
+        const meter = createTextCreditCharge(ctx, guest);
+        const reservations = await Promise.all([
+          meter.reserve(10000),
+          meter.reserve(10000),
+        ]);
+        strictEqual(reservations[0].tokens, 10000);
+        strictEqual(reservations[1].tokens, 10000);
+        await Promise.all(
+          reservations.map((reservation) => reservation.settle(10000)),
+        );
+        strictEqual(events.length, 6);
+        for (const event of events) {
+          strictEqual(event.usage_limit, "unlimited");
+          strictEqual(event.mode, guest ? "guest" : "normal");
+        }
+        const regular = { ...ctx, from: { id: 2 } } as Context;
+        strictEqual(await hasUsageRemaining(db, chatId, 2), false);
+        strictEqual(await hasUsageRemaining(db, chatId), false);
+        await rejects(() => createCreditCharge(regular, guest)("request"));
+        await rejects(() => createCreditCharge(regular, guest)("tool"));
+        await rejects(() => createTextCreditCharge(regular, guest).reserve(1));
+        const status = await getUsageStatus(db, chatId);
+        strictEqual(status.quota, 0);
+        strictEqual(status.unlimited, false);
+        strictEqual(status.used > 0, true);
+      }
+    }
+  } finally {
+    await db.destroy();
+    if (previousAdminId === undefined) Deno.env.delete("ADMIN_ID");
+    else Deno.env.set("ADMIN_ID", previousAdminId);
   }
 });

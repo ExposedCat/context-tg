@@ -3000,7 +3000,7 @@ Deno.test("periodic trolling always generates at its interval and sends only app
     const { countTextTokens, TOKENS_PER_CREDIT } = await import(
       "./text-tokens.ts"
     );
-    strictEqual(used, (3 * countTextTokens(candidate)) / TOKENS_PER_CREDIT);
+    strictEqual(used, 3 + (3 * countTextTokens(candidate)) / TOKENS_PER_CREDIT);
     await database
       .insertInto("credit_limits")
       .values({

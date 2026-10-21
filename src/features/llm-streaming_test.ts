@@ -182,6 +182,8 @@ Deno.test("text credits count progress and final text, excluding input, reasonin
       chat: { id: -1, type: "supergroup" },
       telemetry: { event: () => {} },
     } as unknown as Context;
+    const chargeCredits = createCreditCharge(ctx);
+    await chargeCredits("request");
     await requestLlm(
       "Read then reply",
       ["set_reply_message_id"],
@@ -189,7 +191,7 @@ Deno.test("text credits count progress and final text, excluding input, reasonin
       {
         context: { chatId: -1, messageId: 1 },
         textCredits: wallet(database),
-        chargeCredits: createCreditCharge(ctx),
+        chargeCredits,
       },
       "Be brief.",
     );
@@ -197,7 +199,7 @@ Deno.test("text credits count progress and final text, excluding input, reasonin
       countTextTokens("Checking sources.") + countTextTokens("Done.");
     strictEqual(
       (await getUsageStatus(database, -1)).used,
-      1 + expected / TOKENS_PER_CREDIT,
+      2 + expected / TOKENS_PER_CREDIT,
     );
     strictEqual(requests, 2);
   } finally {

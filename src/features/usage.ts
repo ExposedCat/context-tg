@@ -1,6 +1,7 @@
 import { type Generated, sql } from "@kysely/kysely";
 import type { TranslateFunction } from "grammy-i18n";
 import type { Context } from "../bot.ts";
+import { isBotAdmin, isBotAdminId } from "./authorization.ts";
 import type { Database } from "./database.ts";
 import { TOKENS_PER_CREDIT } from "./text-tokens.ts";
 
@@ -41,7 +42,7 @@ export type UsageStatus = { used: number; quota: number; unlimited: boolean };
 export type CreditKind = "request" | "tool" | "web_search" | "image_attempt";
 export type CreditCharge = (kind: CreditKind, tool?: string) => Promise<void>;
 export const CREDIT_PRICES = {
-  request: 0,
+  request: 1,
   tool: 1,
   web_search: 1,
   image_attempt: 5,
@@ -123,7 +124,9 @@ export async function getUsageStatus(
 export async function hasUsageRemaining(
   database: Database,
   chatId: number,
+  userId?: number,
 ): Promise<boolean> {
+  if (isBotAdminId(userId)) return true;
   const rows = await sql<{
     remaining: number;
   }>`select ${availableTextTokens(chatId, getUsageDate())} as remaining`.execute(
@@ -132,7 +135,8 @@ export async function hasUsageRemaining(
   return rows.rows[0].remaining > 0;
 }
 
-function availableTextTokens(chatId: number, date: string) {
+function availableTextTokens(chatId: number, date: string, unlimited = false) {
+  if (unlimited) return sql<number>`cast(9007199254740991 as real)`;
   const n = TOKENS_PER_CREDIT;
   return sql<number>`cast(case when coalesce((select unlimited from credit_limits where chat_id = ${chatId}), 0) = 1
     then 9007199254740991 else
@@ -147,13 +151,14 @@ export function createTextCreditCharge(
 ): TextCreditCharge {
   if (!ctx.chat) throw new Error("Credit usage requires a chat.");
   const chatId = ctx.chat.id;
+  const unlimited = isBotAdmin(ctx);
   return {
     reserve: async (maxTokens) => {
       if (!Number.isSafeInteger(maxTokens) || maxTokens <= 0)
         throw new Error("Invalid token allowance.");
       const id = crypto.randomUUID();
       const date = getUsageDate();
-      const remaining = availableTextTokens(chatId, date);
+      const remaining = availableTextTokens(chatId, date, unlimited);
       const result = await sql<{
         tokens: number;
       }>`insert into credit_text_reservations (id, chat_id, usage_date, tokens, expires_at)
@@ -186,10 +191,11 @@ export function createTextCreditCharge(
                 credits: charged / TOKENS_PER_CREDIT,
                 credit_kind: "text",
                 usage_owner: chatId,
-                usage_limit: (await getUsageStatus(ctx.database, chatId, date))
-                  .unlimited
-                  ? "unlimited"
-                  : "limited",
+                usage_limit:
+                  unlimited ||
+                  (await getUsageStatus(ctx.database, chatId, date)).unlimited
+                    ? "unlimited"
+                    : "limited",
                 chat_type: ctx.chat?.type === "private" ? "private" : "group",
                 mode: guest ? "guest" : "normal",
                 tools: [],
@@ -205,12 +211,14 @@ export async function consumeUsage(
   database: Database,
   chatId: number,
   amount = 1,
+  unlimited = false,
 ) {
   if (!Number.isSafeInteger(amount) || amount <= 0)
     throw new Error("Invalid credit amount.");
   const date = getUsageDate();
-  // Conditional UPSERT keeps parallel tool calls from overspending the same balance.
-  const remaining = availableTextTokens(chatId, date);
+  // The exemption belongs to this request; it never changes the chat limit.
+  // Conditional UPSERT keeps ordinary parallel calls within the same balance.
+  const remaining = availableTextTokens(chatId, date, unlimited);
   const result = await sql<{
     used: number;
   }>`insert into credit_usage (chat_id, usage_date, used)
@@ -225,14 +233,10 @@ export async function consumeUsage(
 export function createCreditCharge(ctx: Context, guest = false): CreditCharge {
   if (!ctx.chat) throw new Error("Credit usage requires a chat.");
   const owner = ctx.chat.id;
+  const unlimited = isBotAdmin(ctx);
   return async (kind, tool) => {
     const amount = CREDIT_PRICES[kind];
-    if (amount === 0) {
-      if (!(await hasUsageRemaining(ctx.database, owner)))
-        throw new TextCreditLimitError();
-      return;
-    }
-    const status = await consumeUsage(ctx.database, owner, amount);
+    const status = await consumeUsage(ctx.database, owner, amount, unlimited);
     if (!status.ok)
       throw new Error(
         `Not enough credits: ${status.used}/${status.quota} used today.`,
@@ -241,7 +245,7 @@ export function createCreditCharge(ctx: Context, guest = false): CreditCharge {
       credits: amount,
       credit_kind: kind,
       usage_owner: owner,
-      usage_limit: status.unlimited ? "unlimited" : "limited",
+      usage_limit: unlimited || status.unlimited ? "unlimited" : "limited",
       chat_type: ctx.chat?.type === "private" ? "private" : "group",
       mode: guest ? "guest" : "normal",
       tools: tool ? [tool] : [],
