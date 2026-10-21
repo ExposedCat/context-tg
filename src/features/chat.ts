@@ -21,6 +21,7 @@ import {
 import { isBotAdmin } from "./authorization.ts";
 import { parseDanbooruOptions } from "./danbooru-options.ts";
 import type { Database } from "./database.ts";
+import { APP_ENV } from "./env.ts";
 import {
   downloadTelegramImageDataUrl,
   formatImageMarkdown,
@@ -78,6 +79,7 @@ import {
   disabledLinkPreviewOptions as linkPreviewOptions,
 } from "./telegram.ts";
 import { createLlmCallTelemetry } from "./telemetry.ts";
+import { countTextTokens } from "./text-tokens.ts";
 import {
   createThread,
   type GuestResponseThread,
@@ -297,6 +299,22 @@ function getMessageText(message: LlmContextMessage): string | undefined {
   const text =
     message.text ?? message.caption ?? getRichMessageText(message.rich_message);
   return text === undefined ? undefined : parseDanbooruOptions(text).text;
+}
+
+// Only the incoming message and its immediate reply count, never reply chains,
+// thread history, model instructions, tool schemas, or downloaded media.
+export function getUserInputLimitError(
+  message: TextMessage,
+): string | undefined {
+  const reply = getReplyContext(message, getActualReply(message));
+  const rawText = (item: LlmContextMessage | undefined) =>
+    item?.text ?? item?.caption ?? getRichMessageText(item?.rich_message) ?? "";
+  const tokens =
+    countTextTokens(rawText(message)) +
+    countTextTokens(rawText(reply) || message.quote?.text || "");
+  return tokens > APP_ENV.LLM_MAX_USER_INPUT_TOKENS
+    ? `Your message and the message you replied to exceed the ${APP_ENV.LLM_MAX_USER_INPUT_TOKENS.toLocaleString("en-US")}-token input limit. Please shorten the message or quoted text.`
+    : undefined;
 }
 
 function joinTextParts(parts: Array<string | undefined>, separator: string) {
@@ -2244,6 +2262,13 @@ async function handleChatRequest(
     return;
   }
 
+  const inputError = getUserInputLimitError(message);
+  if (inputError) {
+    if (!options.silentQuota)
+      await ctx.reply(inputError, getReplyDeliveryOptions(message, undefined));
+    return;
+  }
+
   const chatId = ctx.chat.id;
   const tokenBudget = new LlmTokenBudget();
   const reply = options.reply;
@@ -2743,6 +2768,12 @@ async function handleGuestChatRequest(
   imageMessages: LlmContextMessage[] = [message],
 ): Promise<void> {
   if (!ctx.chat) {
+    return;
+  }
+
+  const inputError = getUserInputLimitError(message);
+  if (inputError) {
+    await sendGuestMarkdownResponse(ctx, message, inputError);
     return;
   }
 

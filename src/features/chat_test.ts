@@ -11,9 +11,7 @@ const TEST_ENV = {
   LLM_API_KEY: "test",
   LLM_STREAMING: "false",
   LLM_TEMPERATURE: "0.2",
-  // These fixtures exercise multi-image replay and delivery, not input rejection.
-  LLM_MAX_INPUT_TOKENS: "128000",
-  LLM_REQUEST_TOKEN_BUDGET: "256000",
+  LLM_MAX_USER_INPUT_TOKENS: "5000",
   KEENABLE_API_KEY: "test",
   EMBEDDER_BASE_URL: "https://embedder.test/v1",
   EMBEDDER_API_KEY: "test",
@@ -34,6 +32,7 @@ const [
     getAzureDownMessage,
     getErrorRecoveryPrompt,
     getMessagesImageAttachments,
+    getUserInputLimitError,
     isUnavailableRichMessagePhotoError,
   },
   { initDatabase },
@@ -2139,6 +2138,159 @@ Deno.test("chat progress sends one message per tick in the originating topic and
     globalThis.fetch = originalFetch;
     globalThis.setTimeout = originalSetTimeout;
     setLlmDeploymentName("small", "");
+    await database.destroy();
+  }
+});
+
+Deno.test("user input cap counts only the current message and its immediate reply", () => {
+  // Decimal text is three digits per token, so these are exact token boundaries.
+  const digits = (tokens: number) => "123".repeat(tokens);
+  const oversized = { message_id: 1, text: digits(5001) };
+  strictEqual(
+    getUserInputLimitError({ message_id: 2, text: digits(5000) }),
+    undefined,
+  );
+  ok(getUserInputLimitError(oversized)?.includes("5,000-token"));
+  strictEqual(
+    getUserInputLimitError({
+      message_id: 2,
+      text: digits(2000),
+      reply_to_message: {
+        message_id: 1,
+        text: digits(3000),
+        reply_to_message: oversized,
+      },
+    }),
+    undefined,
+  );
+  ok(
+    getUserInputLimitError({
+      message_id: 2,
+      text: digits(2001),
+      reply_to_message: { message_id: 1, text: digits(3000) },
+    }),
+  );
+  ok(getUserInputLimitError({ message_id: 2, caption: digits(5001) }));
+  ok(
+    getUserInputLimitError({
+      message_id: 2,
+      text: "Hi",
+      external_reply: { text: digits(5000) },
+    }),
+  );
+  ok(
+    getUserInputLimitError({
+      message_id: 2,
+      text: "Hi",
+      quote: { text: digits(5000) },
+    }),
+  );
+  ok(
+    getUserInputLimitError({
+      message_id: 2,
+      rich_message: {
+        blocks: [{ type: "paragraph", text: digits(5001) }],
+      },
+    }),
+  );
+  strictEqual(
+    getUserInputLimitError({ message_id: 2, text: "Привет".repeat(500) }),
+    undefined,
+  );
+  strictEqual(
+    getUserInputLimitError({
+      message_id: 2,
+      text: "Hi",
+      message_thread_id: 1,
+      is_topic_message: true,
+      reply_to_message: { ...oversized, forum_topic_created: {} },
+    }),
+    undefined,
+  );
+});
+
+Deno.test("oversized user input is rejected before generation, task creation, or credit reservations", async () => {
+  const database = await initDatabase()();
+  const originalFetch = globalThis.fetch;
+  const chat = { id: -567, type: "supergroup", title: "Test" } as const;
+  const bot = {
+    id: 42,
+    is_bot: true,
+    first_name: "Bot",
+    username: "test_bot",
+  } as Context["me"];
+  const sent: string[] = [];
+  const api = new Api("test");
+  api.sendMessage = async (_chatId, text) => {
+    sent.push(text);
+    return { message_id: 100, date: 0, chat, from: bot, text };
+  };
+  api.sendRichMessage = async (_chatId, content) => {
+    sent.push(content.markdown ?? "");
+    return {
+      message_id: 100,
+      date: 0,
+      chat,
+      from: bot,
+      rich_message: {
+        blocks: [{ type: "paragraph", text: content.markdown ?? "" }],
+      },
+    };
+  };
+  globalThis.fetch = (() => {
+    throw new Error("Rejected input must not call external services");
+  }) as typeof fetch;
+  try {
+    for (const mode of ["normal", "guest"] as const) {
+      const message = {
+        message_id: 1,
+        date: 0,
+        chat,
+        from: { id: 1, is_bot: false, first_name: "User" },
+        text: "лейло hi",
+        reply_to_message: {
+          message_id: 2,
+          date: 0,
+          chat,
+          from: bot,
+          text: "123".repeat(5000),
+        },
+      };
+      const ctx = new GrammyContext(
+        {
+          update_id: 1,
+          ...(mode === "guest" ? { guest_message: message } : { message }),
+        } as never,
+        api,
+        bot,
+      ) as Context;
+      ctx.database = database;
+      ctx.telemetry = { event: () => {} } as Context["telemetry"];
+      await chatComposer.middleware()(ctx, () => {
+        throw new Error("Must handle input rejection");
+      });
+      ok(sent.at(-1)?.includes("5,000-token"));
+    }
+    strictEqual(sent.length, 2);
+    strictEqual(
+      (await database.selectFrom("tasks").selectAll().execute()).length,
+      0,
+    );
+    strictEqual(
+      (
+        await database
+          .selectFrom("credit_text_reservations")
+          .selectAll()
+          .execute()
+      ).length,
+      0,
+    );
+    strictEqual(
+      (await database.selectFrom("credit_usage").selectAll().execute()).length,
+      0,
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
     await database.destroy();
   }
 });

@@ -493,8 +493,7 @@ Deno.test("live stream inspection can abort generation and retains the unknown-u
   setLlmDeploymentName("small", "stream-test");
   const originalFetch = globalThis.fetch;
   const budget = new LlmTokenBudget({
-    total: 1400,
-    input: 2000,
+    total: 1000,
     output: 1000,
     tools: 2,
   });

@@ -365,7 +365,7 @@ async function createBudgetedResponse(
   onStreamEvent?: LlmRequestOptions["onStreamEvent"],
   textCredits?: TextCreditCharge,
 ): Promise<ApiResponse> {
-  const reservation = budget.reserve(params, outputLimit);
+  const reservation = budget.reserve(outputLimit);
   let textReservation: TextCreditReservation | undefined;
   const textMeter = new TextCreditMeter();
   let modelStarted = false;

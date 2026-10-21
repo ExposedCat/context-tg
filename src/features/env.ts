@@ -57,7 +57,10 @@ export const APP_ENV = {
     "LLM_COMPACT_THRESHOLD",
     100_000,
   ),
-  LLM_MAX_INPUT_TOKENS: getPositiveIntegerEnv("LLM_MAX_INPUT_TOKENS", 48_000),
+  LLM_MAX_USER_INPUT_TOKENS: getPositiveIntegerEnv(
+    "LLM_MAX_USER_INPUT_TOKENS",
+    5000,
+  ),
   LLM_MAX_OUTPUT_TOKENS: getPositiveIntegerEnv("LLM_MAX_OUTPUT_TOKENS", 8192),
   LLM_REQUEST_TOKEN_BUDGET: getPositiveIntegerEnv(
     "LLM_REQUEST_TOKEN_BUDGET",

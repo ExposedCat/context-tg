@@ -67,24 +67,24 @@ two minutes if a process crashes, longer than the 90-second model timeout.
 
 ## Per-request token limits
 
-Each user request has a shared budget across model calls, tool follow-ups,
-thread naming and delivery recovery. Configure these limits in `.env`:
+The incoming user message plus its immediate reply text have a combined
+5,000-token limit, counted with the text tokenizer before model calls or credit
+reservations. Captions and rich message text count; reply chains, thread history,
+instructions, tool definitions and media do not. Configure these limits in `.env`:
 
-- `LLM_REQUEST_TOKEN_BUDGET=64000`: cumulative input plus output tokens.
+- `LLM_REQUEST_TOKEN_BUDGET=64000`: cumulative generated tokens, including reasoning,
+  across model calls, tool follow-ups, thread naming and delivery recovery.
 - `LLM_MAX_OUTPUT_TOKENS=8192`: output per model call, including reasoning.
-- `LLM_MAX_INPUT_TOKENS=48000`: conservative input allowance per model call,
-  including instructions, tools and replayed conversation context.
+- `LLM_MAX_USER_INPUT_TOKENS=5000`: combined current message and immediate reply text.
 - `LLM_MAX_TOOL_CALLS=12`: total tool executions per request, including parallel batches.
 
-Before each model call, the app reserves input and output allowance, then
-reconciles it with provider-reported usage. Input estimation uses UTF-8 bytes
-as a conservative text-token allowance and 8,192 tokens per image; image costs
-vary by provider and resolution, so this is not an exact billing cap for media.
-Failed attempts without usage retain their reservation; validation and
-rate-limit rejections release it. Tool results are limited to 16 KB each
-(or half the input allowance, if smaller) with an explicit truncation notice.
-Image generation retains its existing credit charges and its reported tokens
-count toward the remaining budget after generation.
+Before each model call, the app reserves output allowance, then reconciles it
+with provider-reported output usage. Input and replayed context do not consume
+this generation budget. Failed attempts without usage retain their output
+reservation; validation and rate-limit rejections release it. Tool results are
+limited to 16 KB each with an explicit truncation notice. Image generation
+retains its existing credit charges and its reported output tokens count toward
+the remaining generation budget after generation.
 
 Budget exhaustion and output-limit responses stop immediately without retries.
 The user receives a short explanation asking for a smaller task. All responding

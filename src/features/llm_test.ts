@@ -53,7 +53,7 @@ const TEST_ENV = {
   LLM_API_KEY: "test",
   LLM_STREAMING: "false",
   LLM_COMPACT_THRESHOLD: "100000",
-  LLM_MAX_INPUT_TOKENS: "48000",
+  LLM_MAX_USER_INPUT_TOKENS: "5000",
   LLM_MAX_OUTPUT_TOKENS: "8192",
   LLM_REQUEST_TOKEN_BUDGET: "64000",
   LLM_MAX_TOOL_CALLS: "12",
@@ -73,7 +73,7 @@ const [
   { LlmRequestError, requestLlm, requestThreadName },
   { setLlmDeploymentName },
   { initDatabase },
-  { LlmTokenBudget, estimateInputTokens },
+  { LlmTokenBudget },
 ] = await Promise.all([
   import("./llm.ts"),
   import("./llm-deployments.ts"),
@@ -146,45 +146,67 @@ function budgetTestAnswer(id: string) {
   ]);
 }
 
-Deno.test("oversized prompts are rejected before any model HTTP request", async () => {
+Deno.test("large instructions and replayed thread context do not consume the generation budget", async () => {
   setLlmDeploymentName("small", "budget-test");
+  const { saveLlmResponseInputItems } = await import("./llm-chat-responses.ts");
+  const database = await initDatabase()();
+  await saveLlmResponseInputItems(database, {
+    responseId: "resp_long_history",
+    inputItems: [
+      { type: "message", role: "user", content: "history ".repeat(20000) },
+    ],
+  });
   const originalFetch = globalThis.fetch;
   let requests = 0;
-  globalThis.fetch = (() => {
+  globalThis.fetch = (async (_url, init) => {
+    const body = JSON.parse(String(init?.body));
     requests++;
-    throw new Error("Oversized input must not reach the model");
+    ok(JSON.stringify(body.input).length > 100000);
+    ok(body.instructions.length > 48000);
+    strictEqual(body.max_output_tokens, 8192);
+    const response = budgetTestAnswer(`resp_large_context_${requests}`);
+    response.usage.input_tokens = 200000;
+    return Response.json(response);
   }) as typeof fetch;
   try {
-    await assertRejects(
-      () => requestLlm("x".repeat(100_000), [], undefined, {}, "Be brief."),
-      (error) =>
-        error instanceof LlmRequestError &&
-        error.kind === "token_limit" &&
-        error.details.includes("too large"),
+    const budget = new LlmTokenBudget();
+    const first = await requestLlm(
+      "Hi",
+      [],
+      "resp_long_history",
+      { database, tokenBudget: budget },
+      "Instructions ".repeat(5000),
     );
-    strictEqual(requests, 0);
+    const second = await requestLlm(
+      "Hi again",
+      [],
+      first.response_id,
+      { database, tokenBudget: budget },
+      "Instructions ".repeat(5000),
+    );
+    strictEqual(second.response, "Done.");
+    strictEqual(requests, 2);
   } finally {
     globalThis.fetch = originalFetch;
+    await database.destroy();
   }
 });
 
-Deno.test("reported input and reasoning-inclusive output share a budget across continuations", async () => {
+Deno.test("only generated output including reasoning shares a budget across continuations", async () => {
   setLlmDeploymentName("small", "budget-test");
   const budget = new LlmTokenBudget({
     total: 3000,
-    input: 4000,
     output: 2000,
     tools: 2,
   });
   const originalFetch = globalThis.fetch;
   const caps: number[] = [];
   globalThis.fetch = (async (_url, init) => {
-    const { max_output_tokens, ...params } = JSON.parse(String(init?.body));
+    const { max_output_tokens } = JSON.parse(String(init?.body));
     caps.push(max_output_tokens);
     const response = budgetTestAnswer(`resp_budget_${caps.length}`);
-    response.usage.input_tokens = estimateInputTokens(params);
-    response.usage.output_tokens =
-      caps.length === 1 ? 1500 : Math.min(500, max_output_tokens);
+    response.usage.input_tokens = 200_000;
+    response.usage.output_tokens = caps.length === 1 ? 1500 : max_output_tokens;
     response.usage.total_tokens =
       response.usage.input_tokens + response.usage.output_tokens;
     return Response.json(response);
@@ -227,22 +249,24 @@ Deno.test("reported input and reasoning-inclusive output share a budget across c
 
 Deno.test("unknown failed attempts retain reservations and parallel reservations cannot overspend", () => {
   const budget = new LlmTokenBudget({
-    total: 3000,
-    input: 2000,
+    total: 1800,
     output: 1000,
     tools: 2,
   });
-  const attempt = budget.reserve("x".repeat(1200));
+  const attempt = budget.reserve();
+  const parallel = budget.reserve();
+  strictEqual(parallel.maxOutputTokens, 800);
   let rejected = false;
   try {
-    budget.reserve("x".repeat(1200));
+    budget.reserve();
   } catch {
     rejected = true;
   }
   strictEqual(rejected, true);
   attempt.settle();
   attempt.settle({ input_tokens: 0, output_tokens: 0 });
-  ok(budget.reserve("").maxOutputTokens < 1000);
+  parallel.settle({ output_tokens: 0 });
+  strictEqual(budget.reserve().maxOutputTokens, 800);
 });
 
 Deno.test("tool limits stop repeated rounds and oversized parallel batches before execution", async (t) => {
