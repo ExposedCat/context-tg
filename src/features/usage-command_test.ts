@@ -1,6 +1,7 @@
+import { test } from "bun:test";
 import { deepStrictEqual, match, strictEqual } from "node:assert";
+import { I18n } from "@grammyjs/i18n";
 import { Bot } from "grammy";
-import { I18n } from "grammy-i18n";
 import type { Context } from "../bot.ts";
 
 for (const [key, value] of Object.entries({
@@ -16,14 +17,14 @@ for (const [key, value] of Object.entries({
   EMBEDDING_MODEL: "test",
   QDRANT_URL: "https://qdrant.test",
 }))
-  Deno.env.set(key, value);
+  Bun.env[key] = value;
 
 const { stateComposer } = await import("./state.ts");
 const { createPrivateTopicMiddleware } = await import("./private-topics.ts");
 const { initDatabase } = await import("./database.ts");
 const { getUsageStatus, handleUsageCommand } = await import("./usage.ts");
 
-Deno.test("addressed usage adjustments respond with or without command entities and preserve ephemeral replies", async () => {
+test("addressed usage adjustments respond with or without command entities and preserve ephemeral replies", async () => {
   const database = await initDatabase()();
   try {
     const bot = new Bot<Context>("123:test", {

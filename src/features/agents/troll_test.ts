@@ -1,3 +1,4 @@
+import { test } from "bun:test";
 import { ok, strictEqual } from "node:assert";
 import type { Database } from "../database.ts";
 import {
@@ -6,7 +7,7 @@ import {
 } from "../trolling-mode.ts";
 import { buildInstructions } from "./troll.ts";
 
-Deno.test("troll prompt receives one selected style without a catalogue of modes", async () => {
+test("troll prompt receives one selected style without a catalogue of modes", async () => {
   const base = buildInstructions(123);
   ok(
     !/\b(aggressive|mild|clean)\b/.test(base),

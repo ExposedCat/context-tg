@@ -1,3 +1,4 @@
+import { test } from "bun:test";
 import {
   rejects as assertRejects,
   deepStrictEqual,
@@ -5,6 +6,7 @@ import {
   strictEqual,
 } from "node:assert";
 import { type Api, InputFile } from "grammy";
+import { step } from "../utils/test-step.ts";
 import { parseLlmResponseInputItems } from "./llm-chat-responses.ts";
 import type { LlmCallTelemetryPayload } from "./telemetry.ts";
 
@@ -64,7 +66,7 @@ const TEST_ENV = {
 } as const;
 
 for (const [name, value] of Object.entries(TEST_ENV)) {
-  Deno.env.set(name, value);
+  Bun.env[name] = value;
 }
 
 const [
@@ -142,7 +144,7 @@ function budgetTestAnswer(id: string) {
   ]);
 }
 
-Deno.test("large instructions and replayed thread context are not rejected by an application token cap", async () => {
+test("large instructions and replayed thread context are not rejected by an application token cap", async () => {
   setLlmDeploymentName("small", "budget-test");
   const { saveLlmResponseInputItems } = await import("./llm-chat-responses.ts");
   const database = await initDatabase()();
@@ -187,7 +189,7 @@ Deno.test("large instructions and replayed thread context are not rejected by an
   }
 });
 
-Deno.test("provider input and reasoning usage do not impose an application generation cap", async () => {
+test("provider input and reasoning usage do not impose an application generation cap", async () => {
   setLlmDeploymentName("small", "budget-test");
   const originalFetch = globalThis.fetch;
   let requests = 0;
@@ -210,12 +212,12 @@ Deno.test("provider input and reasoning usage do not impose an application gener
   }
 });
 
-Deno.test("tool exhaustion produces a final answer with tools disabled instead of a user error", async (t) => {
+test("tool exhaustion produces a final answer with tools disabled instead of a user error", async () => {
   setLlmDeploymentName("small", "budget-test");
   const originalFetch = globalThis.fetch;
   try {
     for (const batchSize of [1, 13])
-      await t.step(`batch size ${batchSize}`, async () => {
+      await step(`batch size ${batchSize}`, async () => {
         let requests = 0;
         let executions = 0;
         globalThis.fetch = (async (_url, init) => {
@@ -266,7 +268,7 @@ Deno.test("tool exhaustion produces a final answer with tools disabled instead o
   }
 });
 
-Deno.test("a provider ignoring tools-disabled cannot start another tool loop and partial text is retained", async () => {
+test("a provider ignoring tools-disabled cannot start another tool loop and partial text is retained", async () => {
   setLlmDeploymentName("small", "budget-test");
   const originalFetch = globalThis.fetch;
   let requests = 0;
@@ -288,7 +290,7 @@ Deno.test("a provider ignoring tools-disabled cannot start another tool loop and
         })),
       ],
     });
-  }) as typeof fetch;
+  }) as unknown as typeof fetch;
   try {
     const answer = await requestLlm(
       "Work",
@@ -311,12 +313,12 @@ Deno.test("a provider ignoring tools-disabled cannot start another tool loop and
   }
 });
 
-Deno.test("provider output exhaustion preserves partial text without retries, even after a tool round", async (t) => {
+test("provider output exhaustion preserves partial text without retries, even after a tool round", async () => {
   setLlmDeploymentName("small", "budget-test");
   const originalFetch = globalThis.fetch;
   try {
     for (const afterTool of [false, true])
-      await t.step(String(afterTool), async () => {
+      await step(String(afterTool), async () => {
         let requests = 0;
         globalThis.fetch = (async (_url, init) => {
           requests++;
@@ -360,7 +362,7 @@ Deno.test("provider output exhaustion preserves partial text without retries, ev
   }
 });
 
-Deno.test("large retrieved pages are bounded before being sent to the model", async () => {
+test("large retrieved pages are bounded before being sent to the model", async () => {
   setLlmDeploymentName("small", "budget-test");
   const originalFetch = globalThis.fetch;
   let requests = 0;
@@ -405,7 +407,7 @@ Deno.test("large retrieved pages are bounded before being sent to the model", as
   }
 });
 
-Deno.test("thread naming uses the responding model and exact prompt, with three-word fallbacks", async () => {
+test("thread naming uses the responding model and exact prompt, with three-word fallbacks", async () => {
   const originalFetch = globalThis.fetch;
   const model = setLlmDeploymentName("openminded", "thread-test-model");
   const message = "  Plan\nmy next   trip abroad ";
@@ -470,13 +472,17 @@ Respond with a name for this thread. Don't use formatting, don't add anything el
   }
 });
 
-Deno.test("stalled model attempts retry after 90 seconds without repeating tools", async (t) => {
+test("stalled model attempts retry after 90 seconds without repeating tools", async () => {
   setLlmDeploymentName("small", "test-model");
   const originalFetch = globalThis.fetch;
   const originalSetTimeout = globalThis.setTimeout;
   const attemptTimeouts: number[] = [];
   // Exercise the SDK timeout and budgeted application retry without waiting 90 seconds.
-  globalThis.setTimeout = ((callback, delay, ...args) => {
+  globalThis.setTimeout = ((
+    callback: (...args: unknown[]) => void,
+    delay?: number,
+    ...args: unknown[]
+  ) => {
     if (delay !== undefined && delay >= 90_000) attemptTimeouts.push(delay);
     return originalSetTimeout(
       callback,
@@ -486,7 +492,7 @@ Deno.test("stalled model attempts retry after 90 seconds without repeating tools
   }) as typeof setTimeout;
   try {
     for (const afterTool of [false, true]) {
-      await t.step(
+      await step(
         afterTool ? "after a tool result" : "initial request",
         async () => {
           const requests: string[] = [];
@@ -570,7 +576,7 @@ Deno.test("stalled model attempts retry after 90 seconds without repeating tools
   }
 });
 
-Deno.test("legacy Chat Completions history is converted to Responses items", () => {
+test("legacy Chat Completions history is converted to Responses items", () => {
   const inputItems = parseLlmResponseInputItems(
     JSON.stringify([
       {
@@ -634,7 +640,7 @@ Deno.test("legacy Chat Completions history is converted to Responses items", () 
   ]);
 });
 
-Deno.test("requestLlm uses Responses items through a function-call round", async () => {
+test("requestLlm uses Responses items through a function-call round", async () => {
   setLlmDeploymentName("small", "test-model");
   const requests: Array<Record<string, unknown>> = [];
   const telemetryEvents: LlmCallTelemetryPayload[] = [];
@@ -789,7 +795,7 @@ Deno.test("requestLlm uses Responses items through a function-call round", async
   }
 });
 
-Deno.test("native compaction prunes checkpoints and survives tool rounds, restarts and branches", async () => {
+test("native compaction prunes checkpoints and survives tool rounds, restarts and branches", async () => {
   setLlmDeploymentName("small", "test-model");
   const database = await initDatabase()();
   const { getLlmResponseInputItems, saveLlmResponseInputItems } = await import(
@@ -881,7 +887,7 @@ Deno.test("native compaction prunes checkpoints and survives tool rounds, restar
   }
 });
 
-Deno.test("retrieval outputs are retained during tools and restart continuation", async () => {
+test("retrieval outputs are retained during tools and restart continuation", async () => {
   setLlmDeploymentName("small", "test-model");
   const database = await initDatabase()();
   const { getLlmResponseInputItems, saveLlmResponseInputItems } = await import(
@@ -1014,7 +1020,7 @@ Deno.test("retrieval outputs are retained during tools and restart continuation"
   }
 });
 
-Deno.test("failed model steps preserve retrieval results alongside compaction state", async () => {
+test("failed model steps preserve retrieval results alongside compaction state", async () => {
   setLlmDeploymentName("small", "test-model");
   const database = await initDatabase()();
   const { getLlmResponseInputItems, saveLlmResponseInputItems } = await import(
@@ -1094,7 +1100,7 @@ Deno.test("failed model steps preserve retrieval results alongside compaction st
   }
 });
 
-Deno.test("tool rounds continue past four and credit exhaustion is a normal tool failure", async () => {
+test("tool rounds continue past four and credit exhaustion is a normal tool failure", async () => {
   setLlmDeploymentName("small", "test-model");
   const originalFetch = globalThis.fetch;
   try {
@@ -1204,7 +1210,7 @@ Deno.test("tool rounds continue past four and credit exhaustion is a normal tool
   }
 });
 
-Deno.test("requestLlm telemetry repeats tool names and reports tool errors", async () => {
+test("requestLlm telemetry repeats tool names and reports tool errors", async () => {
   setLlmDeploymentName("small", "test-model");
   const telemetryEvents: LlmCallTelemetryPayload[] = [];
   const originalFetch = globalThis.fetch;
@@ -1248,7 +1254,7 @@ Deno.test("requestLlm telemetry repeats tool names and reports tool errors", asy
       status: 200,
       headers: { "content-type": "application/json" },
     });
-  }) as typeof fetch;
+  }) as unknown as typeof fetch;
 
   try {
     await requestLlm("Set a reply", ["set_reply_message_id"], undefined, {
@@ -1276,7 +1282,7 @@ Deno.test("requestLlm telemetry repeats tool names and reports tool errors", asy
   }
 });
 
-Deno.test("requestLlm telemetry defaults missing cached usage to zero", async (t) => {
+test("requestLlm telemetry defaults missing cached usage to zero", async () => {
   setLlmDeploymentName("small", "test-model");
   const response = createApiResponse("resp_no_cached_usage", [
     {
@@ -1294,14 +1300,14 @@ Deno.test("requestLlm telemetry defaults missing cached usage to zero", async (t
     { input_tokens: 10, output_tokens: 5, input_tokens_details: null },
     undefined,
   ]) {
-    await t.step(`usage: ${JSON.stringify(usage)}`, async () => {
+    await step(`usage: ${JSON.stringify(usage)}`, async () => {
       const telemetryEvents: LlmCallTelemetryPayload[] = [];
       const originalFetch = globalThis.fetch;
       globalThis.fetch = (async () =>
         new Response(JSON.stringify({ ...response, usage }), {
           status: 200,
           headers: { "content-type": "application/json" },
-        })) as typeof fetch;
+        })) as unknown as typeof fetch;
 
       try {
         await requestLlm("Hello", [], undefined, {
@@ -1331,7 +1337,7 @@ Deno.test("requestLlm telemetry defaults missing cached usage to zero", async (t
   }
 });
 
-Deno.test("read_image returns an image in the function-call output", async () => {
+test("read_image returns an image in the function-call output", async () => {
   setLlmDeploymentName("small", "test-model");
   const requests: Array<Record<string, unknown>> = [];
   const originalFetch = globalThis.fetch;
@@ -1420,7 +1426,7 @@ Deno.test("read_image returns an image in the function-call output", async () =>
   }
 });
 
-Deno.test("read_image download failure is reported to the agent as unavailable", async () => {
+test("read_image download failure is reported to the agent as unavailable", async () => {
   setLlmDeploymentName("small", "test-model");
   const requests: Array<Record<string, unknown>> = [];
   const originalFetch = globalThis.fetch;
@@ -1522,7 +1528,7 @@ Deno.test("read_image download failure is reported to the agent as unavailable",
   }
 });
 
-Deno.test("corrupted request images are removed before retrying", async () => {
+test("corrupted request images are removed before retrying", async () => {
   setLlmDeploymentName("small", "test-model");
   const requests: Array<Record<string, unknown>> = [];
   const originalFetch = globalThis.fetch;
@@ -1608,7 +1614,7 @@ Deno.test("corrupted request images are removed before retrying", async () => {
   }
 });
 
-Deno.test("corrupted images are removed from conversation history", async () => {
+test("corrupted images are removed from conversation history", async () => {
   setLlmDeploymentName("small", "test-model");
   const requests: Array<Record<string, unknown>> = [];
   const originalFetch = globalThis.fetch;
@@ -1685,7 +1691,7 @@ Deno.test("corrupted images are removed from conversation history", async () => 
   }
 });
 
-Deno.test("requestLlm retries empty responses twice before succeeding", async () => {
+test("requestLlm retries empty responses twice before succeeding", async () => {
   setLlmDeploymentName("small", "test-model");
   let requestCount = 0;
   const originalFetch = globalThis.fetch;
@@ -1711,7 +1717,7 @@ Deno.test("requestLlm retries empty responses twice before succeeding", async ()
       status: 200,
       headers: { "content-type": "application/json" },
     });
-  }) as typeof fetch;
+  }) as unknown as typeof fetch;
 
   try {
     const response = await requestLlm("Try again", [], undefined, {
@@ -1726,7 +1732,7 @@ Deno.test("requestLlm retries empty responses twice before succeeding", async ()
   }
 });
 
-Deno.test("requestLlm stops after three empty response attempts", async () => {
+test("requestLlm stops after three empty response attempts", async () => {
   setLlmDeploymentName("small", "test-model");
   let requestCount = 0;
   const telemetryEvents: LlmCallTelemetryPayload[] = [];
@@ -1742,7 +1748,7 @@ Deno.test("requestLlm stops after three empty response attempts", async () => {
         headers: { "content-type": "application/json" },
       },
     );
-  }) as typeof fetch;
+  }) as unknown as typeof fetch;
 
   try {
     await assertRejects(
@@ -1775,7 +1781,7 @@ Deno.test("requestLlm stops after three empty response attempts", async () => {
   }
 });
 
-Deno.test("failed tool follow-up preserves the complete context for the next turn", async () => {
+test("failed tool follow-up preserves the complete context for the next turn", async () => {
   setLlmDeploymentName("small", "test-model");
   const requests: Array<Record<string, unknown>> = [];
   const originalFetch = globalThis.fetch;
@@ -1899,7 +1905,7 @@ Deno.test("failed tool follow-up preserves the complete context for the next tur
   }
 });
 
-Deno.test("generate_image caches media and returns reusable rich Markdown", async () => {
+test("generate_image caches media and returns reusable rich Markdown", async () => {
   setLlmDeploymentName("small", "test-model");
   const creditCharges: string[] = [];
   const database = await initDatabase()();
@@ -2046,7 +2052,7 @@ Deno.test("generate_image caches media and returns reusable rich Markdown", asyn
   }
 });
 
-Deno.test("memory snapshots and memo events preserve replay prefixes across tools and restarts", async () => {
+test("memory snapshots and memo events preserve replay prefixes across tools and restarts", async () => {
   setLlmDeploymentName("small", "test-model");
   const database = await initDatabase()();
   const { saveMemo, forgetMemo } = await import("./memos.ts");
@@ -2176,7 +2182,7 @@ Deno.test("memory snapshots and memo events preserve replay prefixes across tool
   }
 });
 
-Deno.test("memo events deactivate another speaker's memories and restore their scope on return", async () => {
+test("memo events deactivate another speaker's memories and restore their scope on return", async () => {
   const { formatMemoryUpdate } = await import("./llm-memory.ts");
   const { saveMemo } = await import("./memos.ts");
   const database = await initDatabase()();
@@ -2227,7 +2233,7 @@ Deno.test("memo events deactivate another speaker's memories and restore their s
   }
 });
 
-Deno.test("web search adds a surcharge and denied tools never execute", async () => {
+test("web search adds a surcharge and denied tools never execute", async () => {
   setLlmDeploymentName("small", "test-model");
   const originalFetch = globalThis.fetch;
   try {
@@ -2289,7 +2295,7 @@ Deno.test("web search adds a surcharge and denied tools never execute", async ()
   }
 });
 
-Deno.test("troll requests load the current chat trolling mode, including follow-ups", async () => {
+test("troll requests load the current chat trolling mode, including follow-ups", async () => {
   const { trollAgent } = await import("./agents/index.ts");
   const { setTrollingMode } = await import("./trolling.ts");
   const database = await initDatabase()();
@@ -2382,9 +2388,9 @@ Deno.test("troll requests load the current chat trolling mode, including follow-
   }
 });
 
-Deno.test("trolling migration upgrades existing rows without changing state", async () => {
+test("trolling migration upgrades existing rows without changing state", async () => {
   const { migrateTrolling, setTrollingMode } = await import("./trolling.ts");
-  const { sql } = await import("@kysely/kysely");
+  const { sql } = await import("kysely");
   const database = await initDatabase()();
   try {
     await database.schema
@@ -2431,10 +2437,10 @@ Deno.test("trolling migration upgrades existing rows without changing state", as
   }
 });
 
-Deno.test("two-mode trolling preferences migrate once to mild and clean", async () => {
+test("two-mode trolling preferences migrate once to mild and clean", async () => {
   const { migrateTrolling, getTrollingSettings, setTrollingMode } =
     await import("./trolling.ts");
-  const { sql } = await import("@kysely/kysely");
+  const { sql } = await import("kysely");
   const database = await initDatabase()();
   try {
     await database.schema
@@ -2471,7 +2477,7 @@ Deno.test("two-mode trolling preferences migrate once to mild and clean", async 
   }
 });
 
-Deno.test("trolling validation uses Sol high with strict boolean structured output", async () => {
+test("trolling validation uses Sol high with strict boolean structured output", async () => {
   const { requestTrollingValidation } = await import("./llm.ts");
   const originalFetch = globalThis.fetch;
   const input = {
@@ -2545,7 +2551,7 @@ Deno.test("trolling validation uses Sol high with strict boolean structured outp
   }
 });
 
-Deno.test("trolling validation telemetry tracks verdicts, response failures and API failures", async (t) => {
+test("trolling validation telemetry tracks verdicts, response failures and API failures", async () => {
   const { requestTrollingValidation } = await import("./llm.ts");
   const originalFetch = globalThis.fetch;
   const input = {
@@ -2647,12 +2653,12 @@ Deno.test("trolling validation telemetry tracks verdicts, response failures and 
   ];
   try {
     for (const test of cases) {
-      await t.step(test.name, async () => {
+      await step(test.name, async () => {
         events.length = 0;
         globalThis.fetch = (() =>
           Promise.resolve(
             Response.json(test.response, { status: test.httpStatus ?? 200 }),
-          )) as typeof fetch;
+          )) as unknown as typeof fetch;
         const options = {
           telemetry: {
             chatType: "group" as const,
@@ -2681,7 +2687,7 @@ Deno.test("trolling validation telemetry tracks verdicts, response failures and 
         ]);
       });
     }
-    await t.step(
+    await step(
       "telemetry failures preserve the verdict and original error",
       async () => {
         const options = {
@@ -2696,12 +2702,14 @@ Deno.test("trolling validation telemetry tracks verdicts, response failures and 
         globalThis.fetch = (() =>
           Promise.resolve(
             Response.json(respond('{"valid":false}')),
-          )) as typeof fetch;
+          )) as unknown as typeof fetch;
         deepStrictEqual(await requestTrollingValidation(input, options), {
           valid: false,
         });
         globalThis.fetch = (() =>
-          Promise.resolve(Response.json(respond("not JSON")))) as typeof fetch;
+          Promise.resolve(
+            Response.json(respond("not JSON")),
+          )) as unknown as typeof fetch;
         await assertRejects(
           () => requestTrollingValidation(input, options),
           /invalid JSON/,
@@ -2713,7 +2721,7 @@ Deno.test("trolling validation telemetry tracks verdicts, response failures and 
   }
 });
 
-Deno.test("periodic trolling delivers to the selected context message or without a reply", async (t) => {
+test("periodic trolling delivers to the selected context message or without a reply", async () => {
   const { maybeSendPeriodicTroll, setTrollingInterval } = await import(
     "./trolling.ts"
   );
@@ -2832,7 +2840,7 @@ Deno.test("periodic trolling delivers to the selected context message or without
       { name: "unknown message is not sent", id: 99, skip: true },
       { name: "rejected earlier reply is not sent", id: 1, rejected: true },
     ]) {
-      await t.step(test.name, async () => {
+      await step(test.name, async () => {
         selectedId = test.id;
         approved = !test.rejected;
         validations = 0;
@@ -2873,7 +2881,7 @@ Deno.test("periodic trolling delivers to the selected context message or without
   }
 });
 
-Deno.test("periodic trolling always generates at its interval and sends only approved replies", async () => {
+test("periodic trolling always generates at its interval and sends only approved replies", async () => {
   const { maybeSendPeriodicTroll, setTrollingInterval } = await import(
     "./trolling.ts"
   );
@@ -3027,7 +3035,7 @@ Deno.test("periodic trolling always generates at its interval and sends only app
   }
 });
 
-Deno.test("Azure progress segments keep their own tools; timing spans the complete tool loop", async () => {
+test("Azure progress segments keep their own tools; timing spans the complete tool loop", async () => {
   const originalFetch = globalThis.fetch;
   const originalNow = performance.now;
   let now = 0;
@@ -3070,7 +3078,7 @@ Deno.test("Azure progress segments keep their own tools; timing spans the comple
       return Promise.resolve(
         Response.json(createApiResponse(`progress_${calls}`, output)),
       );
-    }) as typeof fetch;
+    }) as unknown as typeof fetch;
     const result = await requestLlm(
       "Help",
       ["set_reply_message_id"],
@@ -3113,7 +3121,7 @@ Deno.test("Azure progress segments keep their own tools; timing spans the comple
   }
 });
 
-Deno.test("phase-labelled Azure commentary is progress, final text excludes it, and replay preserves phases", async () => {
+test("phase-labelled Azure commentary is progress, final text excludes it, and replay preserves phases", async () => {
   const originalFetch = globalThis.fetch;
   const requests: Array<{ input: Array<{ phase?: string }> }> = [];
   const segments: Array<{ text?: string; tools: string[] }> = [];

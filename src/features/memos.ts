@@ -1,11 +1,6 @@
 import { createDebug } from "@grammyjs/debug";
-import {
-  type ColumnType,
-  type Generated,
-  type Selectable,
-  sql,
-} from "@kysely/kysely";
-import OpenAI from "@openai/openai";
+import { type ColumnType, type Generated, type Selectable, sql } from "kysely";
+import OpenAI from "openai";
 import type { Context } from "../bot.ts";
 import { formatLocalDateMinute } from "../utils/date.ts";
 import {

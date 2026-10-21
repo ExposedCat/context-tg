@@ -1,6 +1,7 @@
+import { test } from "bun:test";
 import { deepStrictEqual, ok, strictEqual } from "node:assert";
+import { I18n } from "@grammyjs/i18n";
 import { Api, Context as GrammyContext } from "grammy";
-import { I18n } from "grammy-i18n";
 import type { Context } from "../bot.ts";
 
 const TEST_ENV = {
@@ -20,7 +21,7 @@ const TEST_ENV = {
 } as const;
 
 for (const [name, value] of Object.entries(TEST_ENV)) {
-  Deno.env.set(name, value);
+  Bun.env[name] = value;
 }
 
 const [
@@ -43,7 +44,7 @@ const [
   import("./images.ts"),
 ]);
 
-Deno.test("raw model newlines survive chat delivery and Telegram HTTP serialization", async () => {
+test("raw model newlines survive chat delivery and Telegram HTTP serialization", async () => {
   const { setLlmDeploymentName } = await import("./llm-deployments.ts");
   const { createEmojiPackTransformer } = await import("./emoji-packs.ts");
   const database = await initDatabase()();
@@ -113,7 +114,7 @@ Deno.test("raw model newlines survive chat delivery and Telegram HTTP serializat
           ],
         },
       ],
-    })) as typeof fetch;
+    })) as unknown as typeof fetch;
 
   try {
     setLlmDeploymentName("small", "test-model");
@@ -148,7 +149,7 @@ Deno.test("raw model newlines survive chat delivery and Telegram HTTP serializat
   }
 });
 
-Deno.test("Danbooru suffixes are hidden in chat history and override searches for only the current message", async () => {
+test("Danbooru suffixes are hidden in chat history and override searches for only the current message", async () => {
   const { setLlmDeploymentName } = await import("./llm-deployments.ts");
   const database = await initDatabase()();
   const originalFetch = globalThis.fetch;
@@ -334,7 +335,7 @@ Deno.test("Danbooru suffixes are hidden in chat history and override searches fo
   }
 });
 
-Deno.test("messages dropped for missing mentions still emit analytics once", async () => {
+test("messages dropped for missing mentions still emit analytics once", async () => {
   const ctx = new GrammyContext(
     {
       update_id: 1,
@@ -385,7 +386,7 @@ Deno.test("messages dropped for missing mentions still emit analytics once", asy
   strictEqual(nextCalls, 1);
 });
 
-Deno.test("trigger aliases persist through replies and update on explicit triggers", async () => {
+test("trigger aliases persist through replies and update on explicit triggers", async () => {
   const { getThread, migrateThreads } = await import("./threads.ts");
   const { setLlmDeploymentName } = await import("./llm-deployments.ts");
   const database = await initDatabase()();
@@ -503,7 +504,7 @@ Deno.test("trigger aliases persist through replies and update on explicit trigge
   }
 });
 
-Deno.test("group replies retain their parent and history scope while forum topics stay isolated", async () => {
+test("group replies retain their parent and history scope while forum topics stay isolated", async () => {
   const { getThread } = await import("./threads.ts");
   const { setLlmDeploymentName } = await import("./llm-deployments.ts");
   const database = await initDatabase()();
@@ -753,7 +754,7 @@ Deno.test("group replies retain their parent and history scope while forum topic
   }
 });
 
-Deno.test("DMs continue without mentions with or without topic IDs and preserve explicit reply branches", async () => {
+test("DMs continue without mentions with or without topic IDs and preserve explicit reply branches", async () => {
   const { createPrivateTopicMiddleware } = await import("./private-topics.ts");
   const resolvePrivateTopic = createPrivateTopicMiddleware();
   const { getThread, migrateThreads } = await import("./threads.ts");
@@ -1146,7 +1147,7 @@ Deno.test("DMs continue without mentions with or without topic IDs and preserve 
   }
 });
 
-Deno.test("private chat commands bypass model responses with or without a topic ID", async () => {
+test("private chat commands bypass model responses with or without a topic ID", async () => {
   for (const topicId of [undefined, 7]) {
     const ctx = new GrammyContext(
       {
@@ -1178,7 +1179,7 @@ Deno.test("private chat commands bypass model responses with or without a topic 
   }
 });
 
-Deno.test("tool errors hide details unless debug is enabled", () => {
+test("tool errors hide details unless debug is enabled", () => {
   const error = {
     tool: "generate_image",
     details: "MEDIA_CACHE_CHAT_ID is not set.",
@@ -1191,7 +1192,7 @@ Deno.test("tool errors hide details unless debug is enabled", () => {
   );
 });
 
-Deno.test("guest usage commands report and adjust group credits without changing personal credits", async () => {
+test("guest usage commands report and adjust group credits without changing personal credits", async () => {
   const { createCreditCharge, getUsageStatus } = await import("./usage.ts");
   const database = await initDatabase()();
   const i18n = new I18n({ directory: "locales", defaultLocale: "en" });
@@ -1263,7 +1264,7 @@ Deno.test("guest usage commands report and adjust group credits without changing
   }
 });
 
-Deno.test("model failures without activity preserve escaped diagnostics and resume commands", () => {
+test("model failures without activity preserve escaped diagnostics and resume commands", () => {
   strictEqual(
     formatModelFailureResponse(
       new Error("status 400: blocked <image> & context"),
@@ -1278,7 +1279,7 @@ Deno.test("model failures without activity preserve escaped diagnostics and resu
   );
 });
 
-Deno.test("failed model follow-ups retain tools with progress enabled or disabled", async () => {
+test("failed model follow-ups retain tools with progress enabled or disabled", async () => {
   const { setLlmDeploymentName } = await import("./llm-deployments.ts");
   const { persistChatProgressEnabled } = await import("./llm-models.ts");
   const { getThread } = await import("./threads.ts");
@@ -1416,7 +1417,7 @@ Deno.test("failed model follow-ups retain tools with progress enabled or disable
   }
 });
 
-Deno.test("Azure upstream outages use a plain custom-emoji message", () => {
+test("Azure upstream outages use a plain custom-emoji message", () => {
   deepStrictEqual(
     getAzureDownMessage(
       new Error(
@@ -1437,7 +1438,7 @@ Deno.test("Azure upstream outages use a plain custom-emoji message", () => {
   );
 });
 
-Deno.test("other model failures do not use the Azure outage message", () => {
+test("other model failures do not use the Azure outage message", () => {
   strictEqual(
     getAzureDownMessage(new Error("status 503: another server error")),
     undefined,
@@ -1448,7 +1449,7 @@ Deno.test("other model failures do not use the Azure outage message", () => {
   );
 });
 
-Deno.test("media-group input includes the largest photo from every message", () => {
+test("media-group input includes the largest photo from every message", () => {
   deepStrictEqual(
     getMessagesImageAttachments([
       {
@@ -1471,7 +1472,7 @@ Deno.test("media-group input includes the largest photo from every message", () 
   );
 });
 
-Deno.test("rich-message images are collected recursively in block order", () => {
+test("rich-message images are collected recursively in block order", () => {
   const photo = (id: string) => ({
     type: "photo",
     photo: [
@@ -1544,7 +1545,7 @@ Deno.test("rich-message images are collected recursively in block order", () => 
   );
 });
 
-Deno.test("normal and guest requests send every rich-message image to the model", async () => {
+test("normal and guest requests send every rich-message image to the model", async () => {
   const { setLlmDeploymentName } = await import("./llm-deployments.ts");
   const { saveThread } = await import("./threads.ts");
   const originalFetch = globalThis.fetch;
@@ -1828,7 +1829,7 @@ Deno.test("normal and guest requests send every rich-message image to the model"
   }
 });
 
-Deno.test("unavailable rich-message photos are retried without user diagnostics", () => {
+test("unavailable rich-message photos are retried without user diagnostics", () => {
   const error = new Error("400 Bad Request: RICH_MESSAGE_PHOTO_NO_MEDIA_FOUND");
   const prompt = getErrorRecoveryPrompt("Show me the result", error);
 
@@ -1839,7 +1840,7 @@ Deno.test("unavailable rich-message photos are retried without user diagnostics"
   ok(!prompt.includes("RICH_MESSAGE_PHOTO_NO_MEDIA_FOUND"));
 });
 
-Deno.test("guest rich messages preserve table source before delivery", async () => {
+test("guest rich messages preserve table source before delivery", async () => {
   const database = await initDatabase()();
   try {
     deepStrictEqual(
@@ -1854,7 +1855,7 @@ Deno.test("guest rich messages preserve table source before delivery", async () 
   }
 });
 
-Deno.test("guest rich messages include saved image media mappings", async () => {
+test("guest rich messages include saved image media mappings", async () => {
   const database = await initDatabase()();
 
   try {
@@ -1879,7 +1880,7 @@ Deno.test("guest rich messages include saved image media mappings", async () => 
   }
 });
 
-Deno.test("exhausted balances skip proactive and troll work before context lookup", async () => {
+test("exhausted balances skip proactive and troll work before context lookup", async () => {
   const { maybeSendProactiveAgentResponse } = await import("./chat.ts");
   const { maybeSendPeriodicTroll } = await import("./trolling.ts");
   const { consumeUsage } = await import("./usage.ts");
@@ -1912,7 +1913,7 @@ Deno.test("exhausted balances skip proactive and troll work before context looku
   }
 });
 
-Deno.test("combined progress has a separate final icon line ending with the progress marker", async () => {
+test("combined progress has a separate final icon line ending with the progress marker", async () => {
   const { formatProgressSegments } = await import("./chat.ts");
   const marker = "![⏳](tg://emoji?id=5427181942934088912)";
   const markdown = formatProgressSegments([
@@ -1941,7 +1942,7 @@ Deno.test("combined progress has a separate final icon line ending with the prog
   );
 });
 
-Deno.test("oversized Unicode progress reserves room for tools and appends the marker to every chunk", async () => {
+test("oversized Unicode progress reserves room for tools and appends the marker to every chunk", async () => {
   const { formatProgressSegments, splitProgressSegments } = await import(
     "./chat.ts"
   );
@@ -1961,7 +1962,7 @@ Deno.test("oversized Unicode progress reserves room for tools and appends the ma
   ok(segments.slice(1).every((segment) => segment.tools.length === 0));
 });
 
-Deno.test("chat progress sends one message per tick in the originating topic and respects the chat toggle", async () => {
+test("chat progress sends one message per tick in the originating topic and respects the chat toggle", async () => {
   const { persistChatProgressEnabled } = await import("./llm-models.ts");
   const { setLlmDeploymentName } = await import("./llm-deployments.ts");
   const database = await initDatabase()();
@@ -2063,7 +2064,7 @@ Deno.test("chat progress sends one message per tick in the originating topic and
             ],
           }),
         );
-      }) as typeof fetch;
+      }) as unknown as typeof fetch;
       const ctx = new GrammyContext(
         {
           update_id: enabled ? 1 : 2,
@@ -2138,7 +2139,7 @@ Deno.test("chat progress sends one message per tick in the originating topic and
   }
 });
 
-Deno.test("user input cap counts only the current message and its immediate reply", () => {
+test("user input cap counts only the current message and its immediate reply", () => {
   // Decimal text is three digits per token, so these are exact token boundaries.
   const digits = (tokens: number) => "123".repeat(tokens);
   const oversized = { message_id: 1, text: digits(5001) };
@@ -2205,7 +2206,7 @@ Deno.test("user input cap counts only the current message and its immediate repl
   );
 });
 
-Deno.test("oversized user input is rejected before generation, task creation, or credit reservations", async () => {
+test("oversized user input is rejected before generation, task creation, or credit reservations", async () => {
   const database = await initDatabase()();
   const originalFetch = globalThis.fetch;
   const chat = { id: -567, type: "supergroup", title: "Test" } as const;
@@ -2235,7 +2236,7 @@ Deno.test("oversized user input is rejected before generation, task creation, or
   };
   globalThis.fetch = (() => {
     throw new Error("Rejected input must not call external services");
-  }) as typeof fetch;
+  }) as unknown as typeof fetch;
   try {
     for (const mode of ["normal", "guest"] as const) {
       const message = {
@@ -2291,7 +2292,7 @@ Deno.test("oversized user input is rejected before generation, task creation, or
   }
 });
 
-Deno.test("automatic response checks allow ADMIN_ID even when the group has no credits", async () => {
+test("automatic response checks allow ADMIN_ID even when the group has no credits", async () => {
   const { prepareProactiveAgentResponse } = await import("./chat.ts");
   const { preparePeriodicTroll } = await import("./trolling.ts");
   const { setProactiveResponseInterval } = await import("./proactive.ts");

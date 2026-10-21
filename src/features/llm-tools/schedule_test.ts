@@ -1,8 +1,7 @@
+import { test } from "bun:test";
 import { deepStrictEqual, strictEqual } from "node:assert";
-import { Database as SqliteDatabase } from "@db/sqlite";
-import { Kysely } from "@kysely/kysely";
-import { DenoSqlite3Dialect } from "@marshift/kysely-deno-sqlite3";
 import type { Api } from "grammy";
+import { Kysely } from "kysely";
 import type { Database, DatabaseSchema } from "../database.ts";
 import { migrateImages, saveImageFileId } from "../images.ts";
 import {
@@ -11,6 +10,7 @@ import {
   migrateSchedules,
   sendScheduledRichMessage,
 } from "../schedules.ts";
+import { createSqliteDialect, openSqlite } from "../sqlite.ts";
 import {
   executeCancelScheduledMessage,
   executeGetScheduledMessages,
@@ -20,9 +20,8 @@ const CHAT_ID = 42;
 const TOOL_CONTEXT = { chatId: CHAT_ID, messageId: 1 };
 
 async function createTestDatabase(): Promise<Database> {
-  const sqlite = new SqliteDatabase(":memory:");
   const database = new Kysely<DatabaseSchema>({
-    dialect: new DenoSqlite3Dialect({ database: sqlite }),
+    dialect: createSqliteDialect(openSqlite(":memory:")),
   });
 
   await migrateSchedules(database);
@@ -30,7 +29,7 @@ async function createTestDatabase(): Promise<Database> {
   return database;
 }
 
-Deno.test("scheduled messages resolve saved images through rich messages", async () => {
+test("scheduled messages resolve saved images through rich messages", async () => {
   const database = await createTestDatabase();
   const image = await saveImageFileId(database, "scheduled-photo");
   let request: unknown;
@@ -107,7 +106,7 @@ async function seedSchedules(database: Database): Promise<void> {
     .execute();
 }
 
-Deno.test("get_scheduled_messages returns the current chat's /schedule list", async () => {
+test("get_scheduled_messages returns the current chat's /schedule list", async () => {
   const database = await createTestDatabase();
 
   try {
@@ -134,7 +133,7 @@ Deno.test("get_scheduled_messages returns the current chat's /schedule list", as
   }
 });
 
-Deno.test("cancel_scheduled_message cancels by /schedule id and returns the updated schedule", async () => {
+test("cancel_scheduled_message cancels by /schedule id and returns the updated schedule", async () => {
   const database = await createTestDatabase();
 
   try {
@@ -177,7 +176,7 @@ Deno.test("cancel_scheduled_message cancels by /schedule id and returns the upda
   }
 });
 
-Deno.test("cancel_scheduled_message rejects an invalid cancellation id", async () => {
+test("cancel_scheduled_message rejects an invalid cancellation id", async () => {
   const database = await createTestDatabase();
 
   try {

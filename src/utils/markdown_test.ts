@@ -1,7 +1,8 @@
+import { test } from "bun:test";
 import { strictEqual } from "node:assert";
 import { normalizeRichMarkdown } from "./markdown.ts";
 
-Deno.test("preserves Markdown structure and explicit line breaks without guessing", () => {
+test("preserves Markdown structure and explicit line breaks without guessing", () => {
   const table = "| A | B |\n| --- | --- |\n| 1 | 2 |";
   for (const input of [
     `Intro\n${table}\nAfter`,
@@ -23,25 +24,25 @@ Deno.test("preserves Markdown structure and explicit line breaks without guessin
   }
 });
 
-Deno.test("normalizeRichMarkdown escapes ordinary dollar signs", () => {
+test("normalizeRichMarkdown escapes ordinary dollar signs", () => {
   strictEqual(
     normalizeRichMarkdown("It was just 13$. However, this is 3$"),
     "It was just 13\\$. However, this is 3\\$",
   );
 });
 
-Deno.test("normalizeRichMarkdown preserves double-dollar LaTeX", () => {
+test("normalizeRichMarkdown preserves double-dollar LaTeX", () => {
   strictEqual(
     normalizeRichMarkdown("The total is $$13 + 3 = 16$$, or $16."),
     "The total is $$13 + 3 = 16$$, or \\$16.",
   );
 });
 
-Deno.test("normalizeRichMarkdown handles runs of dollar signs in pairs", () => {
+test("normalizeRichMarkdown handles runs of dollar signs in pairs", () => {
   strictEqual(normalizeRichMarkdown("$$$ $$$$ $$$$$"), "$$\\$ $$$$ $$$$\\$");
 });
 
-Deno.test("normalizeRichMarkdown does not double-escape dollar signs", () => {
+test("normalizeRichMarkdown does not double-escape dollar signs", () => {
   strictEqual(
     normalizeRichMarkdown("Already \\$escaped and $not."),
     "Already \\$escaped and \\$not.",

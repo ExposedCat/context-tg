@@ -1,6 +1,6 @@
 import { createDebug } from "@grammyjs/debug";
-import OpenAI from "@openai/openai";
 import { Composer } from "grammy";
+import OpenAI from "openai";
 import type { Context } from "../bot.ts";
 import { parseDanbooruOptions } from "./danbooru-options.ts";
 import type { Database } from "./database.ts";

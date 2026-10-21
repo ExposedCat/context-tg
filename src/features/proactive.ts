@@ -1,4 +1,4 @@
-import { sql } from "@kysely/kysely";
+import { sql } from "kysely";
 import type { Database } from "./database.ts";
 
 export type ChatProactiveResponsesTable = {

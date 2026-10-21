@@ -1,4 +1,4 @@
-import type { ColumnType, Insertable, Selectable } from "@kysely/kysely";
+import type { ColumnType, Insertable, Selectable } from "kysely";
 import type { AgentId } from "./agents/index.ts";
 import type { Database } from "./database.ts";
 

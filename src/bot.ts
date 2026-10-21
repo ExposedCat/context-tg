@@ -1,14 +1,14 @@
 import { createDebug } from "@grammyjs/debug";
+import { I18n, type I18nFlavor } from "@grammyjs/i18n";
 import {
   type OpenTelemetryContext,
   openTelemetry,
   type SpanDefinitions,
 } from "@grammyjs/opentelemetry";
 import { limit } from "@grammyjs/ratelimiter";
+import { run } from "@grammyjs/runner";
 import { DiagLogLevel } from "@opentelemetry/api";
 import { Bot, type Context as GrammyContext, type Transformer } from "grammy";
-import { I18n, type I18nFlavor } from "grammy-i18n";
-import { run } from "grammy-runner";
 import { safelyMaybeSendAutomaticResponse } from "./features/automatic-responses.ts";
 import { chatComposer } from "./features/chat.ts";
 import type { Database } from "./features/database.ts";

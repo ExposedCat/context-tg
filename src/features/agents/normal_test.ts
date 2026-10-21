@@ -1,6 +1,7 @@
+import { test } from "bun:test";
 import { strictEqual } from "node:assert";
 
-Deno.test("NAMES configures normal triggers and identity at startup", async () => {
+test("NAMES configures normal triggers and identity at startup", async () => {
   const customNames =
     "laylo,patrick,патрик,лейло,context,контекст,grok,грок,claude,клод,gpt,гпт,@grok,@грок";
   const indexUrl = new URL("./index.ts", import.meta.url).href;
@@ -29,12 +30,16 @@ Deno.test("NAMES configures normal triggers and identity at startup", async () =
       deepStrictEqual(tofuAgent.name, ["tofu laylo", "тофу лейло"]);
       strictEqual(trollAgent.name[0], "troll laylo");
     `;
-    const result = await new Deno.Command(Deno.execPath(), {
-      args: ["eval", script],
-      cwd: new URL("../../../", import.meta.url),
-      clearEnv: true,
+    const child = Bun.spawn({
+      cmd: [process.execPath, "--no-env-file", "-e", script],
+      cwd: new URL("../../../", import.meta.url).pathname,
       env: configured === undefined ? {} : { NAMES: configured },
-    }).output();
-    strictEqual(result.code, 0, new TextDecoder().decode(result.stderr));
+      stderr: "pipe",
+    });
+    const [code, stderr] = await Promise.all([
+      child.exited,
+      new Response(child.stderr).text(),
+    ]);
+    strictEqual(code, 0, stderr);
   }
 });

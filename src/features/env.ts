@@ -1,5 +1,5 @@
 function getRequiredEnv(name: string): string {
-  const value = Deno.env.get(name);
+  const value = Bun.env[name];
   if (!value) {
     throw new Error(`${name} is not set`);
   }
@@ -8,7 +8,7 @@ function getRequiredEnv(name: string): string {
 }
 
 function getOptionalEnv(name: string): string | undefined {
-  const value = Deno.env.get(name);
+  const value = Bun.env[name];
   return value ? value : undefined;
 }
 

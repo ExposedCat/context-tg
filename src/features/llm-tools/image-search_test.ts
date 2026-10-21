@@ -1,3 +1,4 @@
+import { test } from "bun:test";
 import { deepStrictEqual, strictEqual } from "node:assert";
 import type { Api } from "grammy";
 
@@ -18,7 +19,7 @@ const TEST_ENV = {
 } as const;
 
 for (const [name, value] of Object.entries(TEST_ENV)) {
-  Deno.env.set(name, value);
+  Bun.env[name] = value;
 }
 
 const [{ initDatabase }, { saveImageFileId }, { execute, executeReadImage }] =
@@ -28,7 +29,7 @@ const [{ initDatabase }, { saveImageFileId }, { execute, executeReadImage }] =
     import("./image-search.ts"),
   ]);
 
-Deno.test("search_images queries all image engines and ignores failed engines", async () => {
+test("search_images queries all image engines and ignores failed engines", async () => {
   const originalFetch = globalThis.fetch;
 
   globalThis.fetch = (async (input, init) => {
@@ -89,7 +90,7 @@ Deno.test("search_images queries all image engines and ignores failed engines", 
   }
 });
 
-Deno.test("read_image returns native vision input for an image result", async () => {
+test("read_image returns native vision input for an image result", async () => {
   const result = await executeReadImage({
     url: "https://images.example.com/cat.jpg",
   });
@@ -108,7 +109,7 @@ Deno.test("read_image returns native vision input for an image result", async ()
   });
 });
 
-Deno.test("read_image rejects non-HTTP URLs", async () => {
+test("read_image rejects non-HTTP URLs", async () => {
   const result = await executeReadImage({ url: "file:///etc/passwd" });
   strictEqual(
     result,
@@ -119,7 +120,7 @@ Deno.test("read_image rejects non-HTTP URLs", async () => {
   );
 });
 
-Deno.test("read_image requires exactly one of url or id", async () => {
+test("read_image requires exactly one of url or id", async () => {
   strictEqual(
     await executeReadImage({}),
     JSON.stringify({
@@ -138,7 +139,7 @@ Deno.test("read_image requires exactly one of url or id", async () => {
   );
 });
 
-Deno.test("read_image resolves a saved image id into vision input", async () => {
+test("read_image resolves a saved image id into vision input", async () => {
   const database = await initDatabase()();
   const image = await saveImageFileId(database, "saved-telegram-photo");
   const originalFetch = globalThis.fetch;

@@ -1,3 +1,4 @@
 #!/bin/bash
 
-DEBUG=${DEBUG:-"app:*"} deno run --watch --allow-run --allow-ffi --env-file=.env -INERSW --unstable-cron src/app.ts
+# Bun loads .env automatically.
+DEBUG=${DEBUG:-"app:*"} exec bun --watch src/app.ts

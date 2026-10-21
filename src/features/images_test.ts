@@ -1,3 +1,4 @@
+import { test } from "bun:test";
 import { deepStrictEqual, match, rejects, strictEqual } from "node:assert";
 import type { Api } from "grammy";
 
@@ -17,7 +18,7 @@ const TEST_ENV = {
 } as const;
 
 for (const [name, value] of Object.entries(TEST_ENV)) {
-  Deno.env.set(name, value);
+  Bun.env[name] = value;
 }
 
 const [
@@ -32,7 +33,7 @@ const [
   },
 ] = await Promise.all([import("./database.ts"), import("./images.ts")]);
 
-Deno.test("Telegram photo file ids receive stable saved image ids", async () => {
+test("Telegram photo file ids receive stable saved image ids", async () => {
   const database = await initDatabase()();
 
   try {
@@ -47,7 +48,7 @@ Deno.test("Telegram photo file ids receive stable saved image ids", async () => 
   }
 });
 
-Deno.test("Telegram image documents retain their rich-message media type", async () => {
+test("Telegram image documents retain their rich-message media type", async () => {
   const database = await initDatabase()();
 
   try {
@@ -71,7 +72,7 @@ Deno.test("Telegram image documents retain their rich-message media type", async
   }
 });
 
-Deno.test("saved images are cached and resolved for rich Markdown", async () => {
+test("saved images are cached and resolved for rich Markdown", async () => {
   const database = await initDatabase()();
   const cachedInputs: unknown[] = [];
   let sendCount = 0;
@@ -125,7 +126,7 @@ Deno.test("saved images are cached and resolved for rich Markdown", async () => 
   }
 });
 
-Deno.test("unknown rich Markdown image ids are rejected", async () => {
+test("unknown rich Markdown image ids are rejected", async () => {
   const database = await initDatabase()();
 
   try {
@@ -142,7 +143,7 @@ Deno.test("unknown rich Markdown image ids are rejected", async () => {
   }
 });
 
-Deno.test("unavailable rich-message images can be removed from Markdown", () => {
+test("unavailable rich-message images can be removed from Markdown", () => {
   strictEqual(
     stripRichMessageImages(
       [

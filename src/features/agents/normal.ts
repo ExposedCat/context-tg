@@ -9,9 +9,7 @@ import {
 import type { AgentDefinition } from "./types.ts";
 
 export const id = "normal";
-const configuredNames = Deno.env
-  .get("NAMES")
-  ?.split(",")
+const configuredNames = Bun.env.NAMES?.split(",")
   .map((name) => name.trim())
   .filter(Boolean);
 export const name = configuredNames?.length

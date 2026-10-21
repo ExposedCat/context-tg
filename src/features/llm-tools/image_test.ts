@@ -1,3 +1,4 @@
+import { test } from "bun:test";
 import { deepStrictEqual, match, ok, rejects, strictEqual } from "node:assert";
 import { type Api, InputFile } from "grammy";
 import type { LlmToolUsage } from "./types.ts";
@@ -18,7 +19,7 @@ const TEST_ENV = {
 } as const;
 
 for (const [name, value] of Object.entries(TEST_ENV)) {
-  Deno.env.set(name, value);
+  Bun.env[name] = value;
 }
 
 const [{ initDatabase }, { saveImageFileId }, { execute, toolDefinition }] =
@@ -32,7 +33,7 @@ const { LLM_DEPLOYMENTS } = await import("../llm-deployments.ts");
 LLM_DEPLOYMENTS.imageSmall.deploymentName = "test-image";
 LLM_DEPLOYMENTS.imageBig.deploymentName = "test-big-image";
 
-Deno.test("generate_image exposes ordered saved ids or URLs as inputs", () => {
+test("generate_image exposes ordered saved ids or URLs as inputs", () => {
   deepStrictEqual(toolDefinition.parameters.required, ["prompt"]);
   strictEqual(toolDefinition.strict, false);
   deepStrictEqual(toolDefinition.parameters.properties.images, {
@@ -43,7 +44,7 @@ Deno.test("generate_image exposes ordered saved ids or URLs as inputs", () => {
   });
 });
 
-Deno.test("generate_image resolves saved ids and uploads all image inputs", async () => {
+test("generate_image resolves saved ids and uploads all image inputs", async () => {
   const database = await initDatabase()();
   const savedImage = await saveImageFileId(database, "saved-telegram-photo");
   const originalFetch = globalThis.fetch;
@@ -155,7 +156,7 @@ Deno.test("generate_image resolves saved ids and uploads all image inputs", asyn
   }
 });
 
-Deno.test("generate_image rejects an unknown saved input id", async () => {
+test("generate_image rejects an unknown saved input id", async () => {
   const database = await initDatabase()();
   let requested = false;
   const originalFetch = globalThis.fetch;
@@ -168,7 +169,7 @@ Deno.test("generate_image rejects an unknown saved input id", async () => {
   globalThis.fetch = (() => {
     requested = true;
     throw new Error("unexpected fetch");
-  }) as typeof fetch;
+  }) as unknown as typeof fetch;
 
   try {
     const result = await execute(
@@ -188,7 +189,7 @@ Deno.test("generate_image rejects an unknown saved input id", async () => {
   }
 });
 
-Deno.test("generate_image fallback shares the main LLM endpoint and credentials", async () => {
+test("generate_image fallback shares the main LLM endpoint and credentials", async () => {
   const { LLM_DEPLOYMENTS } = await import("../llm-deployments.ts");
   const previousDeployment = LLM_DEPLOYMENTS.image.deploymentName;
   LLM_DEPLOYMENTS.image.deploymentName = "alternate-image";
@@ -244,7 +245,7 @@ Deno.test("generate_image fallback shares the main LLM endpoint and credentials"
   }
 });
 
-Deno.test("generate_image routes sizes and falls back for unavailable deployments", async () => {
+test("generate_image routes sizes and falls back for unavailable deployments", async () => {
   deepStrictEqual(toolDefinition.parameters.properties.size.enum, [
     "small",
     "big",
@@ -304,7 +305,7 @@ Deno.test("generate_image routes sizes and falls back for unavailable deployment
     }
     globalThis.fetch = (() => {
       throw new Error("Invalid size must not make a request");
-    }) as typeof fetch;
+    }) as unknown as typeof fetch;
     strictEqual(
       await execute({ prompt: "Draw a tree", size: "medium" }, undefined, {
         database,
@@ -321,7 +322,7 @@ Deno.test("generate_image routes sizes and falls back for unavailable deployment
   }
 });
 
-Deno.test("image fallback stops before its API call when credits are exhausted", async () => {
+test("image fallback stops before its API call when credits are exhausted", async () => {
   const database = await initDatabase()();
   const previous = LLM_DEPLOYMENTS.image.deploymentName;
   LLM_DEPLOYMENTS.image.deploymentName = "fallback-image";
@@ -331,7 +332,7 @@ Deno.test("image fallback stops before its API call when credits are exhausted",
   globalThis.fetch = (async () => {
     attempts++;
     return Response.json({ error: { message: "Try again" } }, { status: 503 });
-  }) as typeof fetch;
+  }) as unknown as typeof fetch;
   try {
     await rejects(
       () =>

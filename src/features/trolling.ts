@@ -1,4 +1,4 @@
-import { sql } from "@kysely/kysely";
+import { sql } from "kysely";
 import type { Context } from "../bot.ts";
 import { trollAgent } from "./agents/index.ts";
 import type { Database } from "./database.ts";

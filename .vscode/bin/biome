@@ -1,2 +1,2 @@
-#!/usr/bin/env sh
-exec deno run -A npm:@biomejs/biome "$@"
+#!/bin/sh
+exec "$(dirname "$0")/../../node_modules/.bin/biome" "$@"

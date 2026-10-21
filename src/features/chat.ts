@@ -1769,25 +1769,14 @@ async function sendReportResponse(
   replyMessageId?: number | null,
 ): Promise<Array<{ message_id: number }>> {
   const filename = normalizeHtmlFilename(report.filename);
-  const tmpPath = await Deno.makeTempFile({
-    prefix: "context-tg-report-",
-    suffix: ".html",
-  });
   const sentMessages = [];
 
-  try {
-    await Deno.writeTextFile(tmpPath, report.documentHtml);
-
-    const sentDocument = await ctx.replyWithDocument(
-      new InputFile(tmpPath, filename),
-      getReplyDeliveryOptions(message, replyMessageId),
-    );
-    sentMessages.push(sentDocument);
-  } finally {
-    await Deno.remove(tmpPath).catch((error) =>
-      logError("Failed to delete temporary report:", { tmpPath, error }),
-    );
-  }
+  // Upload straight from memory; no temporary file to create or clean up.
+  const sentDocument = await ctx.replyWithDocument(
+    new InputFile(new TextEncoder().encode(report.documentHtml), filename),
+    getReplyDeliveryOptions(message, replyMessageId),
+  );
+  sentMessages.push(sentDocument);
 
   sentMessages.push(
     ...(await sendRichMarkdownResponse(

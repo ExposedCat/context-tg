@@ -1,9 +1,4 @@
-import {
-  type ColumnType,
-  type Insertable,
-  type Selectable,
-  sql,
-} from "@kysely/kysely";
+import { type ColumnType, type Insertable, type Selectable, sql } from "kysely";
 import type { Context } from "../bot.ts";
 import { padDatePart } from "../utils/date.ts";
 import {

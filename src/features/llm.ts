@@ -1,6 +1,6 @@
 import { createDebug } from "@grammyjs/debug";
-import OpenAI from "@openai/openai";
 import type { Api } from "grammy";
+import OpenAI from "openai";
 import { delay, throwIfAborted } from "../utils/async.ts";
 import { escapeXmlAttribute } from "../utils/text.ts";
 import { buildConflictInstructions } from "./agents/builders.ts";
@@ -1216,10 +1216,11 @@ function removeLastInputImage(
 
       if (imageIndex >= 0) {
         const recoveredInput = [...inputItems];
+        // TS cannot correlate the spread with each message variant's content type.
         recoveredInput[itemIndex] = {
           ...item,
           content: item.content.toSpliced(imageIndex, 1),
-        };
+        } as ResponseInputItem;
         return recoveredInput;
       }
     }

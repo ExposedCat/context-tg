@@ -1,5 +1,5 @@
-import type { ColumnType, Selectable } from "@kysely/kysely";
 import { type Api, InputFile } from "grammy";
+import type { ColumnType, Selectable } from "kysely";
 import type { Database } from "./database.ts";
 import { APP_ENV } from "./env.ts";
 

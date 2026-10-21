@@ -1,4 +1,4 @@
-FROM denoland/deno:2.8.1
+FROM docker.io/oven/bun:1.4.3
 
 USER root
 
@@ -9,3 +9,13 @@ RUN apt-get update \
   && chmod 0755 /usr/local/bin/yt-dlp \
   && yt-dlp --version \
   && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Dependencies first so source edits reuse the cached install layer.
+COPY package.json bun.lock bunfig.toml ./
+RUN bun install --frozen-lockfile --production
+
+COPY . .
+
+CMD ["bun", "src/app.ts"]

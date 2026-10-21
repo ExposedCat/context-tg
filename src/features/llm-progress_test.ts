@@ -1,3 +1,4 @@
+import { test } from "bun:test";
 import { deepStrictEqual, strictEqual } from "node:assert";
 import type { LlmProgressSegment } from "./llm.ts";
 import {
@@ -41,7 +42,7 @@ async function tickUntil(timer: ReturnType<typeof clock>, time: number) {
   strictEqual(timer.now(), time);
 }
 
-Deno.test("progress batches preserve each segment's tools and drain after each interval", async () => {
+test("progress batches preserve each segment's tools and drain after each interval", async () => {
   const timer = clock();
   const messages: LlmProgressSegment[][] = [];
   const updates = createProgressUpdates({
@@ -97,7 +98,7 @@ Deno.test("progress batches preserve each segment's tools and drain after each i
   strictEqual(PROGRESS_PLACEHOLDER_INTERVAL_MS, 300_000);
 });
 
-Deno.test("idle progress summarizes only new tools and returns to placeholders when idle", async () => {
+test("idle progress summarizes only new tools and returns to placeholders when idle", async () => {
   const timer = clock();
   const messages: LlmProgressSegment[][] = [];
   let randomCalls = 0;
@@ -160,7 +161,7 @@ Deno.test("idle progress summarizes only new tools and returns to placeholders w
   await updates.stop();
 });
 
-Deno.test("tool summaries cover built-in and dynamic finance tools", () => {
+test("tool summaries cover built-in and dynamic finance tools", () => {
   strictEqual(formatProgressToolSummary([]), "");
   strictEqual(
     formatProgressToolSummary(["web_search", "read_web_page"]),
@@ -178,7 +179,7 @@ Deno.test("tool summaries cover built-in and dynamic finance tools", () => {
   );
 });
 
-Deno.test("retrying an idle tool summary does not count calls twice", async () => {
+test("retrying an idle tool summary does not count calls twice", async () => {
   const timer = clock();
   const attempts: LlmProgressSegment[][] = [];
   let errors = 0;
@@ -208,7 +209,7 @@ Deno.test("retrying an idle tool summary does not count calls twice", async () =
   deepStrictEqual(await updates.stop(), []);
 });
 
-Deno.test("progress stops on cancellation and waits for an in-flight send", async () => {
+test("progress stops on cancellation and waits for an in-flight send", async () => {
   const timer = clock();
   const controller = new AbortController();
   let release!: () => void;
@@ -256,7 +257,7 @@ Deno.test("progress stops on cancellation and waits for an in-flight send", asyn
   await canceled.stop();
 });
 
-Deno.test("failed progress delivery retains queued text and does not break the request", async () => {
+test("failed progress delivery retains queued text and does not break the request", async () => {
   const timer = clock();
   let errors = 0;
   const updates = createProgressUpdates({
@@ -274,7 +275,7 @@ Deno.test("failed progress delivery retains queued text and does not break the r
   ]);
 });
 
-Deno.test("oversized batches send once per interval and preserve the remaining parts", async () => {
+test("oversized batches send once per interval and preserve the remaining parts", async () => {
   const timer = clock();
   const sent: LlmProgressSegment[][] = [];
   const updates = createProgressUpdates({
@@ -299,7 +300,7 @@ Deno.test("oversized batches send once per interval and preserve the remaining p
   deepStrictEqual(await updates.stop(), []);
 });
 
-Deno.test("tool summaries include only the delivered batch", async () => {
+test("tool summaries include only the delivered batch", async () => {
   const timer = clock();
   const sent: LlmProgressSegment[][] = [];
   const updates = createProgressUpdates({
@@ -325,7 +326,7 @@ Deno.test("tool summaries include only the delivered batch", async () => {
   deepStrictEqual(await updates.stop(), []);
 });
 
-Deno.test("tools arriving during delivery are retained for the next update", async () => {
+test("tools arriving during delivery are retained for the next update", async () => {
   const timer = clock();
   const sent: LlmProgressSegment[][] = [];
   let release!: () => void;

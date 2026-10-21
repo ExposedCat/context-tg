@@ -1,7 +1,8 @@
+import { test } from "bun:test";
 import { ok, strictEqual } from "node:assert";
 import { buildRespondingInstructions } from "./builders.ts";
 
-Deno.test("responding instructions describe Telegram rich formatting", () => {
+test("responding instructions describe Telegram rich formatting", () => {
   const instructions = buildRespondingInstructions(-1001234567890);
   const supportedExamples = [
     "When sending multiple images, prefer tg-collage (all visible) or tg-slideshow (carousel) wrappers.",

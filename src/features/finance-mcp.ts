@@ -1,7 +1,7 @@
 import { createDebug } from "@grammyjs/debug";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
-import type OpenAI from "@openai/openai";
+import type OpenAI from "openai";
 import type { Database } from "./database.ts";
 import { APP_ENV } from "./env.ts";
 import type { FunctionToolRunner } from "./llm-tools/types.ts";

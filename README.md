@@ -1,5 +1,21 @@
 # Chat Context | Telegram
 
+## Development
+
+Runs on [Bun](https://bun.sh) (1.4+).
+
+```sh
+bun install
+bun run dev        # watch mode; Bun loads .env automatically
+bun run test       # isolated, parallel test files; never loads .env
+bun run typecheck
+bun run check      # biome
+```
+
+SQLite uses `bun:sqlite`; integers read back exactly up to 2^53, so Telegram
+chat and user ids are safe. Schedules use in-process `Bun.cron` in UTC. The
+container image bakes in source and dependencies and mounts only `./data`.
+
 ## Finance MCP
 
 Anyone can open `/settings`. In groups, the command and menu are ephemeral,
@@ -37,7 +53,7 @@ pm3 restart context -y -g
 
 Use these restarts after both updated repositories are available to PM3. The
 Compose network change requires recreating both app containers; merely restarting the
-Deno process does not attach the network. Eyri's host port stays bound to
+Bun process does not attach the network. Eyri's host port stays bound to
 loopback; Context accesses MCP directly over the container network.
 
 ## Text credits

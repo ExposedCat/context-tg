@@ -15,7 +15,7 @@ try {
   logDebug("Database connected successfully");
 } catch (error) {
   logError("Failed to connect to database", { error });
-  Deno.exit(1);
+  process.exit(1);
 }
 
 try {
@@ -23,7 +23,7 @@ try {
   await startBot();
 } catch (error) {
   logError("Failed to start bot", { error });
-  Deno.exit(1);
+  process.exit(1);
 }
 
 logDebug("App started successfully");

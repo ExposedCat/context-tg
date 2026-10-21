@@ -1,0 +1,5 @@
+[install.scopes]
+"@jsr" = "https://npm.jsr.io"
+
+[test]
+preload = ["./src/test-setup.ts"]

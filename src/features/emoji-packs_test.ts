@@ -1,3 +1,4 @@
+import { test } from "bun:test";
 import { deepStrictEqual, strictEqual } from "node:assert";
 import type { Database } from "./database.ts";
 
@@ -17,7 +18,7 @@ const TEST_ENV = {
 } as const;
 
 for (const [name, value] of Object.entries(TEST_ENV)) {
-  Deno.env.set(name, value);
+  Bun.env[name] = value;
 }
 
 const { createEmojiPackTransformer, formatGlobalPacksList } = await import(
@@ -89,7 +90,7 @@ async function transformText(database: Database, text: string) {
   return sentPayload;
 }
 
-Deno.test("global emoji packs are fallback-only", async () => {
+test("global emoji packs are fallback-only", async () => {
   const sentPayload = await transformText(createPackDatabase(), "🙂🔥");
 
   deepStrictEqual(sentPayload, {
@@ -112,7 +113,7 @@ Deno.test("global emoji packs are fallback-only", async () => {
   });
 });
 
-Deno.test("global emoji packs are used when no chat packs exist", async () => {
+test("global emoji packs are used when no chat packs exist", async () => {
   const sentPayload = await transformText(createPackDatabase(false), "🙂");
 
   deepStrictEqual(sentPayload, {
@@ -129,7 +130,7 @@ Deno.test("global emoji packs are used when no chat packs exist", async () => {
   });
 });
 
-Deno.test("global pack commands are only included for the bot admin", () => {
+test("global pack commands are only included for the bot admin", () => {
   const packs = [{ name: "default_pack" }];
   const adminMessage = formatGlobalPacksList(packs, true);
   const memberMessage = formatGlobalPacksList(packs, false);

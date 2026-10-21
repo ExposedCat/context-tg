@@ -1,3 +1,6 @@
+import { mkdtemp, readdir, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { createDebug } from "@grammyjs/debug";
 import type { FunctionToolRunner } from "./types.ts";
 import { getJsonError, getString } from "./utils.ts";
@@ -150,32 +153,22 @@ function truncateTranscript(transcript: string) {
 async function findSubtitleFiles(directory: string): Promise<string[]> {
   const files: string[] = [];
 
-  for await (const entry of Deno.readDir(directory)) {
-    if (entry.isFile && entry.name.toLowerCase().endsWith(".vtt")) {
-      files.push(`${directory}/${entry.name}`);
+  for (const entry of await readdir(directory, { withFileTypes: true })) {
+    if (entry.isFile() && entry.name.toLowerCase().endsWith(".vtt")) {
+      files.push(join(directory, entry.name));
     }
   }
 
   return files.sort();
 }
 
-async function pathExists(path: string): Promise<boolean> {
-  try {
-    const stat = await Deno.stat(path);
-    return stat.isFile;
-  } catch (error) {
-    if (error instanceof Deno.errors.NotFound) {
-      return false;
-    }
-
-    throw error;
-  }
+function pathExists(path: string): Promise<boolean> {
+  return Bun.file(path).exists();
 }
 
 async function getYoutubeDl() {
   const { create, youtubeDl } = await import("youtube-dl-exec");
-  const configuredPath =
-    Deno.env.get("YOUTUBE_DL_PATH") ?? Deno.env.get("YT_DLP_PATH");
+  const configuredPath = Bun.env.YOUTUBE_DL_PATH ?? Bun.env.YT_DLP_PATH;
 
   if (configuredPath) {
     return create(configuredPath);
@@ -222,7 +215,7 @@ export const execute: FunctionToolRunner = async (args) => {
     );
   }
 
-  const directory = await Deno.makeTempDir({ prefix: "youtube-captions-" });
+  const directory = await mkdtemp(join(tmpdir(), "youtube-captions-"));
 
   try {
     await downloadCaptions(url, directory);
@@ -236,7 +229,7 @@ export const execute: FunctionToolRunner = async (args) => {
     }
 
     const sourceFile = subtitleFiles[0];
-    const content = await Deno.readTextFile(sourceFile);
+    const content = await Bun.file(sourceFile).text();
     const transcript = parseVttTranscript(content);
     const truncated = truncateTranscript(transcript);
 
@@ -256,6 +249,6 @@ export const execute: FunctionToolRunner = async (args) => {
           : "Failed to download captions.",
     });
   } finally {
-    await Deno.remove(directory, { recursive: true });
+    await rm(directory, { recursive: true, force: true });
   }
 };

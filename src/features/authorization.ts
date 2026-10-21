@@ -1,7 +1,7 @@
 import type { Context } from "../bot.ts";
 
 export function isBotAdminId(userId: number | undefined): boolean {
-  return userId !== undefined && userId === Number(Deno.env.get("ADMIN_ID"));
+  return userId !== undefined && userId === Number(Bun.env.ADMIN_ID);
 }
 
 export function isBotAdmin(ctx: Context): boolean {

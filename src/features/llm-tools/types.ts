@@ -1,5 +1,5 @@
-import type OpenAI from "@openai/openai";
 import type { Api } from "grammy";
+import type OpenAI from "openai";
 import type { AgentId } from "../agents/index.ts";
 import type { DanbooruOverrides } from "../danbooru-options.ts";
 import type { Database } from "../database.ts";

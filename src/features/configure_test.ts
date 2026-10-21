@@ -1,6 +1,7 @@
+import { test } from "bun:test";
 import { deepStrictEqual, match, ok, strictEqual } from "node:assert";
+import { I18n } from "@grammyjs/i18n";
 import { Bot } from "grammy";
-import { I18n } from "grammy-i18n";
 import type { Context } from "../bot.ts";
 
 for (const [key, value] of Object.entries({
@@ -17,7 +18,7 @@ for (const [key, value] of Object.entries({
   EMBEDDING_MODEL: "test",
   QDRANT_URL: "https://qdrant.test",
 }))
-  Deno.env.set(key, value);
+  Bun.env[key] = value;
 
 const { configureComposer } = await import("./configure.ts");
 const { initDatabase } = await import("./database.ts");
@@ -32,7 +33,7 @@ const { getFinanceMcpEnabled, migrateUserSettings } = await import(
   "./user-settings.ts"
 );
 
-Deno.test("rich configure navigation, persistence and authorization", async () => {
+test("rich configure navigation, persistence and authorization", async () => {
   const database = await initDatabase()();
   try {
     const bot = new Bot<Context>("123:test", {

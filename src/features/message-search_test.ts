@@ -1,3 +1,4 @@
+import { test } from "bun:test";
 import { deepStrictEqual, ok, strictEqual } from "node:assert";
 import { Api, Context as GrammyContext } from "grammy";
 import type { MessageEntity } from "grammy/types";
@@ -19,7 +20,7 @@ const TEST_ENV = {
 } as const;
 
 for (const [name, value] of Object.entries(TEST_ENV)) {
-  Deno.env.set(name, value);
+  Bun.env[name] = value;
 }
 
 const [
@@ -43,7 +44,7 @@ const [
 type MessageMetadata = import("./messages.ts").MessageMetadata;
 type MessageSearchResult = import("./messages.ts").MessageSearchResult;
 
-Deno.test("slash commands are indexed and reindexed without triggering automatic responses", async () => {
+test("slash commands are indexed and reindexed without triggering automatic responses", async () => {
   const originalFetch = globalThis.fetch;
   const indexed: MessageMetadata[] = [];
   const triggered: number[] = [];
@@ -141,7 +142,7 @@ Deno.test("slash commands are indexed and reindexed without triggering automatic
   }
 });
 
-Deno.test("indexing preserves ordinary group reply parents and scopes only real topics", async () => {
+test("indexing preserves ordinary group reply parents and scopes only real topics", async () => {
   const originalFetch = globalThis.fetch;
   const indexed: MessageMetadata[] = [];
   globalThis.fetch = (async (input, init) => {
@@ -279,7 +280,7 @@ function createAnchor(
   };
 }
 
-Deno.test("rank fusion rewards messages found by multiple retrieval paths", () => {
+test("rank fusion rewards messages found by multiple retrieval paths", () => {
   const first = createMessage(1);
   const second = createMessage(2);
   const third = createMessage(3);
@@ -320,7 +321,7 @@ Deno.test("rank fusion rewards messages found by multiple retrieval paths", () =
   deepStrictEqual(results[1].matched_by, ["semantic", "lexical"]);
 });
 
-Deno.test("exact phrase validation behaves like case-insensitive grep", () => {
+test("exact phrase validation behaves like case-insensitive grep", () => {
   strictEqual(
     containsExactPhrase(
       "Track https://example.com/DEPLOY-123 now",
@@ -334,7 +335,7 @@ Deno.test("exact phrase validation behaves like case-insensitive grep", () => {
   );
 });
 
-Deno.test("remembered Telegram photos render as reusable Markdown", async () => {
+test("remembered Telegram photos render as reusable Markdown", async () => {
   const database = await initDatabase()();
 
   try {
@@ -363,7 +364,7 @@ Deno.test("remembered Telegram photos render as reusable Markdown", async () => 
   }
 });
 
-Deno.test("remembered image documents render as reusable document Markdown", async () => {
+test("remembered image documents render as reusable document Markdown", async () => {
   const database = await initDatabase()();
 
   try {
@@ -391,7 +392,7 @@ Deno.test("remembered image documents render as reusable document Markdown", asy
   }
 });
 
-Deno.test("message context output marks the requested target", () => {
+test("message context output marks the requested target", () => {
   const output = JSON.parse(
     formatMessageContextJson(
       10,
@@ -418,7 +419,7 @@ Deno.test("message context output marks the requested target", () => {
   );
 });
 
-Deno.test("message context exposes Telegram album ids", () => {
+test("message context exposes Telegram album ids", () => {
   const output = JSON.parse(
     formatMessageContextJson(10, 1, [
       createMessage(10, { media_group_id: "album-42" }),
@@ -428,7 +429,7 @@ Deno.test("message context exposes Telegram album ids", () => {
   strictEqual(output.messages[0].media_group_id, "album-42");
 });
 
-Deno.test("overlapping context windows merge and retain a distant reply parent", () => {
+test("overlapping context windows merge and retain a distant reply parent", () => {
   const parent = createMessage(2);
   const firstAnchor = createAnchor(10, 0.04, {
     reply_to_message_id: parent.message_id,
@@ -464,7 +465,7 @@ Deno.test("overlapping context windows merge and retain a distant reply parent",
   );
 });
 
-Deno.test("a shared reply parent does not merge unrelated local windows", () => {
+test("a shared reply parent does not merge unrelated local windows", () => {
   const parent = createMessage(2);
   const anchors = [
     createAnchor(10, 0.04, { reply_to_message_id: 2 }),

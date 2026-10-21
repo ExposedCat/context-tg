@@ -1,3 +1,4 @@
+import { test } from "bun:test";
 import { strictEqual } from "node:assert";
 import type { Context } from "../bot.ts";
 
@@ -17,7 +18,7 @@ const TEST_ENV = {
 } as const;
 
 for (const [name, value] of Object.entries(TEST_ENV)) {
-  Deno.env.set(name, value);
+  Bun.env[name] = value;
 }
 
 const [{ canConfigureChat }, { formatConfigureMenu }] = await Promise.all([
@@ -48,14 +49,14 @@ function createContext(
   return { ctx, getChatMemberCalls: () => getChatMemberCalls };
 }
 
-Deno.test("bot admin can configure without a Telegram membership lookup", async () => {
+test("bot admin can configure without a Telegram membership lookup", async () => {
   const mock = createContext(1, "private", "member");
 
   strictEqual(await canConfigureChat(mock.ctx), true);
   strictEqual(mock.getChatMemberCalls(), 0);
 });
 
-Deno.test("Telegram group administrators and owners can configure", async () => {
+test("Telegram group administrators and owners can configure", async () => {
   for (const status of ["administrator", "creator"] as const) {
     const mock = createContext(2, "supergroup", status);
 
@@ -64,7 +65,7 @@ Deno.test("Telegram group administrators and owners can configure", async () => 
   }
 });
 
-Deno.test("ordinary members and non-admin private users cannot configure", async () => {
+test("ordinary members and non-admin private users cannot configure", async () => {
   const member = createContext(2, "group", "member");
   const privateUser = createContext(2, "private", "administrator");
 
@@ -74,7 +75,7 @@ Deno.test("ordinary members and non-admin private users cannot configure", async
   strictEqual(privateUser.getChatMemberCalls(), 0);
 });
 
-Deno.test("configure menu only shows owner-only commands to the bot admin", () => {
+test("configure menu only shows owner-only commands to the bot admin", () => {
   const translate = ((key: string) =>
     key === "settings-configure-menu-admin"
       ? "Models /model\nDebug /debug"

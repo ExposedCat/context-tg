@@ -1,10 +1,10 @@
+import { test } from "bun:test";
 import { deepStrictEqual, rejects, strictEqual } from "node:assert";
-import { Database as SqliteDatabase } from "@db/sqlite";
-import { Kysely } from "@kysely/kysely";
-import { DenoSqlite3Dialect } from "@marshift/kysely-deno-sqlite3";
-import type { TranslateFunction } from "grammy-i18n";
+import type { TranslateFunction } from "@grammyjs/i18n";
+import { Kysely } from "kysely";
 import type { Context } from "../bot.ts";
 import type { DatabaseSchema } from "./database.ts";
+import { createSqliteDialect, openSqlite } from "./sqlite.ts";
 import { TOKENS_PER_CREDIT } from "./text-tokens.ts";
 import {
   consumeUsage,
@@ -18,13 +18,11 @@ import {
   parseGuestUsageCommand,
 } from "./usage.ts";
 
-Deno.env.set("ADMIN_ID", "1");
+Bun.env.ADMIN_ID = "1";
 
 async function database() {
   const db = new Kysely<DatabaseSchema>({
-    dialect: new DenoSqlite3Dialect({
-      database: new SqliteDatabase(":memory:"),
-    }),
+    dialect: createSqliteDialect(openSqlite(":memory:")),
   });
   await migrateUsage(db);
   return db;
@@ -39,7 +37,7 @@ function textCharge(db: Awaited<ReturnType<typeof database>>, chatId = -1) {
   } as unknown as Context);
 }
 
-Deno.test("text credits accumulate exact fractions, release unused allowance, and block parallel overspending", async () => {
+test("text credits accumulate exact fractions, release unused allowance, and block parallel overspending", async () => {
   const db = await database();
   try {
     await handleUsageCommand(db, -1, "-49", true, t);
@@ -69,7 +67,7 @@ Deno.test("text credits accumulate exact fractions, release unused allowance, an
   }
 });
 
-Deno.test("text reservations expire after a crashed attempt and unlimited credits still record text usage", async () => {
+test("text reservations expire after a crashed attempt and unlimited credits still record text usage", async () => {
   const db = await database();
   try {
     await handleUsageCommand(db, -1, "-49", true, t);
@@ -90,7 +88,7 @@ Deno.test("text reservations expire after a crashed attempt and unlimited credit
   }
 });
 
-Deno.test("default (uncapped) reservations work for unlimited and finite chats with real chat ids", async () => {
+test("default (uncapped) reservations work for unlimited and finite chats with real chat ids", async () => {
   const db = await database();
   const chatId = -1001756869879;
   try {
@@ -117,11 +115,9 @@ Deno.test("default (uncapped) reservations work for unlimited and finite chats w
   }
 });
 
-Deno.test("usage migration preserves existing credit charges and initializes text accounting once", async () => {
+test("usage migration preserves existing credit charges and initializes text accounting once", async () => {
   const db = new Kysely<DatabaseSchema>({
-    dialect: new DenoSqlite3Dialect({
-      database: new SqliteDatabase(":memory:"),
-    }),
+    dialect: createSqliteDialect(openSqlite(":memory:")),
   });
   try {
     await db.schema
@@ -146,7 +142,7 @@ Deno.test("usage migration preserves existing credit charges and initializes tex
   }
 });
 
-Deno.test("guest usage commands are parsed after the bot mention", () => {
+test("guest usage commands are parsed after the bot mention", () => {
   strictEqual(parseGuestUsageCommand("@LayloBot /usage", "LayloBot"), "");
   strictEqual(
     parseGuestUsageCommand("  @laylobot   /usage +42  ", "LayloBot"),
@@ -158,7 +154,7 @@ Deno.test("guest usage commands are parsed after the bot mention", () => {
   );
 });
 
-Deno.test("guest usage commands must target the current bot exactly", () => {
+test("guest usage commands must target the current bot exactly", () => {
   strictEqual(parseGuestUsageCommand("/usage +42", "LayloBot"), undefined);
   strictEqual(
     parseGuestUsageCommand("@OtherBot /usage +42", "LayloBot"),
@@ -170,7 +166,7 @@ Deno.test("guest usage commands must target the current bot exactly", () => {
   );
 });
 
-Deno.test("credits have isolated daily group/user balances and atomic debits", async () => {
+test("credits have isolated daily group/user balances and atomic debits", async () => {
   const db = await database();
   try {
     deepStrictEqual(await getUsageStatus(db, -1), {
@@ -201,7 +197,7 @@ Deno.test("credits have isolated daily group/user balances and atomic debits", a
   }
 });
 
-Deno.test("admin credit adjustments preserve spend and finite limits across unlimited toggles", async () => {
+test("admin credit adjustments preserve spend and finite limits across unlimited toggles", async () => {
   const db = await database();
   try {
     await consumeUsage(db, -1, 10);
@@ -240,7 +236,7 @@ Deno.test("admin credit adjustments preserve spend and finite limits across unli
   }
 });
 
-Deno.test("guest requests spend group credits and obey the group's usage adjustments", async () => {
+test("guest requests spend group credits and obey the group's usage adjustments", async () => {
   const db = await database();
   const events: Array<{ name: string; payload: Record<string, unknown> }> = [];
   const ctx = {
@@ -281,7 +277,7 @@ Deno.test("guest requests spend group credits and obey the group's usage adjustm
   }
 });
 
-Deno.test("each request costs one fixed credit plus one credit per 620 generated text tokens", async () => {
+test("each request costs one fixed credit plus one credit per 620 generated text tokens", async () => {
   const db = await database();
   try {
     strictEqual(TOKENS_PER_CREDIT, 620);
@@ -311,7 +307,7 @@ Deno.test("each request costs one fixed credit plus one credit per 620 generated
   }
 });
 
-Deno.test("ADMIN_ID has unlimited credits in every chat and guest mode without granting other users an exemption", async () => {
+test("ADMIN_ID has unlimited credits in every chat and guest mode without granting other users an exemption", async () => {
   const db = await database();
   try {
     for (const chatId of [10, -10]) {

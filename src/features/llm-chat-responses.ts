@@ -1,5 +1,5 @@
-import type { ColumnType, Selectable } from "@kysely/kysely";
-import type OpenAI from "@openai/openai";
+import type { ColumnType, Selectable } from "kysely";
+import type OpenAI from "openai";
 import type { Database } from "./database.ts";
 import type { ConversationMemory } from "./llm-memory.ts";
 

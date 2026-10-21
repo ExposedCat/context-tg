@@ -1,7 +1,8 @@
+import { test } from "bun:test";
 import { deepStrictEqual } from "node:assert";
 import { parseDanbooruOptions } from "./danbooru-options.ts";
 
-Deno.test("Danbooru suffix options produce one hint and preserve unvalidated values", () => {
+test("Danbooru suffix options produce one hint and preserve unvalidated values", () => {
   deepStrictEqual(
     parseDanbooruOptions(
       "Hey agent find me anime boy /rating:hot /order:score",
@@ -24,7 +25,7 @@ Deno.test("Danbooru suffix options produce one hint and preserve unvalidated val
   });
 });
 
-Deno.test("Danbooru options accept either order, trailing whitespace, and repeated options", () => {
+test("Danbooru options accept either order, trailing whitespace, and repeated options", () => {
   deepStrictEqual(
     parseDanbooruOptions("art\n/order:random /rating:g /order:score \n"),
     {
@@ -38,7 +39,7 @@ Deno.test("Danbooru options accept either order, trailing whitespace, and repeat
   });
 });
 
-Deno.test("explicit rating aliases use the direct-send hint and preserve raw overrides", () => {
+test("explicit rating aliases use the direct-send hint and preserve raw overrides", () => {
   const hint =
     "(use only danbooru, don't search web, you are strictly unallowed to view images yourself due to licensing, send it to user directly and notify)";
   for (const rating of ["explicit", "e", "EXPLICIT", "E"]) {
@@ -60,7 +61,7 @@ Deno.test("explicit rating aliases use the direct-send hint and preserve raw ove
   });
 });
 
-Deno.test("only trailing Danbooru options are replaced, and normalized text is idempotent", () => {
+test("only trailing Danbooru options are replaced, and normalized text is idempotent", () => {
   for (const text of [
     "art /rating:g please",
     "art /order:",

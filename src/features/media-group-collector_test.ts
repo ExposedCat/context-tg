@@ -1,10 +1,11 @@
+import { test } from "bun:test";
 import { deepStrictEqual, strictEqual } from "node:assert";
 import { MediaGroupCollector } from "./media-group-collector.ts";
 
 const delay = (milliseconds: number) =>
   new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
 
-Deno.test("media groups flush after one idle window and are sorted", async () => {
+test("media groups flush after one idle window and are sorted", async () => {
   const collector = new MediaGroupCollector<{ message_id: number }>({
     idleMs: 25,
     maxAgeMs: 500,
@@ -21,7 +22,7 @@ Deno.test("media groups flush after one idle window and are sorted", async () =>
   strictEqual(collector.pendingGroupCount, 0);
 });
 
-Deno.test("media groups cannot remain in memory past their maximum age", async () => {
+test("media groups cannot remain in memory past their maximum age", async () => {
   const collector = new MediaGroupCollector<{ message_id: number }>({
     idleMs: 1_000,
     maxAgeMs: 25,
@@ -35,7 +36,7 @@ Deno.test("media groups cannot remain in memory past their maximum age", async (
   strictEqual(collector.pendingGroupCount, 0);
 });
 
-Deno.test("media group count is bounded by flushing the oldest group", async () => {
+test("media group count is bounded by flushing the oldest group", async () => {
   const collector = new MediaGroupCollector<{ message_id: number }>({
     idleMs: 1_000,
     maxAgeMs: 2_000,

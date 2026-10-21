@@ -1,4 +1,4 @@
-import type OpenAI from "@openai/openai";
+import type OpenAI from "openai";
 import { countTextTokens, truncateTextTokens } from "./text-tokens.ts";
 
 type Response = OpenAI.Responses.Response;

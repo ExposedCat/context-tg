@@ -1,3 +1,4 @@
+import { test } from "bun:test";
 import { deepStrictEqual, rejects, strictEqual } from "node:assert";
 
 for (const [key, value] of Object.entries({
@@ -16,11 +17,11 @@ for (const [key, value] of Object.entries({
   DANBOORU_TOKEN: "",
   DANBOORU_API_KEY: "test-key",
 }))
-  Deno.env.set(key, value);
+  Bun.env[key] = value;
 
 const { execute, executeTags } = await import("./danbooru.ts");
 
-Deno.test("Danbooru post search applies request overrides over arguments and embedded metatags", async () => {
+test("Danbooru post search applies request overrides over arguments and embedded metatags", async () => {
   const originalFetch = globalThis.fetch;
   const queries: string[] = [];
   globalThis.fetch = (async (input, init) => {
@@ -100,7 +101,7 @@ Deno.test("Danbooru post search applies request overrides over arguments and emb
   }
 });
 
-Deno.test("Danbooru tag lookup sends wildcard search and bounds result counts", async () => {
+test("Danbooru tag lookup sends wildcard search and bounds result counts", async () => {
   const originalFetch = globalThis.fetch;
   globalThis.fetch = (async (input, init) => {
     const url = new URL(new Request(input, init).url);
@@ -124,25 +125,27 @@ Deno.test("Danbooru tag lookup sends wildcard search and bounds result counts", 
   }
 });
 
-Deno.test("Danbooru failures and cancellation propagate through the tool error path", async () => {
+test("Danbooru failures and cancellation propagate through the tool error path", async () => {
   const originalFetch = globalThis.fetch;
   try {
     globalThis.fetch = (async () =>
-      new Response("Too many tags", { status: 422 })) as typeof fetch;
+      new Response("Too many tags", {
+        status: 422,
+      })) as unknown as typeof fetch;
     await rejects(
       () => Promise.resolve(execute({ tags: "pigeon" })),
       /HTTP 422: Too many tags/,
     );
     globalThis.fetch = (async () =>
-      Response.json({ success: false })) as typeof fetch;
+      Response.json({ success: false })) as unknown as typeof fetch;
     await rejects(
       () => Promise.resolve(execute({ tags: "pigeon" })),
       /unexpected response/,
     );
-    globalThis.fetch = (async (_input, init) => {
+    globalThis.fetch = (async (_input: unknown, init?: RequestInit) => {
       init?.signal?.throwIfAborted();
       throw new Error("Expected an aborted request");
-    }) as typeof fetch;
+    }) as unknown as typeof fetch;
     await rejects(
       () =>
         Promise.resolve(
@@ -157,7 +160,7 @@ Deno.test("Danbooru failures and cancellation propagate through the tool error p
   }
 });
 
-Deno.test("Danbooru term-limit errors tell the agent to simplify without dropping overrides", async () => {
+test("Danbooru term-limit errors tell the agent to simplify without dropping overrides", async () => {
   const originalFetch = globalThis.fetch;
   let limit = 2;
   globalThis.fetch = (async (input, init) => {
@@ -215,7 +218,7 @@ Deno.test("Danbooru term-limit errors tell the agent to simplify without droppin
   }
 });
 
-Deno.test("Danbooru accepts long queries when the API permits them", async () => {
+test("Danbooru accepts long queries when the API permits them", async () => {
   const originalFetch = globalThis.fetch;
   globalThis.fetch = (async (input, init) => {
     const url = new URL(new Request(input, init).url);
@@ -241,7 +244,7 @@ Deno.test("Danbooru accepts long queries when the API permits them", async () =>
   }
 });
 
-Deno.test("Danbooru defaults missing ordering to score and preserves provided sorting", async () => {
+test("Danbooru defaults missing ordering to score and preserves provided sorting", async () => {
   const originalFetch = globalThis.fetch;
   const queries: string[] = [];
   globalThis.fetch = (async (input, init) => {
@@ -277,7 +280,7 @@ Deno.test("Danbooru defaults missing ordering to score and preserves provided so
   }
 });
 
-Deno.test("explicit Danbooru results instruct direct sending without inspection", async () => {
+test("explicit Danbooru results instruct direct sending without inspection", async () => {
   const originalFetch = globalThis.fetch;
   let postRating = "g";
   const queries: string[] = [];
@@ -344,7 +347,7 @@ Deno.test("explicit Danbooru results instruct direct sending without inspection"
   }
 });
 
-Deno.test("Danbooru startup auth supports token precedence, legacy keys, anonymous search and missing usernames", async () => {
+test("Danbooru startup auth supports token precedence, legacy keys, anonymous search and missing usernames", async () => {
   const moduleUrl = new URL("../danbooru.ts", import.meta.url).href;
   const script = `
     const { searchDanbooruPosts } = await import(${JSON.stringify(moduleUrl)});
@@ -387,20 +390,23 @@ Deno.test("Danbooru startup auth supports token precedence, legacy keys, anonymo
       },
     },
   ]) {
-    const result = await new Deno.Command(Deno.execPath(), {
-      args: ["eval", script],
+    const child = Bun.spawn({
+      cmd: [process.execPath, "--no-env-file", "-e", script],
       env: {
+        ...Bun.env,
         DANBOORU_USERNAME: fixture.username,
         DANBOORU_TOKEN: fixture.token,
         DANBOORU_API_KEY: fixture.key,
       },
-      stdout: "piped",
-      stderr: "piped",
-    }).output();
-    strictEqual(result.code, 0, new TextDecoder().decode(result.stderr));
-    deepStrictEqual(
-      JSON.parse(new TextDecoder().decode(result.stdout)),
-      fixture.expected,
-    );
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [code, stdout, stderr] = await Promise.all([
+      child.exited,
+      new Response(child.stdout).text(),
+      new Response(child.stderr).text(),
+    ]);
+    strictEqual(code, 0, stderr);
+    deepStrictEqual(JSON.parse(stdout), fixture.expected);
   }
 });

@@ -1,3 +1,4 @@
+import { test } from "bun:test";
 import { strictEqual } from "node:assert";
 import { Api, Context } from "grammy";
 import { createPrivateTopicMiddleware } from "./private-topics.ts";
@@ -42,7 +43,7 @@ function context(msg: Message): Context {
   );
 }
 
-Deno.test("implicit DM topic events route the first text and album before downstream async work", async () => {
+test("implicit DM topic events route the first text and album before downstream async work", async () => {
   for (const mediaGroupId of [undefined, "album"]) {
     const middleware = createPrivateTopicMiddleware();
     let finish = () => {};
@@ -71,7 +72,7 @@ Deno.test("implicit DM topic events route the first text and album before downst
   }
 });
 
-Deno.test("DM topic recovery leaves unrelated messages, explicit topics and non-DM chats alone", async () => {
+test("DM topic recovery leaves unrelated messages, explicit topics and non-DM chats alone", async () => {
   const group = { id: -100, type: "supergroup", title: "Forum" } as const;
   const cases = [
     {
@@ -133,7 +134,7 @@ Deno.test("DM topic recovery leaves unrelated messages, explicit topics and non-
   }
 });
 
-Deno.test("DM topic root service IDs may differ from topic IDs without becoming explicit reply parents", () => {
+test("DM topic root service IDs may differ from topic IDs without becoming explicit reply parents", () => {
   const root = topic();
   const dm = message(466, { message_thread_id: 2192415 });
   strictEqual(isImplicitTopicReply(dm, root), true);

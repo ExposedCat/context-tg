@@ -1,7 +1,8 @@
+import { test } from "bun:test";
 import { deepStrictEqual } from "node:assert";
 import { createLlmCallTiming } from "./telemetry.ts";
 
-Deno.test("call timing includes tool waits and final generation, with per-call progress statistics", () => {
+test("call timing includes tool waits and final generation, with per-call progress statistics", () => {
   let now = 100;
   const timing = createLlmCallTiming(() => now);
   now += 2000;
@@ -22,7 +23,7 @@ Deno.test("call timing includes tool waits and final generation, with per-call p
   });
 });
 
-Deno.test("no-progress calls have no interval samples; even-sized medians average both middle values", () => {
+test("no-progress calls have no interval samples; even-sized medians average both middle values", () => {
   let now = 0;
   const timing = createLlmCallTiming(() => now);
   now = 500;

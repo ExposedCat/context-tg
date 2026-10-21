@@ -1,3 +1,4 @@
+import { test } from "bun:test";
 import { deepStrictEqual, ok, rejects, strictEqual } from "node:assert";
 
 for (const [key, value] of Object.entries({
@@ -14,7 +15,7 @@ for (const [key, value] of Object.entries({
   EMBEDDING_MODEL: "test",
   QDRANT_URL: "https://qdrant.test",
 }))
-  Deno.env.set(key, value);
+  Bun.env[key] = value;
 
 const { requestLlm, LlmRequestError } = await import("./llm.ts");
 const { setLlmDeploymentName } = await import("./llm-deployments.ts");
@@ -41,7 +42,7 @@ function wallet(database: Database, chatId = -1) {
   } as unknown as Context);
 }
 
-Deno.test("wallet exhaustion aborts after ten funded text tokens and preserves the partial answer", async () => {
+test("wallet exhaustion aborts after ten funded text tokens and preserves the partial answer", async () => {
   setLlmDeploymentName("small", "stream-test");
   const database = await initDatabase()();
   const originalFetch = globalThis.fetch;
@@ -152,7 +153,7 @@ Deno.test("wallet exhaustion aborts after ten funded text tokens and preserves t
   }
 });
 
-Deno.test("text credits count progress and final text, excluding input, reasoning and tool arguments", async () => {
+test("text credits count progress and final text, excluding input, reasoning and tool arguments", async () => {
   setLlmDeploymentName("small", "stream-test");
   const database = await initDatabase()();
   const originalFetch = globalThis.fetch;
@@ -198,7 +199,7 @@ Deno.test("text credits count progress and final text, excluding input, reasonin
         },
       },
     ]);
-  }) as typeof fetch;
+  }) as unknown as typeof fetch;
   try {
     const { createCreditCharge } = await import("./usage.ts");
     const ctx = {
@@ -232,7 +233,7 @@ Deno.test("text credits count progress and final text, excluding input, reasonin
   }
 });
 
-Deno.test("canceling streamed text charges only received text and refunds unused reservation", async () => {
+test("canceling streamed text charges only received text and refunds unused reservation", async () => {
   setLlmDeploymentName("small", "stream-test");
   const database = await initDatabase()();
   const originalFetch = globalThis.fetch;
@@ -247,7 +248,7 @@ Deno.test("canceling streamed text charges only received text and refunds unused
         cancel() {},
       }),
       { headers: { "content-type": "text/event-stream" } },
-    )) as typeof fetch;
+    )) as unknown as typeof fetch;
   try {
     await rejects(
       () =>
@@ -334,7 +335,7 @@ function sse(events: object[]) {
   );
 }
 
-Deno.test("streamed text deltas arrive before completion and the final response supplies usage", async () => {
+test("streamed text deltas arrive before completion and the final response supplies usage", async () => {
   setLlmDeploymentName("small", "stream-test");
   const originalFetch = globalThis.fetch;
   const events: string[] = [];
@@ -373,7 +374,7 @@ Deno.test("streamed text deltas arrive before completion and the final response 
   }
 });
 
-Deno.test("streamed tool arguments execute only after a terminal response and follow-up also streams", async () => {
+test("streamed tool arguments execute only after a terminal response and follow-up also streams", async () => {
   setLlmDeploymentName("small", "stream-test");
   const originalFetch = globalThis.fetch;
   let requests = 0;
@@ -441,7 +442,7 @@ Deno.test("streamed tool arguments execute only after a terminal response and fo
   }
 });
 
-Deno.test("canceling an already-started task closes an idle stream without retries or tools", async () => {
+test("canceling an already-started task closes an idle stream without retries or tools", async () => {
   setLlmDeploymentName("small", "stream-test");
   const database = await initDatabase()();
   const originalFetch = globalThis.fetch;
@@ -515,7 +516,7 @@ Deno.test("canceling an already-started task closes an idle stream without retri
   }
 });
 
-Deno.test("a dropped stream after partial tool arguments is never retried or executed", async () => {
+test("a dropped stream after partial tool arguments is never retried or executed", async () => {
   setLlmDeploymentName("small", "stream-test");
   const originalFetch = globalThis.fetch;
   let requests = 0;
@@ -530,7 +531,7 @@ Deno.test("a dropped stream after partial tool arguments is never retried or exe
         output_index: 0,
       },
     ]);
-  }) as typeof fetch;
+  }) as unknown as typeof fetch;
   try {
     await rejects(
       () =>
@@ -556,7 +557,7 @@ Deno.test("a dropped stream after partial tool arguments is never retried or exe
   }
 });
 
-Deno.test("a streamed provider output limit preserves partial text without retrying", async () => {
+test("a streamed provider output limit preserves partial text without retrying", async () => {
   setLlmDeploymentName("small", "stream-test");
   const originalFetch = globalThis.fetch;
   let requests = 0;
@@ -574,7 +575,7 @@ Deno.test("a streamed provider output limit preserves partial text without retry
         },
       },
     ]);
-  }) as typeof fetch;
+  }) as unknown as typeof fetch;
   try {
     const answer = await requestLlm("Work", [], undefined, {}, "Be brief.");
     ok(answer.response?.includes("Hello"));
@@ -585,7 +586,7 @@ Deno.test("a streamed provider output limit preserves partial text without retry
   }
 });
 
-Deno.test("an admin stream can exceed 64000 text tokens without an application generation cap", async () => {
+test("an admin stream can exceed 64000 text tokens without an application generation cap", async () => {
   setLlmDeploymentName("small", "stream-test");
   const database = await initDatabase()();
   const originalFetch = globalThis.fetch;

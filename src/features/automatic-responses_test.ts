@@ -1,6 +1,8 @@
+import { test } from "bun:test";
 import { deepStrictEqual, ok, strictEqual } from "node:assert";
 import { Api, Context as GrammyContext } from "grammy";
 import type { Context } from "../bot.ts";
+import { step } from "../utils/test-step.ts";
 
 for (const [key, value] of Object.entries({
   BOT_TOKEN: "test",
@@ -16,7 +18,7 @@ for (const [key, value] of Object.entries({
   EMBEDDING_MODEL: "test-embedding",
   QDRANT_URL: "https://qdrant.test",
 })) {
-  Deno.env.set(key, value);
+  Bun.env[key] = value;
 }
 
 const { safelyMaybeSendAutomaticResponse } = await import(
@@ -35,7 +37,7 @@ const { consumeUsage, getUsageStatus, createTextCreditCharge } = await import(
   "./usage.ts"
 );
 
-Deno.test("automatic responses choose one before generation and advance both counters", async (t) => {
+test("automatic responses choose one before generation and advance both counters", async () => {
   const database = await initDatabase()();
   const originalFetch = globalThis.fetch;
   const originalRandom = Math.random;
@@ -205,7 +207,7 @@ Deno.test("automatic responses choose one before generation and advance both cou
         sent: [],
       },
     ]) {
-      await t.step(test.name, async () => {
+      await step(test.name, async () => {
         await setTrollingInterval(database, chat.id, 2);
         await setProactiveResponseInterval(database, chat.id, 2);
         if (test.trollDisabled)
@@ -258,7 +260,7 @@ Deno.test("automatic responses choose one before generation and advance both cou
         deepStrictEqual([troll.message_count, proactive.message_count], [2, 2]);
       });
     }
-    await t.step(
+    await step(
       "exhausted credits skip both counters and generation",
       async () => {
         const usage = await getUsageStatus(database, chat.id);

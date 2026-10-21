@@ -1,10 +1,5 @@
 import { createDebug } from "@grammyjs/debug";
-import {
-  type ColumnType,
-  type Insertable,
-  type Selectable,
-  sql,
-} from "@kysely/kysely";
+import { type ColumnType, type Insertable, type Selectable, sql } from "kysely";
 import type { Context } from "../bot.ts";
 import { padDatePart } from "../utils/date.ts";
 import { normalizeRichMarkdown } from "../utils/markdown.ts";
@@ -106,7 +101,8 @@ export type CronMessage = Selectable<CronMessagesTable>;
 type CreateScheduledMessage = Insertable<ScheduledMessagesTable>;
 type CreateCronMessage = Insertable<CronMessagesTable>;
 type TelegramApi = Context["api"];
-type CronSchedule = Deno.CronSchedule;
+// Standard 5-field cron expression: minute hour day-of-month month day-of-week.
+type CronSchedule = string;
 
 type CreateScheduledMessageInput = {
   chatId: number;
@@ -138,8 +134,8 @@ const SCHEDULE_EMOJI_ID = "5967412305338568701";
 const SCHEDULE_EMOJI_FALLBACK = "\u23f0";
 const LOCAL_DATE_TIME_PATTERN =
   /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})(?::(\d{2})(?:\.\d{1,3})?)?$/;
-const scheduledMessageControllers = new Map<string, AbortController>();
-const cronMessageControllers = new Map<string, AbortController>();
+const scheduledMessageControllers = new Map<string, Bun.CronJob>();
+const cronMessageControllers = new Map<string, Bun.CronJob>();
 
 const scheduledMessageSelect = [
   "id",
@@ -382,12 +378,7 @@ function parseScheduledAt(value: string): Date {
 }
 
 function createOneTimeCronSchedule(date: Date): CronSchedule {
-  return {
-    minute: date.getUTCMinutes(),
-    hour: date.getUTCHours(),
-    dayOfMonth: date.getUTCDate(),
-    month: date.getUTCMonth() + 1,
-  };
+  return `${date.getUTCMinutes()} ${date.getUTCHours()} ${date.getUTCDate()} ${date.getUTCMonth() + 1} *`;
 }
 
 function createCronSchedule(
@@ -395,21 +386,17 @@ function createCronSchedule(
   intervalValue: number,
 ): CronSchedule {
   switch (intervalUnit) {
+    // Same expressions Deno.cron derived from its `{ every: n }` objects.
     case "minute":
-      return { minute: { every: intervalValue } };
+      return `*/${intervalValue} * * * *`;
     case "hour":
-      return { minute: 0, hour: { every: intervalValue } };
+      return `0 */${intervalValue} * * *`;
     case "dayOfWeek":
-      return { minute: 0, hour: 0, dayOfWeek: { every: intervalValue } };
+      return `0 0 * * */${intervalValue}`;
     case "dayOfMonth":
-      return { minute: 0, hour: 0, dayOfMonth: { every: intervalValue } };
+      return `0 0 */${intervalValue} * *`;
     case "month":
-      return {
-        minute: 0,
-        hour: 0,
-        dayOfMonth: 1,
-        month: { every: intervalValue },
-      };
+      return `0 0 1 */${intervalValue} *`;
   }
 }
 
@@ -518,39 +505,39 @@ function getCronName(prefix: string, id: string): string {
   return `${prefix}_${id.replaceAll(/[^a-zA-Z0-9_-]/g, "_")}`;
 }
 
-function startDenoCron(
+function startCron(
   name: string,
   schedule: CronSchedule,
   handler: () => Promise<void>,
-): AbortController | undefined {
-  const controller = new AbortController();
-
+): Bun.CronJob | undefined {
   try {
-    void Deno.cron(
-      name,
+    // Deno.cron always ran in UTC; keep that so stored schedules do not shift
+    // with the container's TZ. An escaping rejection would exit the process,
+    // so failures are logged here instead.
+    return Bun.cron(
       schedule,
-      { signal: controller.signal },
-      handler,
-    ).catch((error) => {
-      if (!controller.signal.aborted) {
-        logError("Cron job failed", { name, error });
-      }
-    });
+      async () => {
+        try {
+          await handler();
+        } catch (error) {
+          logError("Cron job failed", { name, error });
+        }
+      },
+      { tz: "UTC" },
+    );
   } catch (error) {
     logError("Failed to register cron job", { name, schedule, error });
     return undefined;
   }
-
-  return controller;
 }
 
 function stopScheduledMessageCron(id: string): void {
-  scheduledMessageControllers.get(id)?.abort();
+  scheduledMessageControllers.get(id)?.stop();
   scheduledMessageControllers.delete(id);
 }
 
 function stopCronMessageCron(id: string): void {
-  cronMessageControllers.get(id)?.abort();
+  cronMessageControllers.get(id)?.stop();
   cronMessageControllers.delete(id);
 }
 
@@ -696,10 +683,15 @@ function registerScheduledMessage(
     return;
   }
 
-  const controller = startDenoCron(
+  const controller = startCron(
     getCronName("schedule_message", row.id),
     createOneTimeCronSchedule(scheduledAt),
-    () => sendScheduledMessage(database, api, row.id),
+    // Cron has no year field: a date more than a year out also matches every
+    // earlier anniversary. Only send once the actual date has arrived.
+    async () => {
+      if (scheduledAt.getTime() - Date.now() > 60_000) return;
+      await sendScheduledMessage(database, api, row.id);
+    },
   );
 
   if (controller) {
@@ -714,7 +706,7 @@ function registerCronMessage(
 ): void {
   stopCronMessageCron(row.id);
 
-  const controller = startDenoCron(
+  const controller = startCron(
     getCronName("cron_message", row.id),
     createCronSchedule(row.interval_unit, row.interval_value),
     () => sendCronMessage(database, api, row.id),

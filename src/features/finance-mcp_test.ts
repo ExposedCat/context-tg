@@ -1,3 +1,4 @@
+import { test } from "bun:test";
 import { deepStrictEqual, ok, rejects, strictEqual } from "node:assert";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
@@ -20,14 +21,15 @@ for (const [key, value] of Object.entries({
   EMBEDDING_MODEL: "test",
   QDRANT_URL: "https://qdrant.test",
 }))
-  Deno.env.set(key, value);
+  Bun.env[key] = value;
 
-Deno.test("Finance MCP opt-in discovers reports, binds user identity and persists tools through the model loop", async () => {
+test("Finance MCP opt-in discovers reports, binds user identity and persists tools through the model loop", async () => {
   let httpRequests = 0;
   const toolCalls: unknown[] = [];
-  const http = Deno.serve(
-    { hostname: "127.0.0.1", port: 0, onListen() {} },
-    async (request) => {
+  const http = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    async fetch(request) {
       httpRequests++;
       const server = new Server(
         { name: "Eyri test", version: "1.0.0" },
@@ -80,8 +82,8 @@ Deno.test("Finance MCP opt-in discovers reports, binds user identity and persist
         await server.close();
       }
     },
-  );
-  Deno.env.set("FINANCE_MCP_URL", `http://127.0.0.1:${http.addr.port}/mcp`);
+  });
+  Bun.env.FINANCE_MCP_URL = `http://127.0.0.1:${http.port}/mcp`;
   const { initDatabase } = await import("./database.ts");
   const { requestLlm } = await import("./llm.ts");
   const { setLlmDeploymentName } = await import("./llm-deployments.ts");
@@ -245,6 +247,6 @@ Deno.test("Finance MCP opt-in discovers reports, binds user identity and persist
     globalThis.fetch = originalFetch;
     setLlmDeploymentName("small", "");
     await database.destroy();
-    await http.shutdown();
+    await http.stop(true);
   }
 });

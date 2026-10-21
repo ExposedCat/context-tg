@@ -1,6 +1,6 @@
 import { createDebug } from "@grammyjs/debug";
-import { type Insertable, type Selectable, sql } from "@kysely/kysely";
 import { Composer, type Transformer } from "grammy";
+import { type Insertable, type Selectable, sql } from "kysely";
 import type { Context } from "../bot.ts";
 import { escapeHtml, escapeHtmlAttribute } from "../utils/text.ts";
 import { canConfigureChat, isBotAdmin } from "./authorization.ts";

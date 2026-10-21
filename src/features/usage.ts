@@ -1,5 +1,5 @@
-import { type Generated, sql } from "@kysely/kysely";
-import type { TranslateFunction } from "grammy-i18n";
+import type { TranslateFunction } from "@grammyjs/i18n";
+import { type Generated, sql } from "kysely";
 import type { Context } from "../bot.ts";
 import { isBotAdmin, isBotAdminId } from "./authorization.ts";
 import type { Database } from "./database.ts";
