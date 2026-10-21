@@ -20,6 +20,7 @@ import {
   messagesComposer,
   setIndexedTextMessageHandler,
 } from "./features/messages.ts";
+import { createPrivateTopicMiddleware } from "./features/private-topics.ts";
 import { startScheduleDispatcher } from "./features/schedules.ts";
 import { stateComposer } from "./features/state.ts";
 import type { BotTelemetryEvents } from "./features/telemetry.ts";
@@ -117,6 +118,7 @@ export function initBot(token: string, database: Database) {
       limit: USER_RATE_LIMIT_MAX_UPDATES,
     }),
   );
+  bot.use(createPrivateTopicMiddleware());
   bot.use(telemetryMiddleware);
   bot.use((ctx, next) => {
     ctx.database = database;

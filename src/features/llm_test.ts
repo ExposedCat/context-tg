@@ -51,7 +51,12 @@ const TEST_ENV = {
   MEDIA_CACHE_CHAT_ID: "-10042",
   LLM_BASE_URL: "https://llm.test/v1",
   LLM_API_KEY: "test",
+  LLM_STREAMING: "false",
   LLM_COMPACT_THRESHOLD: "100000",
+  LLM_MAX_INPUT_TOKENS: "48000",
+  LLM_MAX_OUTPUT_TOKENS: "8192",
+  LLM_REQUEST_TOKEN_BUDGET: "64000",
+  LLM_MAX_TOOL_CALLS: "12",
   KEENABLE_API_KEY: "test",
   LLM_TEMPERATURE: "0.2",
   EMBEDDER_BASE_URL: "https://embedder.test/v1",
@@ -68,10 +73,12 @@ const [
   { LlmRequestError, requestLlm, requestThreadName },
   { setLlmDeploymentName },
   { initDatabase },
+  { LlmTokenBudget, estimateInputTokens },
 ] = await Promise.all([
   import("./llm.ts"),
   import("./llm-deployments.ts"),
   import("./database.ts"),
+  import("./llm-budget.ts"),
 ]);
 
 type ResponseOutput =
@@ -126,6 +133,262 @@ function createApiResponse(id: string, output: ResponseOutput[]) {
     },
   };
 }
+
+function budgetTestAnswer(id: string) {
+  return createApiResponse(id, [
+    {
+      id: `msg_${id}`,
+      type: "message",
+      role: "assistant",
+      status: "completed",
+      content: [{ type: "output_text", text: "Done.", annotations: [] }],
+    },
+  ]);
+}
+
+Deno.test("oversized prompts are rejected before any model HTTP request", async () => {
+  setLlmDeploymentName("small", "budget-test");
+  const originalFetch = globalThis.fetch;
+  let requests = 0;
+  globalThis.fetch = (() => {
+    requests++;
+    throw new Error("Oversized input must not reach the model");
+  }) as typeof fetch;
+  try {
+    await assertRejects(
+      () => requestLlm("x".repeat(100_000), [], undefined, {}, "Be brief."),
+      (error) =>
+        error instanceof LlmRequestError &&
+        error.kind === "token_limit" &&
+        error.details.includes("too large"),
+    );
+    strictEqual(requests, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+Deno.test("reported input and reasoning-inclusive output share a budget across continuations", async () => {
+  setLlmDeploymentName("small", "budget-test");
+  const budget = new LlmTokenBudget({
+    total: 3000,
+    input: 4000,
+    output: 2000,
+    tools: 2,
+  });
+  const originalFetch = globalThis.fetch;
+  const caps: number[] = [];
+  globalThis.fetch = (async (_url, init) => {
+    const { max_output_tokens, ...params } = JSON.parse(String(init?.body));
+    caps.push(max_output_tokens);
+    const response = budgetTestAnswer(`resp_budget_${caps.length}`);
+    response.usage.input_tokens = estimateInputTokens(params);
+    response.usage.output_tokens =
+      caps.length === 1 ? 1500 : Math.min(500, max_output_tokens);
+    response.usage.total_tokens =
+      response.usage.input_tokens + response.usage.output_tokens;
+    return Response.json(response);
+  }) as typeof fetch;
+  try {
+    const first = await requestLlm(
+      "Start",
+      [],
+      undefined,
+      { tokenBudget: budget },
+      "Be brief.",
+    );
+    const second = await requestLlm(
+      "Continue",
+      [],
+      first.response_id,
+      { tokenBudget: budget },
+      "Be brief.",
+    );
+    strictEqual(caps[0], 2000);
+    ok(caps[1] >= 256 && caps[1] < 2000);
+    strictEqual(second.response, "Done.");
+    await assertRejects(
+      () =>
+        requestLlm(
+          "Continue again",
+          [],
+          second.response_id,
+          { tokenBudget: budget },
+          "Be brief.",
+        ),
+      (error) =>
+        error instanceof LlmRequestError && error.kind === "token_limit",
+    );
+    strictEqual(caps.length, 2);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+Deno.test("unknown failed attempts retain reservations and parallel reservations cannot overspend", () => {
+  const budget = new LlmTokenBudget({
+    total: 3000,
+    input: 2000,
+    output: 1000,
+    tools: 2,
+  });
+  const attempt = budget.reserve("x".repeat(1200));
+  let rejected = false;
+  try {
+    budget.reserve("x".repeat(1200));
+  } catch {
+    rejected = true;
+  }
+  strictEqual(rejected, true);
+  attempt.settle();
+  attempt.settle({ input_tokens: 0, output_tokens: 0 });
+  ok(budget.reserve("").maxOutputTokens < 1000);
+});
+
+Deno.test("tool limits stop repeated rounds and oversized parallel batches before execution", async (t) => {
+  setLlmDeploymentName("small", "budget-test");
+  const originalFetch = globalThis.fetch;
+  try {
+    for (const batchSize of [1, 13])
+      await t.step(`batch size ${batchSize}`, async () => {
+        let requests = 0;
+        let executions = 0;
+        globalThis.fetch = (async () => {
+          requests++;
+          return Response.json(
+            createApiResponse(
+              `resp_tool_budget_${batchSize}_${requests}`,
+              Array.from({ length: batchSize }, (_, i) => ({
+                type: "function_call" as const,
+                id: `fc_${requests}_${i}`,
+                call_id: `call_${requests}_${i}`,
+                name: "set_reply_message_id",
+                arguments: '{"message_id":7}',
+                status: "completed" as const,
+              })),
+            ),
+          );
+        }) as typeof fetch;
+        await assertRejects(
+          () =>
+            requestLlm(
+              "Repeat forever",
+              ["set_reply_message_id"],
+              undefined,
+              {
+                context: { chatId: 1, messageId: 1 },
+                chargeCredits: async () => {
+                  executions++;
+                },
+              },
+              "Be brief.",
+            ),
+          (error) =>
+            error instanceof LlmRequestError && error.kind === "token_limit",
+        );
+        strictEqual(executions, batchSize === 1 ? 12 : 0);
+        strictEqual(requests, batchSize === 1 ? 13 : 1);
+      });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+Deno.test("output token exhaustion never retries, even after a tool round", async (t) => {
+  setLlmDeploymentName("small", "budget-test");
+  const originalFetch = globalThis.fetch;
+  try {
+    for (const afterTool of [false, true])
+      await t.step(String(afterTool), async () => {
+        let requests = 0;
+        globalThis.fetch = (async (_url, init) => {
+          requests++;
+          strictEqual(JSON.parse(String(init?.body)).max_output_tokens, 8192);
+          if (afterTool && requests === 1) {
+            return Response.json(
+              createApiResponse("resp_budget_before_limit", [
+                {
+                  type: "function_call",
+                  id: "fc_limit",
+                  call_id: "call_limit",
+                  name: "set_reply_message_id",
+                  arguments: '{"message_id":7}',
+                  status: "completed",
+                },
+              ]),
+            );
+          }
+          return Response.json({
+            ...createApiResponse("resp_output_budget_limit", []),
+            status: "incomplete",
+            incomplete_details: { reason: "max_output_tokens" },
+          });
+        }) as typeof fetch;
+        await assertRejects(
+          () =>
+            requestLlm(
+              "Use every token",
+              ["set_reply_message_id"],
+              undefined,
+              { context: { chatId: 1, messageId: 1 } },
+              "Be brief.",
+            ),
+          (error) =>
+            error instanceof LlmRequestError &&
+            error.kind === "token_limit" &&
+            error.lastResponseId === "resp_output_budget_limit",
+        );
+        strictEqual(requests, afterTool ? 2 : 1);
+      });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+Deno.test("large retrieved pages are bounded before being sent to the model", async () => {
+  setLlmDeploymentName("small", "budget-test");
+  const originalFetch = globalThis.fetch;
+  let requests = 0;
+  globalThis.fetch = (async (url, init) => {
+    if (String(url).startsWith("https://api.keenable.ai/")) {
+      return Response.json({ content: "A".repeat(100_000) });
+    }
+    requests++;
+    const body = JSON.parse(String(init?.body));
+    if (requests === 1)
+      return Response.json(
+        createApiResponse("resp_large_page", [
+          {
+            type: "function_call",
+            id: "fc_page",
+            call_id: "call_page",
+            name: "read_web_page",
+            arguments: '{"url":"https://example.com"}',
+            status: "completed",
+          },
+        ]),
+      );
+    const output = body.input.find(
+      (item: { type: string }) => item.type === "function_call_output",
+    ).output;
+    ok(output.includes("Tool result truncated"));
+    ok(output.length < 17_000);
+    return Response.json(budgetTestAnswer("resp_large_page_done"));
+  }) as typeof fetch;
+  try {
+    const response = await requestLlm(
+      "Read this page",
+      ["read_web_page"],
+      undefined,
+      {},
+      "Be brief.",
+    );
+    strictEqual(response.response, "Done.");
+    strictEqual(requests, 2);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
 
 Deno.test("thread naming uses the responding model and exact prompt, with three-word fallbacks", async () => {
   const originalFetch = globalThis.fetch;
@@ -197,7 +460,7 @@ Deno.test("stalled model attempts retry after 90 seconds without repeating tools
   const originalFetch = globalThis.fetch;
   const originalSetTimeout = globalThis.setTimeout;
   const attemptTimeouts: number[] = [];
-  // Exercise the SDK's real timeout and retry path without waiting 90 seconds.
+  // Exercise the SDK timeout and budgeted application retry without waiting 90 seconds.
   globalThis.setTimeout = ((callback, delay, ...args) => {
     if (delay !== undefined && delay >= 90_000) attemptTimeouts.push(delay);
     return originalSetTimeout(
@@ -2710,19 +2973,22 @@ Deno.test("periodic trolling always generates at its interval and sends only app
       ["success", "success", "success", "success", "success", "failed"],
     );
     const { used } = await getUsageStatus(database, -100);
-    strictEqual(used, 6);
+    const { countTextTokens, TOKENS_PER_CREDIT } = await import(
+      "./text-tokens.ts"
+    );
+    strictEqual(used, (3 * countTextTokens(candidate)) / TOKENS_PER_CREDIT);
     await database
       .insertInto("credit_limits")
       .values({
         chat_id: -100,
-        quota: used + 1,
+        quota: 0,
         unlimited: 0,
       })
       .execute();
     await receive();
     await receive();
-    deepStrictEqual([generations, validations, sent.length], [4, 3, 1]);
-    strictEqual(telemetryEvents.length, 7);
+    deepStrictEqual([generations, validations, sent.length], [3, 3, 1]);
+    strictEqual(telemetryEvents.length, 6);
     for (const event of telemetryEvents) {
       assertTelemetry(
         [event],

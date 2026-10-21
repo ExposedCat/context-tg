@@ -19,6 +19,11 @@ import {
   isFinanceToolName,
 } from "./finance-mcp.ts";
 import {
+  LlmBudgetExceededError,
+  LlmTokenBudget,
+  limitToolOutput,
+} from "./llm-budget.ts";
+import {
   getLlmResponseInputItems,
   getLlmResponseMemory,
   saveLlmResponseInputItems,
@@ -64,12 +69,18 @@ import type {
   LlmCallTelemetryPayload,
 } from "./telemetry.ts";
 import { createLlmCallTiming } from "./telemetry.ts";
+import { TextCreditMeter } from "./text-credit-meter.ts";
 import {
   buildTrollingModeInstructions,
   getTrollingModeInstructions,
   type TrollingMode,
 } from "./trolling-mode.ts";
-import type { CreditCharge } from "./usage.ts";
+import {
+  type CreditCharge,
+  type TextCreditCharge,
+  TextCreditLimitError,
+  type TextCreditReservation,
+} from "./usage.ts";
 
 export type { LlmReport } from "./llm-tools/reports.ts";
 export type { LlmImageInput, LlmToolContext } from "./llm-tools/types.ts";
@@ -142,6 +153,11 @@ export type LlmProgress = {
 };
 
 export type LlmRequestOptions = {
+  textCredits?: TextCreditCharge;
+  tokenBudget?: LlmTokenBudget;
+  onStreamEvent?: (
+    event: OpenAI.Responses.ResponseStreamEvent,
+  ) => void | Promise<void>;
   chargeCredits?: CreditCharge;
   database?: Database;
   api?: Api;
@@ -267,6 +283,7 @@ const CORRUPTED_IMAGE_REMOVAL_NOTICE_PATTERN =
 const MARKDOWN_TOOL_OUTPUTS = new Set<string>(["read_web_page"]);
 
 type LlmRequestState = {
+  tokenBudget: LlmTokenBudget;
   timing: ReturnType<typeof createLlmCallTiming>;
   financeMcp?: FinanceMcpTools;
   lastResponseId?: string;
@@ -334,7 +351,142 @@ function getClient(): OpenAI {
     apiKey: APP_ENV.LLM_API_KEY,
     baseURL: APP_ENV.LLM_BASE_URL,
     timeout: 90_000,
+    // Retry attempts must each reserve budget in the application loop.
+    maxRetries: 0,
   });
+}
+
+async function createBudgetedResponse(
+  client: OpenAI,
+  params: OpenAI.Responses.ResponseCreateParamsNonStreaming,
+  budget: LlmTokenBudget,
+  signal?: AbortSignal,
+  outputLimit?: number,
+  onStreamEvent?: LlmRequestOptions["onStreamEvent"],
+  textCredits?: TextCreditCharge,
+): Promise<ApiResponse> {
+  const reservation = budget.reserve(params, outputLimit);
+  let textReservation: TextCreditReservation | undefined;
+  const textMeter = new TextCreditMeter();
+  let modelStarted = false;
+  let abortStream: (() => void) | undefined;
+  let receivedEvent = false;
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const controller = new AbortController();
+  const requestSignal = signal
+    ? AbortSignal.any([signal, controller.signal])
+    : controller.signal;
+  try {
+    textReservation = await textCredits?.reserve(reservation.maxOutputTokens);
+    throwIfAborted(signal);
+    modelStarted = true;
+    let response: ApiResponse;
+    if (APP_ENV.LLM_STREAMING) {
+      timeout = setTimeout(
+        () =>
+          controller.abort(
+            new DOMException("Model stream timed out", "TimeoutError"),
+          ),
+        90_000,
+      );
+      const stream = await client.responses.create(
+        {
+          ...params,
+          max_output_tokens: reservation.maxOutputTokens,
+          stream: true,
+        },
+        { signal: requestSignal },
+      );
+      abortStream = () => stream.controller.abort();
+      let terminalResponse: ApiResponse | undefined;
+      for await (const event of stream) {
+        receivedEvent = true;
+        throwIfAborted(requestSignal);
+        textMeter.observe(event);
+        if (textReservation && textMeter.tokens >= textReservation.tokens) {
+          abortStream();
+          return textMeter.limitedResponse(textReservation.tokens);
+        }
+        await onStreamEvent?.(event);
+        throwIfAborted(requestSignal);
+        if (
+          event.type === "response.completed" ||
+          event.type === "response.incomplete" ||
+          event.type === "response.failed"
+        ) {
+          terminalResponse = event.response;
+          break;
+        }
+      }
+      throwIfAborted(requestSignal);
+      if (!terminalResponse)
+        throw new Error("Response stream ended without a terminal response");
+      response = terminalResponse;
+    } else {
+      response = await client.responses.create(
+        {
+          ...params,
+          max_output_tokens: Math.min(
+            reservation.maxOutputTokens,
+            textReservation?.tokens ?? Infinity,
+          ),
+        },
+        { signal },
+      );
+    }
+    textMeter.complete(response);
+    reservation.settle(response.usage ?? undefined);
+    if (textReservation && textMeter.tokens > textReservation.tokens)
+      return textMeter.limitedResponse(textReservation.tokens);
+    return response;
+  } catch (error) {
+    throwIfAborted(signal);
+    if (
+      error instanceof LlmBudgetExceededError ||
+      error instanceof TextCreditLimitError
+    )
+      throw error;
+    if (receivedEvent) {
+      // Never replay a generation after receiving stream events: the first
+      // attempt may already have spent tokens or generated tool arguments.
+      throw new LlmRequestError(
+        "Response stream interrupted",
+        "The model connection ended before the response completed. The request was stopped without retrying.",
+        "stream_interrupted",
+      );
+    }
+    if (
+      error instanceof OpenAI.APIError &&
+      [400, 401, 403, 404, 422, 429].includes(error.status ?? 0) &&
+      !isContentFilterError(error)
+    ) {
+      // Validation/auth/rate-limit rejections did not start model generation.
+      reservation.settle({ input_tokens: 0, output_tokens: 0 });
+    }
+    throw error;
+  } finally {
+    if (timeout !== undefined) clearTimeout(timeout);
+    abortStream?.();
+    if (!modelStarted)
+      reservation.settle({ input_tokens: 0, output_tokens: 0 });
+    reservation.settle();
+    await settleTextCredits(textReservation, textMeter.tokens);
+  }
+}
+
+async function settleTextCredits(
+  reservation: TextCreditReservation | undefined,
+  tokens: number,
+) {
+  try {
+    await reservation?.settle(tokens);
+  } catch {
+    throw new LlmRequestError(
+      "Text credit settlement failed",
+      "Text credit accounting could not complete; the request was stopped.",
+      "token_limit",
+    );
+  }
 }
 
 function getConfiguredDeploymentName(model: AgentModel): string {
@@ -413,7 +565,19 @@ function getResponseText(response: ApiResponse): string | undefined {
       (item) => item.type === "message" && item.phase === "commentary",
     )
   )
-    return response.output_text || undefined;
+    return (
+      response.output_text ||
+      response.output
+        .flatMap((item) =>
+          item.type === "message"
+            ? item.content.flatMap((part) =>
+                part.type === "output_text" ? [part.text] : [],
+              )
+            : [],
+        )
+        .join("") ||
+      undefined
+    );
   return (
     response.output
       .flatMap((item) =>
@@ -797,7 +961,11 @@ export class LlmRequestError extends Error {
   constructor(
     message: string,
     readonly details: string,
-    readonly kind: "content_filter" | "error" = "error",
+    readonly kind:
+      | "content_filter"
+      | "error"
+      | "token_limit"
+      | "stream_interrupted" = "error",
     readonly lastResponseId?: string,
   ) {
     super(message);
@@ -882,6 +1050,13 @@ function isContentFilterError(error: unknown): boolean {
 }
 
 function getResponseError(response: ApiResponse): LlmRequestError | undefined {
+  if (response.incomplete_details?.reason === "max_output_tokens") {
+    return new LlmRequestError(
+      "The response reached its output token limit",
+      "Please ask for a shorter answer or a smaller task.",
+      "token_limit",
+    );
+  }
   if (response.incomplete_details?.reason === "content_filter") {
     return new LlmRequestError(
       "LLM response was blocked by content filtering",
@@ -944,6 +1119,7 @@ function createToolOutput(
   output: string,
   inputImages: LlmImageInput[] = [],
 ): FunctionCallOutput {
+  output = limitToolOutput(output);
   logDebug("Tool call response", {
     callId: call.call_id,
     name: call.name,
@@ -1182,12 +1358,14 @@ async function runFunctionToolCall(
           state.toolUsage.input_tokens += usage.input_tokens;
           state.toolUsage.cached_tokens += usage.cached_tokens;
           state.toolUsage.output_tokens += usage.output_tokens;
+          state.tokenBudget.addToolUsage(usage);
         },
       }),
     );
     throwIfAborted(signal);
   } catch (error) {
     throwIfAborted(signal);
+    if (error instanceof LlmBudgetExceededError) throw error;
     const details = getErrorDetail(error);
     state.errors.push({ tool: call.name, details });
     state.hadToolErrors = true;
@@ -1442,11 +1620,15 @@ async function createLlmResponse(
   },
   signal?: AbortSignal,
   financeMcp?: FinanceMcpTools,
+  tokenBudget = new LlmTokenBudget(),
+  onStreamEvent?: LlmRequestOptions["onStreamEvent"],
+  textCredits?: TextCreditCharge,
 ): Promise<ApiResponse> {
   throwIfAborted(signal);
   const toolDefinitions = getToolDefinitions(tools, financeMcp);
 
-  return await client.responses.create(
+  return await createBudgetedResponse(
+    client,
     {
       model: getConfiguredDeploymentName(model),
       instructions,
@@ -1471,7 +1653,11 @@ async function createLlmResponse(
         ? { reasoning: { effort: settings.reasoning } }
         : {}),
     },
-    { signal },
+    tokenBudget,
+    signal,
+    undefined,
+    onStreamEvent,
+    textCredits,
   );
 }
 
@@ -1511,11 +1697,23 @@ async function createLlmResponseWithRetries(
         settings,
         options.signal,
         state.financeMcp,
+        state.tokenBudget,
+        options.onStreamEvent,
+        options.textCredits,
       );
       recordResponseDebug(response, state, model, settings);
       const responseError = getResponseError(response);
 
       if (responseError) {
+        if (responseError.kind === "token_limit") {
+          await recordResponse(
+            response,
+            currentInput,
+            state,
+            currentResponseId,
+            options,
+          );
+        }
         throw responseError;
       }
 
@@ -1538,6 +1736,36 @@ async function createLlmResponseWithRetries(
 
       return response;
     } catch (error) {
+      throwIfAborted(options.signal);
+      if (
+        error instanceof LlmRequestError &&
+        error.kind === "stream_interrupted"
+      ) {
+        const checkpoint = await saveFailedResponseInputCheckpoint(
+          currentInput,
+          currentResponseId,
+          state,
+          options,
+        );
+        throw new LlmRequestError(
+          error.message,
+          error.details,
+          error.kind,
+          checkpoint,
+        );
+      }
+      if (
+        error instanceof LlmBudgetExceededError ||
+        error instanceof TextCreditLimitError ||
+        (error instanceof LlmRequestError && error.kind === "token_limit")
+      ) {
+        throw new LlmRequestError(
+          "Request token limit reached",
+          error instanceof LlmRequestError ? error.details : error.message,
+          "token_limit",
+          state.lastResponseId,
+        );
+      }
       lastError = error;
       const recoveredInput = recoverUnavailableReadImageInput(
         currentInput,
@@ -1566,6 +1794,9 @@ async function createLlmResponseWithRetries(
       const rateLimited = isRateLimitError(error);
       const contentFiltered = isContentFilterError(error);
       const emptyResponse = isEmptyResponseError(error);
+      const transportError =
+        error instanceof OpenAI.APIConnectionError ||
+        (error instanceof OpenAI.APIError && (error.status ?? 0) >= 500);
       const retryingRateLimit =
         rateLimited && rateLimitRetries < LLM_RATE_LIMIT_MAX_RETRIES;
       const retryingEmptyResponse =
@@ -1573,7 +1804,9 @@ async function createLlmResponseWithRetries(
       const retryingModelError =
         !emptyResponse &&
         retryAttempts < MAX_LLM_RETRIES &&
-        (!immediate || contentFiltered);
+        (!immediate ||
+          contentFiltered ||
+          (transportError && retryAttempts < 2));
       const retrying =
         retryingRateLimit || retryingEmptyResponse || retryingModelError;
 
@@ -1601,7 +1834,12 @@ async function createLlmResponseWithRetries(
         }
       }
 
-      if (immediate && !contentFiltered && !emptyResponse) {
+      if (
+        immediate &&
+        !contentFiltered &&
+        !emptyResponse &&
+        !retryingModelError
+      ) {
         const checkpointResponseId = await saveFailedResponseInputCheckpoint(
           currentInput,
           currentResponseId,
@@ -1694,6 +1932,7 @@ async function resolveFunctionToolCalls(
       segments: getResponseProgressSegments(response),
     });
 
+    state.tokenBudget.useTools(functionCalls.length);
     const toolCallResults = await Promise.all(
       functionCalls.map((call) =>
         runFunctionToolCall(
@@ -1761,7 +2000,10 @@ async function requestLlmWithInstructions(
   instructions = getSystemInstructions(options.context?.chatId),
   model: AgentModel = normalAgent.MODEL,
 ): Promise<LlmResponse> {
+  const tokenBudget = options.tokenBudget ?? new LlmTokenBudget();
+  options = { ...options, tokenBudget };
   const state: LlmRequestState = {
+    tokenBudget,
     timing: createLlmCallTiming(),
     lastResponseId: responseId ?? undefined,
     inputItems: [],
@@ -1869,6 +2111,19 @@ async function requestLlmWithInstructions(
 
     status = state.hadToolErrors ? "with_errors" : "success";
     return result;
+  } catch (error) {
+    if (
+      error instanceof LlmBudgetExceededError ||
+      error instanceof TextCreditLimitError
+    ) {
+      throw new LlmRequestError(
+        "Request token limit reached",
+        error.message,
+        "token_limit",
+        state.lastResponseId,
+      );
+    }
+    throw error;
   } finally {
     try {
       await state.financeMcp?.close().catch((error) => {
@@ -1919,13 +2174,17 @@ export type TrollingValidationInput = {
 
 export async function requestTrollingValidation(
   input: TrollingValidationInput,
-  options: Pick<LlmRequestOptions, "signal" | "telemetry"> = {},
+  options: Pick<
+    LlmRequestOptions,
+    "signal" | "telemetry" | "tokenBudget" | "onStreamEvent"
+  > = {},
 ): Promise<{ valid: boolean }> {
   const timing = createLlmCallTiming();
   let response: ApiResponse | undefined;
   let status: LlmCallStatus = "failed";
   try {
-    response = await getClient().responses.create(
+    response = await createBudgetedResponse(
+      getClient(),
       {
         model: "gpt-61-sol",
         reasoning: { effort: "high" },
@@ -1962,7 +2221,10 @@ Return only the boolean verdict through the required structured output.`,
           },
         },
       },
-      { signal: options.signal },
+      options.tokenBudget ?? new LlmTokenBudget(),
+      options.signal,
+      undefined,
+      options.onStreamEvent,
     );
     if (
       response.output.some(
@@ -2034,7 +2296,8 @@ Respond with a name for this thread. Don't use formatting, don't add anything el
 
   try {
     const settings = await resolveRuntimeSettings(model, options);
-    const response = await getClient().responses.create(
+    const response = await createBudgetedResponse(
+      getClient(),
       {
         model: getConfiguredDeploymentName(model),
         instructions: "",
@@ -2044,7 +2307,10 @@ Respond with a name for this thread. Don't use formatting, don't add anything el
           ? { reasoning: { effort: settings.reasoning } }
           : {}),
       },
-      { signal: options.signal },
+      options.tokenBudget ?? new LlmTokenBudget(),
+      options.signal,
+      1024,
+      options.onStreamEvent,
     );
     const error = getResponseError(response);
     if (error) throw error;

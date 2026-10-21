@@ -1,4 +1,4 @@
-import { deepStrictEqual, strictEqual } from "node:assert";
+import { deepStrictEqual, ok, strictEqual } from "node:assert";
 import { Api, Context as GrammyContext } from "grammy";
 import type { Context } from "../bot.ts";
 
@@ -8,6 +8,7 @@ for (const [key, value] of Object.entries({
   SQLITE_PATH: ":memory:",
   LLM_BASE_URL: "https://llm.test/v1",
   LLM_API_KEY: "test",
+  LLM_STREAMING: "false",
   KEENABLE_API_KEY: "test",
   LLM_TEMPERATURE: "0.2",
   EMBEDDER_BASE_URL: "https://embedder.test/v1",
@@ -30,7 +31,9 @@ const { setTrollingEnabled, setTrollingInterval } = await import(
 );
 const { setProactiveResponseEnabled, setProactiveResponseInterval } =
   await import("./proactive.ts");
-const { consumeUsage, getUsageStatus } = await import("./usage.ts");
+const { consumeUsage, getUsageStatus, createTextCreditCharge } = await import(
+  "./usage.ts"
+);
 
 Deno.test("automatic responses choose one before generation and advance both counters", async (t) => {
   const database = await initDatabase()();
@@ -224,9 +227,22 @@ Deno.test("automatic responses choose one before generation and advance both cou
         deepStrictEqual(sent, test.sent);
         strictEqual(contextReads, test.models.length > 0 ? 1 : 0);
         strictEqual(draws.length, 0);
-        strictEqual(
-          (await getUsageStatus(database, chat.id)).used - before,
-          test.models.length,
+        const { countTextTokens, TOKENS_PER_CREDIT } = await import(
+          "./text-tokens.ts"
+        );
+        const expectedTokens = test.models.some(
+          (model) => model === "test-troll",
+        )
+          ? countTextTokens("Topical quip.")
+          : test.models.some((model) => model === "test-proactive")
+            ? countTextTokens("Proactive response.")
+            : 0;
+        ok(
+          Math.abs(
+            (await getUsageStatus(database, chat.id)).used -
+              before -
+              expectedTokens / TOKENS_PER_CREDIT,
+          ) < 1e-12,
         );
         const troll = await database
           .selectFrom("chat_trolling")
@@ -245,7 +261,17 @@ Deno.test("automatic responses choose one before generation and advance both cou
       "exhausted credits skip both counters and generation",
       async () => {
         const usage = await getUsageStatus(database, chat.id);
-        await consumeUsage(database, chat.id, usage.quota - usage.used);
+        await consumeUsage(
+          database,
+          chat.id,
+          Math.floor(usage.quota - usage.used),
+        );
+        const remaining = await createTextCreditCharge({
+          database,
+          chat,
+          telemetry: { event: () => {} },
+        } as unknown as Context).reserve(618);
+        await remaining.settle(remaining.tokens);
         await receive();
         const troll = await database
           .selectFrom("chat_trolling")

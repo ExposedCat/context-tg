@@ -19,6 +19,7 @@ for (const [key, value] of Object.entries({
   Deno.env.set(key, value);
 
 const { stateComposer } = await import("./state.ts");
+const { createPrivateTopicMiddleware } = await import("./private-topics.ts");
 const { initDatabase } = await import("./database.ts");
 const { getUsageStatus, handleUsageCommand } = await import("./usage.ts");
 
@@ -55,6 +56,7 @@ Deno.test("addressed usage adjustments respond with or without command entities 
       return next();
     });
     bot.use(new I18n<Context>({ directory: "locales", defaultLocale: "en" }));
+    bot.use(createPrivateTopicMiddleware());
     bot.use(stateComposer);
     let passedThrough = 0;
     bot.use(() => {
@@ -128,6 +130,45 @@ Deno.test("addressed usage adjustments respond with or without command entities 
     await command("/usage@LayloAI -40", false, false, { ...from, id: 2 });
     strictEqual((await getUsageStatus(database, chat.id)).quota, 85);
     match(String(calls[0].payload.text), /Only the bot admin/);
+
+    const privateChat = {
+      id: 1,
+      type: "private" as const,
+      first_name: "Admin",
+    };
+    await bot.handleUpdate({
+      update_id: ++updateId,
+      message: {
+        message_id: 700,
+        date: 100,
+        chat: privateChat,
+        from,
+        message_thread_id: 2192419,
+        forum_topic_created: {
+          name: "/usage +unlimite...",
+          icon_color: 7322096,
+          is_name_implicit: true,
+        },
+      },
+    });
+    calls.length = 0;
+    await bot.handleUpdate({
+      update_id: ++updateId,
+      message: {
+        message_id: 701,
+        date: 100,
+        chat: privateChat,
+        from,
+        text: "/usage +unlimited",
+      },
+    });
+    strictEqual(
+      (await getUsageStatus(database, privateChat.id)).unlimited,
+      true,
+    );
+    strictEqual(calls[0]?.method, "sendMessage");
+    strictEqual(calls[0].payload.message_thread_id, 2192419);
+    strictEqual((await getUsageStatus(database, chat.id)).quota, 85);
   } finally {
     await database.destroy();
   }

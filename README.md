@@ -40,10 +40,82 @@ Compose network change requires recreating both app containers; merely restartin
 Deno process does not attach the network. Eyri's host port stays bound to
 loopback; Context accesses MCP directly over the container network.
 
+## Text credits
+
+Assistant progress text and final answers cost **1 credit per 618 tokens**,
+configured by `TOKENS_PER_CREDIT`. This is 1.5 times the supplied reference
+answer's 412 tokens using the `o200k_base` tokenizer. Usage accumulates as exact
+token counts across requests, rather than rounding every reply up to a credit;
+`/usage` displays credits to three decimal places.
+
+There is no flat request fee. Input, context, hidden reasoning, tool arguments,
+thread titles and automatic validation verdicts do not spend text credits.
+Tool charges remain 1 credit per execution, an extra 1 for web search, and
+5 per image-generation attempt. These charges share the same daily balance.
+
+Before generating an answer, the app atomically reserves available text tokens
+so parallel requests and tools cannot spend the same balance. Unused allowance
+is released after completion or cancellation. While streaming, the app counts
+visible text and aborts when its funded allowance runs out, keeping the bounded
+partial answer and adding a limit notice. Token batching may deliver several
+tokens together; only the funded portion is retained and charged. Non-streaming
+providers instead receive an output cap; streaming is required for live text
+cancellation. Unknown provider-side reasoning costs never become text credits.
+
+The migration preserves existing usage and limits. Reservations expire after
+two minutes if a process crashes, longer than the 90-second model timeout.
+
+## Per-request token limits
+
+Each user request has a shared budget across model calls, tool follow-ups,
+thread naming and delivery recovery. Configure these limits in `.env`:
+
+- `LLM_REQUEST_TOKEN_BUDGET=64000`: cumulative input plus output tokens.
+- `LLM_MAX_OUTPUT_TOKENS=8192`: output per model call, including reasoning.
+- `LLM_MAX_INPUT_TOKENS=48000`: conservative input allowance per model call,
+  including instructions, tools and replayed conversation context.
+- `LLM_MAX_TOOL_CALLS=12`: total tool executions per request, including parallel batches.
+
+Before each model call, the app reserves input and output allowance, then
+reconciles it with provider-reported usage. Input estimation uses UTF-8 bytes
+as a conservative text-token allowance and 8,192 tokens per image; image costs
+vary by provider and resolution, so this is not an exact billing cap for media.
+Failed attempts without usage retain their reservation; validation and
+rate-limit rejections release it. Tool results are limited to 16 KB each
+(or half the input allowance, if smaller) with an explicit truncation notice.
+Image generation retains its existing credit charges and its reported tokens
+count toward the remaining budget after generation.
+
+Budget exhaustion and output-limit responses stop immediately without retries.
+The user receives a short explanation asking for a smaller task. All responding
+agents are instructed to reject meaningless long requests aimed at draining
+tokens, including repetitive generation and excessive reading or tool loops.
+
 ## Progress updates and timing
 
-Each text-model HTTP attempt has a 90-second timeout, after which the SDK can
-retry using its existing retry policy. The timeout applies separately to each
+Text-model calls use Responses API streaming by default (`LLM_STREAMING=true`),
+including tool follow-ups, thread naming and trolling validation. Stream events
+are available to the application through `onStreamEvent` while generation is
+running. Telegram delivery still uses the existing progress batching and final
+response flow. Set `LLM_STREAMING=false` for a provider that does not support SSE.
+
+Use `/tasks` to find the cancellation link `/cancel_<message-id>` for a running
+normal chat task. Cancellation aborts its active HTTP connection and any tools
+using the task's signal, even while the stream is waiting for its next event.
+This already works for non-streamed requests too. Stopping the connection asks
+the provider to stop a foreground generation; tokens already generated remain
+chargeable. There is no separate cancellation API for these `store:false`
+foreground responses, and cancellation cannot recover work completed earlier.
+Guest responses and periodic trolling do not have normal chat task cancel links.
+
+Incomplete or broken streams never execute partial tool arguments. A connection
+failure after stream events stops without automatic replay of that generation;
+the previous complete context is preserved for an explicit continuation. An
+aborted stream without final usage retains its reserved token allowance.
+
+Each text-model HTTP attempt has a 90-second timeout. The application can retry
+within the shared request budget; SDK retries are disabled so attempts cannot
+bypass accounting. The timeout applies separately to each
 model call, including calls after tool results, thread naming and trolling
 validation; it is not a deadline for the entire task.
 
@@ -105,6 +177,12 @@ a name trigger or a reply, including messages without a topic ID when Threaded
 Mode is disabled. Each topic continues its own conversation and retains
 its selected agent and alias. An explicit reply continues from that message;
 an explicit agent trigger can change the topic's agent.
+
+When Telegram omits the topic ID from a new DM topic's first message, the bot
+recovers it from the immediately preceding implicit topic-creation event. This
+also keeps commands and initial photo albums in that topic. The recovery applies
+only to private chats; forum groups and ordinary group replies keep their existing
+routing.
 
 The first text request in a DM topic also generates its name using the responding
 agent's model. The naming call uses a separate prompt without tools or conversation
@@ -314,10 +392,10 @@ prevents sending and is reported through the automatic-response error log.
 
 The validator uses the existing `LLM_BASE_URL` and `LLM_API_KEY`, so that endpoint
 must support `gpt-61-sol` and Responses structured outputs. No alternative model
-or JSON-mode fallback is used. Generation and validation each cost one request
-credit, including a validation that rejects the candidate. If the remaining
-balance cannot fund validation, the candidate is not sent. This gate applies to
-automatic trolling; explicit troll-agent conversations keep their existing flow.
+or JSON-mode fallback is used. Candidate text costs token credits even if the
+validator rejects it; the hidden verdict has no separate request charge. The
+shared model budget still limits generation and validation. This gate applies
+to automatic trolling; explicit troll-agent conversations keep their existing flow.
 
 If automatic trolling and proactive responses both trigger on the same message,
 the bot randomly chooses one with equal probability. Both message counters

@@ -4,6 +4,7 @@ import { trollAgent } from "./agents/index.ts";
 import type { Database } from "./database.ts";
 import { readLastMessages } from "./last-messages.ts";
 import { requestLlm, requestTrollingValidation } from "./llm.ts";
+import { LlmTokenBudget } from "./llm-budget.ts";
 import {
   formatPromptMessageXml,
   formatSystemPromptMessageXml,
@@ -16,7 +17,11 @@ import {
   parseStoredTrollingMode,
   type TrollingMode,
 } from "./trolling-mode.ts";
-import { createCreditCharge, hasUsageRemaining } from "./usage.ts";
+import {
+  createCreditCharge,
+  createTextCreditCharge,
+  hasUsageRemaining,
+} from "./usage.ts";
 
 type Sender = {
   id: number;
@@ -356,11 +361,14 @@ async function sendPeriodicTroll(
     "normal",
     ctx.telemetry.event,
   );
+  const tokenBudget = new LlmTokenBudget();
   const response = await requestLlm(
     buildTrollingRequest(formatSenderName(sender), messages),
     ["set_reply_message_id"],
     undefined,
     {
+      tokenBudget,
+      textCredits: createTextCreditCharge(ctx),
       database: ctx.database,
       context: {
         chatId,
@@ -395,11 +403,6 @@ async function sendPeriodicTroll(
     return;
 
   const { mode } = await getTrollingSettings(ctx.database, chatId);
-  try {
-    await chargeCredits("request");
-  } catch {
-    return;
-  }
   const { valid } = await requestTrollingValidation(
     {
       messages: messages.map(formatContextMessage),
@@ -407,7 +410,7 @@ async function sendPeriodicTroll(
       mode,
       replyMessageId,
     },
-    { telemetry },
+    { telemetry, tokenBudget },
   );
   if (!valid) return;
 

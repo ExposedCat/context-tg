@@ -9,7 +9,11 @@ const TEST_ENV = {
   SQLITE_PATH: ":memory:",
   LLM_BASE_URL: "https://llm.test/v1",
   LLM_API_KEY: "test",
+  LLM_STREAMING: "false",
   LLM_TEMPERATURE: "0.2",
+  // These fixtures exercise multi-image replay and delivery, not input rejection.
+  LLM_MAX_INPUT_TOKENS: "128000",
+  LLM_REQUEST_TOKEN_BUDGET: "256000",
   KEENABLE_API_KEY: "test",
   EMBEDDER_BASE_URL: "https://embedder.test/v1",
   EMBEDDER_API_KEY: "test",
@@ -96,6 +100,7 @@ Deno.test("raw model newlines survive chat delivery and Telegram HTTP serializat
     Response.json({
       id: `resp_newlines_${sent.length}`,
       object: "response",
+      usage: { input_tokens: 100, output_tokens: 20, total_tokens: 120 },
       created_at: 1,
       status: "completed",
       output: [
@@ -233,6 +238,7 @@ Deno.test("Danbooru suffixes are hidden in chat history and override searches fo
     return Response.json({
       id: `resp_danbooru_${modelCalls}`,
       object: "response",
+      usage: { input_tokens: 100, output_tokens: 20, total_tokens: 120 },
       created_at: 1,
       status: "completed",
       output,
@@ -410,6 +416,7 @@ Deno.test("trigger aliases persist through replies and update on explicit trigge
       JSON.stringify({
         id: `resp_alias_${instructions.length}`,
         object: "response",
+        usage: { input_tokens: 100, output_tokens: 20, total_tokens: 120 },
         created_at: 1,
         status: "completed",
         output: [
@@ -591,6 +598,7 @@ Deno.test("group replies retain their parent and history scope while forum topic
     return Response.json({
       id: `resp_group_${requests.length}`,
       object: "response",
+      usage: { input_tokens: 100, output_tokens: 20, total_tokens: 120 },
       created_at: 1,
       status: "completed",
       output,
@@ -747,6 +755,8 @@ Deno.test("group replies retain their parent and history scope while forum topic
 });
 
 Deno.test("DMs continue without mentions with or without topic IDs and preserve explicit reply branches", async () => {
+  const { createPrivateTopicMiddleware } = await import("./private-topics.ts");
+  const resolvePrivateTopic = createPrivateTopicMiddleware();
   const { getThread, migrateThreads } = await import("./threads.ts");
   const { maybeSendProactiveAgentResponse } = await import("./chat.ts");
   const { setLlmDeploymentName } = await import("./llm-deployments.ts");
@@ -818,6 +828,7 @@ Deno.test("DMs continue without mentions with or without topic IDs and preserve 
         JSON.stringify({
           id: "resp_title",
           object: "response",
+          usage: { input_tokens: 100, output_tokens: 20, total_tokens: 120 },
           status: "completed",
           output: [
             {
@@ -862,6 +873,7 @@ Deno.test("DMs continue without mentions with or without topic IDs and preserve 
       JSON.stringify({
         id,
         object: "response",
+        usage: { input_tokens: 100, output_tokens: 20, total_tokens: 120 },
         created_at: 1,
         status: "completed",
         output,
@@ -878,6 +890,7 @@ Deno.test("DMs continue without mentions with or without topic IDs and preserve 
         id: 10,
         topic: 7,
         text: "тофу лейло alpha secret",
+        implicitCreation: true,
         previous: null,
         agent: "tofu",
         name: "тофу лейло",
@@ -886,6 +899,7 @@ Deno.test("DMs continue without mentions with or without topic IDs and preserve 
         id: 20,
         topic: 8,
         text: "beta secret",
+        implicitCreation: true,
         previous: null,
         agent: "normal",
         name: "laylo",
@@ -972,17 +986,14 @@ Deno.test("DMs continue without mentions with or without topic IDs and preserve 
       sendWithoutReply = "noReply" in test;
       const requestIndex = requests.length;
       const replyId =
-        "rootReply" in test
-          ? test.topic
-          : "replyId" in test
-            ? test.replyId
-            : undefined;
+        "rootReply" in test ? 9 : "replyId" in test ? test.replyId : undefined;
       const ctx = new GrammyContext(
         {
           update_id: test.id,
           message: {
             message_id: test.id,
-            message_thread_id: test.topic,
+            message_thread_id:
+              "implicitCreation" in test ? undefined : test.topic,
             // DM topic routing must work even when is_topic_message is absent.
             date: 0,
             from: { id: 1, is_bot: false, first_name: "User" },
@@ -1001,6 +1012,7 @@ Deno.test("DMs continue without mentions with or without topic IDs and preserve 
                     reply_to_message: undefined,
                     ...("rootReply" in test
                       ? {
+                          message_thread_id: test.topic,
                           forum_topic_created: { name: "Alpha", icon_color: 0 },
                         }
                       : {}),
@@ -1013,8 +1025,36 @@ Deno.test("DMs continue without mentions with or without topic IDs and preserve 
       ) as Context;
       ctx.database = database;
       ctx.telemetry = { event: () => {} } as Context["telemetry"];
-      await chatComposer.middleware()(ctx, () => {
-        throw new Error("DM topic message should be handled");
+      if ("implicitCreation" in test) {
+        // Real Telegram updates use independent service-message/topic IDs and
+        // omit the topic ID entirely from the following first text message.
+        await resolvePrivateTopic(
+          new GrammyContext(
+            {
+              update_id: test.id - 1,
+              message: {
+                message_id: test.id - 1,
+                message_thread_id: test.topic,
+                date: 0,
+                chat,
+                from: { id: 1, is_bot: false, first_name: "User" },
+                forum_topic_created: {
+                  name: "Implicit title",
+                  icon_color: 7322096,
+                  is_name_implicit: true,
+                },
+              },
+            },
+            api,
+            bot,
+          ),
+          async () => {},
+        );
+      }
+      await resolvePrivateTopic(ctx, async () => {
+        await chatComposer.middleware()(ctx, () => {
+          throw new Error("DM topic message should be handled");
+        });
       });
       // Indexing must not produce a second automatic response for a DM.
       ok(ctx.message);
@@ -1213,8 +1253,8 @@ Deno.test("guest usage commands report and adjust group credits without changing
             ctx.t("settings-usage-title", {
               date: new Date().toISOString().slice(0, 10),
             }),
-            ctx.t("settings-usage-line", { used: 7, quota: expectedQuota }),
-            "Request · 1 credit",
+            ctx.t("settings-usage-line", { used: 6, quota: expectedQuota }),
+            ctx.t("settings-usage-prices", { tokens: 618 }).split("\n")[0],
             "Tool use · 1 credit",
             "Web search · +1 credit",
             "Image generation · +5 credits per attempt (retries count)",
@@ -1291,6 +1331,7 @@ Deno.test("failed model follow-ups retain tools with progress enabled or disable
     return Response.json({
       id: `resp_failure_progress_${sentMessageId}_${modelCalls}`,
       object: "response",
+      usage: { input_tokens: 100, output_tokens: 20, total_tokens: 120 },
       created_at: 1,
       status: "completed",
       output: [
@@ -1351,11 +1392,11 @@ Deno.test("failed model follow-ups retain tools with progress enabled or disable
       ctx.telemetry = { event: () => {} } as Context["telemetry"];
       await chatComposer.middleware()(ctx, async () => {});
 
-      strictEqual(modelCalls, 13);
+      ok(modelCalls > 2 && modelCalls < 13);
       strictEqual(sent.length, 1);
       strictEqual(sent[0].includes("Checking **sources**."), progressEnabled);
       ok(sent[0].includes("Failed to generate response"));
-      ok(sent[0].includes("content_policy_violation"));
+      ok(sent[0].includes("token budget"));
       ok(sent[0].includes(`/resume_${messageId}`));
       ok(
         sent[0].endsWith(
@@ -1630,6 +1671,11 @@ Deno.test("normal and guest requests send every rich-message image to the model"
             return Response.json({
               id: `resp_rich_${guest}_${source}`,
               object: "response",
+              usage: {
+                input_tokens: 100,
+                output_tokens: 20,
+                total_tokens: 120,
+              },
               status: "completed",
               output: [
                 {
@@ -1995,6 +2041,7 @@ Deno.test("chat progress sends one message per tick in the originating topic and
           Response.json({
             id: `chat_progress_${enabled}`,
             object: "response",
+            usage: { input_tokens: 100, output_tokens: 20, total_tokens: 120 },
             status: "completed",
             output: [
               {
@@ -2066,6 +2113,7 @@ Deno.test("chat progress sends one message per tick in the originating topic and
         Response.json({
           id: `chat_final_${enabled}`,
           object: "response",
+          usage: { input_tokens: 100, output_tokens: 20, total_tokens: 120 },
           status: "completed",
           output: [
             {

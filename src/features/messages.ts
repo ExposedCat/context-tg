@@ -19,6 +19,7 @@ export type RememberedMessage = {
     message_id: number;
     message_thread_id?: number;
     is_topic_message?: boolean;
+    forum_topic_created?: unknown;
   };
   date: number;
   text?: string;

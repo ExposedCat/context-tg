@@ -25,11 +25,16 @@ export function getMessageTopicId(
 
 export function isImplicitTopicReply(
   message: TopicMessage,
-  reply: { message_id: number } | undefined,
+  reply:
+    | (TopicMessage & { message_id: number; forum_topic_created?: unknown })
+    | undefined,
 ): boolean {
   return (
     (message.chat?.type === "private" || message.is_topic_message === true) &&
     message.message_thread_id !== undefined &&
-    reply?.message_id === message.message_thread_id
+    (reply?.message_id === message.message_thread_id ||
+      (message.chat?.type === "private" &&
+        reply?.forum_topic_created !== undefined &&
+        reply.message_thread_id === message.message_thread_id))
   );
 }

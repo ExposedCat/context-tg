@@ -19,6 +19,7 @@
 		"grammy": "npm:grammy@1.46.0",
 		"grammy-i18n": "npm:@grammyjs/i18n@1.1.2",
 		"grammy-runner": "npm:@grammyjs/runner@2.0.3",
+		"js-tiktoken": "npm:js-tiktoken@1.0.21",
 		"youtube-dl-exec": "npm:youtube-dl-exec@^3.1.7"
 	},
 	"nodeModulesDir": "auto",

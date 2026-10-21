@@ -12,6 +12,7 @@ for (const [key, value] of Object.entries({
   SQLITE_PATH: ":memory:",
   LLM_BASE_URL: "https://llm.test/v1",
   LLM_API_KEY: "test",
+  LLM_STREAMING: "false",
   KEENABLE_API_KEY: "test",
   LLM_TEMPERATURE: "0.2",
   EMBEDDER_BASE_URL: "https://embedder.test/v1",

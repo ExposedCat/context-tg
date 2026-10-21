@@ -89,7 +89,7 @@ settings-usage-line = Использовано кредитов: {$used} / {$quo
 settings-usage-usage = /usage · /usage +N · /usage -N · /usage +unlimited · /usage -unlimited
 settings-usage-admin-only = Менять лимиты может только администратор бота.
 settings-usage-prices =
-    Запрос · 1 кредит
+    Текст агента · 1 кредит за {$tokens} токенов (прогресс + итоговый ответ)
     Вызов инструмента · 1 кредит
     Веб-поиск · +1 кредит
     Генерация изображения · +5 кредитов за попытку (включая повторы)

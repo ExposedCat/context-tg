@@ -39,6 +39,7 @@ import {
   type ChatUsageLimitsTable,
   type ChatUsageTable,
   migrateUsage,
+  type TextCreditReservationsTable,
 } from "./usage.ts";
 import {
   migrateUserSettings,
@@ -58,6 +59,7 @@ export type DatabaseSchema = {
   cron_messages: CronMessagesTable;
   credit_limits: ChatUsageLimitsTable;
   credit_usage: ChatUsageTable;
+  credit_text_reservations: TextCreditReservationsTable;
   chat_proactive_responses: ChatProactiveResponsesTable;
   chat_trolling: ChatTrollingTable;
   emoji_packs: EmojiPacksTable;
