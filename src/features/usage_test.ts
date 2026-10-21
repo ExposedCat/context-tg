@@ -90,6 +90,33 @@ Deno.test("text reservations expire after a crashed attempt and unlimited credit
   }
 });
 
+Deno.test("default (uncapped) reservations work for unlimited and finite chats with real chat ids", async () => {
+  const db = await database();
+  const chatId = -1001756869879;
+  try {
+    // Production streaming calls reserve() without an explicit cap.
+    const finite = await textCharge(db, chatId).reserve();
+    strictEqual(finite.tokens, 50 * TOKENS_PER_CREDIT);
+    await finite.settle(10);
+
+    await handleUsageCommand(db, chatId, "+unlimited", true, t);
+    const unlimited = await textCharge(db, chatId).reserve();
+    strictEqual(unlimited.tokens, Number.MAX_SAFE_INTEGER);
+    strictEqual(
+      (await db.selectFrom("credit_text_reservations").selectAll().execute())
+        .length,
+      0,
+    );
+    await unlimited.settle(1240);
+    strictEqual(
+      (await getUsageStatus(db, chatId)).used,
+      1250 / TOKENS_PER_CREDIT,
+    );
+  } finally {
+    await db.destroy();
+  }
+});
+
 Deno.test("usage migration preserves existing credit charges and initializes text accounting once", async () => {
   const db = new Kysely<DatabaseSchema>({
     dialect: new DenoSqlite3Dialect({

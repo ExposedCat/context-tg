@@ -3,6 +3,7 @@
   "specifiers": {
     "jsr:@db/sqlite@*": "0.13.0",
     "jsr:@db/sqlite@0.13": "0.13.0",
+    "jsr:@db/sqlite@0.13.0": "0.13.0",
     "jsr:@denosaurs/plug@1": "1.1.0",
     "jsr:@grammyjs/debug@~0.2.1": "0.2.1",
     "jsr:@kysely/kysely@*": "0.28.17",

@@ -158,17 +158,24 @@ export function createTextCreditCharge(
         throw new Error("Invalid token allowance.");
       const id = crypto.randomUUID();
       const date = getUsageDate();
-      const remaining = availableTextTokens(chatId, date, unlimited);
-      // Admin requests do not hold the group's finite balance while streaming.
-      const result = unlimited
+      // Admin requests and unlimited chats do not reserve anything. A sentinel
+      // reservation (2^53-1) would be read back through @db/sqlite's default
+      // 32-bit integer path as -1 and abort the stream on its first token.
+      const exempt =
+        unlimited ||
+        (await getUsageStatus(ctx.database, chatId, date)).unlimited;
+      const remaining = availableTextTokens(chatId, date);
+      const result = exempt
         ? undefined
         : await sql<{
             tokens: number;
           }>`insert into credit_text_reservations (id, chat_id, usage_date, tokens, expires_at)
-        select ${id}, ${chatId}, ${date}, cast(min(${maxTokens}, ${remaining}) as real), datetime('now', '+120 seconds')
-        where ${remaining} > 0 returning tokens`.execute(ctx.database);
-      const tokens = unlimited ? maxTokens : result?.rows[0]?.tokens;
-      if (!tokens) throw new TextCreditLimitError();
+        select ${id}, ${chatId}, ${date}, min(${maxTokens}, ${remaining}), datetime('now', '+120 seconds')
+        where ${remaining} > 0 returning cast(tokens as real) as tokens`.execute(
+            ctx.database,
+          );
+      const tokens = exempt ? maxTokens : result?.rows[0]?.tokens;
+      if (!tokens || tokens <= 0) throw new TextCreditLimitError();
       let settlement: Promise<void> | undefined;
       return {
         tokens,

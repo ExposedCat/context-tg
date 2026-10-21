@@ -119,6 +119,33 @@ Deno.test("wallet exhaustion aborts after ten funded text tokens and preserves t
         error instanceof LlmRequestError && error.kind === "token_limit",
     );
     strictEqual(requests, 1);
+
+    // An unlimited chat continues the conversation: the local limit notice in
+    // history must not leak its synthetic id, and nothing is cut off.
+    await handleUsageCommand(database, -1, "+unlimited", true, (key) => key);
+    let replayedIds: string[] = [];
+    globalThis.fetch = (async (_url, init) => {
+      requests++;
+      const body = JSON.parse(String(init?.body));
+      replayedIds = body.input
+        .map((item: { id?: string }) => item.id)
+        .filter((id: string | undefined) => id !== undefined);
+      return sse([
+        created,
+        delta,
+        { type: "response.completed", response: response("resp_unlimited") },
+      ]);
+    }) as typeof fetch;
+    const continued = await requestLlm(
+      "Continue",
+      [],
+      result.response_id,
+      { textCredits: wallet(database) },
+      "Be brief.",
+    );
+    strictEqual(requests, 2);
+    ok(replayedIds.every((id) => !id.startsWith("msg-local-")));
+    ok(!continued.response?.includes("Text credit limit reached"));
   } finally {
     globalThis.fetch = originalFetch;
     await database.destroy();

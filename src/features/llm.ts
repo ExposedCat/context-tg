@@ -741,6 +741,22 @@ function createInputMessages(request: LlmRequestInput): LlmApiInput {
   return (Array.isArray(request) ? request : [request]).map(createInputMessage);
 }
 
+// Locally synthesized checkpoint messages (text-credit/tool-limit notices) get
+// `msg-local-*` ids. The provider rejects ids it did not issue, so drop them
+// before sending; stored histories that already contain them recover too.
+function normalizeItemForRequest(item: ResponseInputItem): ResponseInputItem {
+  if (
+    item.type === "message" &&
+    "id" in item &&
+    typeof item.id === "string" &&
+    item.id.startsWith("msg-local-")
+  ) {
+    const { id: _id, ...rest } = item;
+    return rest as ResponseInputItem;
+  }
+  return normalizeUserMessageForRequest(item);
+}
+
 function normalizeUserMessageForRequest(
   item: ResponseInputItem,
 ): ResponseInputItem {
@@ -1624,8 +1640,8 @@ async function createLlmResponse(
       model: getConfiguredDeploymentName(model),
       instructions,
       input: [
-        ...previousInput.map(normalizeUserMessageForRequest),
-        ...input.map(normalizeUserMessageForRequest),
+        ...previousInput.map(normalizeItemForRequest),
+        ...input.map(normalizeItemForRequest),
       ],
       // temperature: APP_ENV.LLM_TEMPERATURE,
       tools: toolDefinitions.length > 0 ? toolDefinitions : undefined,
