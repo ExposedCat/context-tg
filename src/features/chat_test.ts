@@ -1253,7 +1253,10 @@ test("guest usage commands report and adjust group credits without changing pers
             ctx.t("settings-usage-title", {
               date: new Date().toISOString().slice(0, 10),
             }),
-            ctx.t("settings-usage-line", { used: 7, quota: expectedQuota }),
+            ctx.t("settings-usage-line", {
+              used: "7.00",
+              quota: expectedQuota,
+            }),
             ...ctx.t("settings-usage-prices", { tokens: 620 }).split("\n"),
           ].map((text) => ({ type: "paragraph", text })),
         },
@@ -2206,7 +2209,7 @@ test("user input cap counts only the current message and its immediate reply", (
   );
 });
 
-test("oversized user input is rejected before generation, task creation, or credit reservations", async () => {
+test("oversized user input is rejected before generation, task creation, or credit charges", async () => {
   const database = await initDatabase()();
   const originalFetch = globalThis.fetch;
   const chat = { id: -567, type: "supergroup", title: "Test" } as const;
@@ -2271,15 +2274,6 @@ test("oversized user input is rejected before generation, task creation, or cred
     strictEqual(sent.length, 2);
     strictEqual(
       (await database.selectFrom("tasks").selectAll().execute()).length,
-      0,
-    );
-    strictEqual(
-      (
-        await database
-          .selectFrom("credit_text_reservations")
-          .selectAll()
-          .execute()
-      ).length,
       0,
     );
     strictEqual(

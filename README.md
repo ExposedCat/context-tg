@@ -61,7 +61,7 @@ loopback; Context accesses MCP directly over the container network.
 Each request costs **1 credit**, plus **1 credit per 620 tokens** of assistant
 progress text and final answers, configured by `TOKENS_PER_CREDIT`. Text usage
 accumulates as exact token counts across requests, rather than rounding every
-reply up to a credit; `/usage` displays credits to three decimal places.
+reply up to a credit; `/usage` and credit errors display credits to two decimal places.
 For example, 310 generated text tokens cost 1.5 credits including the request fee.
 
 The fixed fee is charged once when accepting a request, including resumed and
@@ -76,24 +76,28 @@ guest mode and automatic responses, including tool and image charges. Their
 usage is still recorded; the exemption never changes the chat's quota or grants
 unlimited usage to other users.
 
-Before generating an answer, the app atomically reserves available text tokens
-so parallel requests and tools cannot spend the same balance. Unused allowance
-is released after completion or cancellation. While streaming, the app counts
-visible text and aborts when its funded allowance runs out, keeping the bounded
-partial answer and adding a limit notice. Token batching may deliver several
-tokens together; only the funded portion is retained and charged. Non-streaming
-providers instead receive an output cap; streaming is required for live text
-cancellation. Unknown provider-side reasoning costs never become text credits.
+Assistant text is charged while streaming, in batches of 128 tokens or after
+one second when the next stream event arrives. Completion, cancellation and
+connection failures flush the remaining received text. Requests never reserve
+future output, so parallel tasks and tools share the actual remaining balance.
+Non-streaming providers charge their text when the response arrives.
 
-The migration preserves existing usage and limits. A reservation is held for
-as long as its request runs; reservations left by a crashed process are cleared
-at the next startup (a one-day expiry is only a backstop).
+When a task detects that the shared balance is exhausted, it stops generation
+and further tool work, preserves received text, and gets one final model turn
+with all tools disabled to summarize the available results. The final turn
+cannot start another tool loop or retry loop. Parallel streams may overlap
+slightly; finite usage saturates at the daily quota, including final wrap-up
+text, rather than showing an overdrawn balance. Unlimited usage is still fully
+recorded. Unknown provider-side reasoning costs never become text credits.
+
+The migration preserves existing usage and limits and removes obsolete
+reservation records.
 
 ## Per-request token limits
 
 The incoming user message plus its immediate reply text have a combined
 5,000-token limit, counted with the text tokenizer before model calls or credit
-reservations. Captions and rich message text count; reply chains, thread history,
+charges. Captions and rich message text count; reply chains, thread history,
 instructions, tool definitions and media do not. Configure these limits in `.env`:
 
 - `LLM_MAX_USER_INPUT_TOKENS=5000`: combined current message and immediate reply text.
@@ -105,7 +109,8 @@ including Finance MCP, to answer using the results already available. Excess
 calls do not execute or spend credits. Tool results remain limited to 16 KB each.
 
 There is no separate application cap on generated tokens for assistant replies.
-Available text credits limit progress and final text; input, hidden
+Available text credits fund progress and answers; exhausted tasks get one final
+turn without tools. Input, hidden
 reasoning, tool arguments and image-tool usage do not spend text credits.
 `ADMIN_ID` has unlimited credits. If the provider itself reaches its output
 limit, partial text is returned with a notice instead of an error that discards
@@ -133,7 +138,7 @@ Guest responses and periodic trolling do not have normal chat task cancel links.
 Incomplete or broken streams never execute partial tool arguments. A connection
 failure after stream events stops without automatic replay of that generation;
 the previous complete context is preserved for an explicit continuation. An
-aborted stream without final usage retains its reserved token allowance.
+aborted stream charges only the assistant text received before it stopped.
 
 Model calls have no time limit, streaming or not: progress placeholders show
 that a request is still pending, and its `/cancel_<id>` command stops it. The application can

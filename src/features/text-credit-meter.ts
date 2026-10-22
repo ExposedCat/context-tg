@@ -52,9 +52,9 @@ export class TextCreditMeter {
         }
       }
     }
-    // Some incomplete terminal events omit the text already delivered in
+    // Some interrupted terminal events omit the text already delivered in
     // deltas. Keep that text instead of replacing it with an empty snapshot.
-    if (response.status === "incomplete" && this.parts.size === 0)
+    if (response.status !== "completed" && this.parts.size === 0)
       this.parts = streamedParts;
     this.snapshot = response;
   }
@@ -80,21 +80,22 @@ export class TextCreditMeter {
           ],
         });
     }
-    output.push({
-      type: "message",
-      id: `msg-local-${crypto.randomUUID()}`,
-      role: "assistant",
-      status: "completed",
-      phase: "final_answer",
-      content: [
-        {
-          type: "output_text",
-          text: `\n\n${notice}`,
-          annotations: [],
-          logprobs: [],
-        },
-      ],
-    });
+    if (notice)
+      output.push({
+        type: "message",
+        id: `msg-local-${crypto.randomUUID()}`,
+        role: "assistant",
+        status: "completed",
+        phase: "final_answer",
+        content: [
+          {
+            type: "output_text",
+            text: `\n\n${notice}`,
+            annotations: [],
+            logprobs: [],
+          },
+        ],
+      });
     // This is a local checkpoint, never a claim that the provider completed the
     // aborted generation. No partial tool arguments are included or executed.
     return {

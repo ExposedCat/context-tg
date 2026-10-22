@@ -1,7 +1,7 @@
 import { test } from "bun:test";
 import { deepStrictEqual, rejects, strictEqual } from "node:assert";
 import type { TranslateFunction } from "@grammyjs/i18n";
-import { Kysely, sql } from "kysely";
+import { Kysely } from "kysely";
 import type { Context } from "../bot.ts";
 import type { DatabaseSchema } from "./database.ts";
 import { createSqliteDialect, openSqlite } from "./sqlite.ts";
@@ -37,78 +37,208 @@ function textCharge(db: Awaited<ReturnType<typeof database>>, chatId = -1) {
   } as unknown as Context);
 }
 
-test("text credits accumulate exact fractions, release unused allowance, and block parallel overspending", async () => {
+test("reported balances below 700 allow requests, tools, images and text with no reservations", async () => {
   const db = await database();
+  const chatId = -1002027011507;
+  const ctx = {
+    database: db,
+    chat: { id: chatId, type: "supergroup" },
+    from: { id: 2 },
+    telemetry: { event: () => {} },
+  } as unknown as Context;
   try {
-    await handleUsageCommand(db, -1, "-49", true, t);
-    const outcomes = await Promise.allSettled(
-      Array.from({ length: 4 }, () =>
-        textCharge(db).reserve(TOKENS_PER_CREDIT),
-      ),
-    );
-    const successful = outcomes.filter((item) => item.status === "fulfilled");
-    strictEqual(successful.length, 1);
-    strictEqual(await hasUsageRemaining(db, -1), false);
-    strictEqual((await consumeUsage(db, -1, 1)).ok, false);
-    const first = successful[0];
-    if (first.status !== "fulfilled") throw new Error("Missing reservation");
-    await first.value.settle(100);
-    await first.value.settle(100); // Idempotent settlement cannot double-charge.
-    strictEqual((await getUsageStatus(db, -1)).used, 100 / TOKENS_PER_CREDIT);
-    const next = await textCharge(db).reserve(TOKENS_PER_CREDIT);
-    strictEqual(next.tokens, TOKENS_PER_CREDIT - 100);
-    await next.settle(next.tokens);
-    strictEqual((await getUsageStatus(db, -1)).used, 1);
-    strictEqual(await hasUsageRemaining(db, -1), false);
-    await rejects(() => textCharge(db).reserve(1));
-    strictEqual((await getUsageStatus(db, 1)).used, 0);
+    await handleUsageCommand(db, chatId, "+650", true, t);
+    for (const [used, textTokens] of [
+      [100, 578],
+      [110, 498],
+    ]) {
+      await db
+        .insertInto("credit_usage")
+        .values({
+          chat_id: chatId,
+          usage_date: getUsageDate(),
+          used,
+          text_tokens: textTokens,
+        })
+        .onConflict((c) =>
+          c
+            .columns(["chat_id", "usage_date"])
+            .doUpdateSet({ used, text_tokens: textTokens }),
+        )
+        .execute();
+      strictEqual(await hasUsageRemaining(db, chatId, 2), true);
+      const charge = createCreditCharge(ctx);
+      for (const kind of [
+        "request",
+        "tool",
+        "web_search",
+        "image_attempt",
+      ] as const)
+        await charge(kind);
+      await createTextCreditCharge(ctx).charge(310);
+      strictEqual(
+        (await getUsageStatus(db, chatId)).used,
+        used + 8 + (textTokens + 310) / TOKENS_PER_CREDIT,
+      );
+    }
   } finally {
     await db.destroy();
   }
 });
 
-test("text reservations expire after a crashed attempt and unlimited credits still record text usage", async () => {
+test("credit comparisons use exact tokens at the quota boundary, independent of display rounding", async () => {
   const db = await database();
+  const chatId = -1002027011507;
   try {
-    await handleUsageCommand(db, -1, "-49", true, t);
-    await textCharge(db).reserve(TOKENS_PER_CREDIT);
-    strictEqual(await hasUsageRemaining(db, -1), false);
+    await handleUsageCommand(db, chatId, "+650", true, t);
+    for (const [textTokens, amount, expected] of [
+      [619, 1, false], // 699.998... displays as 700.00 but still has one text token.
+      [0, 1, true], // Exactly one credit left funds a request.
+      [1, 1, false], // One token short of a request.
+      [0, 2, false], // A request costing more than the balance must fail.
+    ] as const) {
+      await db
+        .insertInto("credit_usage")
+        .values({
+          chat_id: chatId,
+          usage_date: getUsageDate(),
+          used: 699,
+          text_tokens: textTokens,
+        })
+        .onConflict((c) =>
+          c
+            .columns(["chat_id", "usage_date"])
+            .doUpdateSet({ used: 699, text_tokens: textTokens }),
+        )
+        .execute();
+      strictEqual((await consumeUsage(db, chatId, amount)).ok, expected);
+      strictEqual(
+        (await getUsageStatus(db, chatId)).used,
+        699 + Number(expected) * amount + textTokens / TOKENS_PER_CREDIT,
+      );
+    }
     await db
-      .updateTable("credit_text_reservations")
-      .set({ expires_at: "2000-01-01 00:00:00" })
+      .updateTable("credit_usage")
+      .set({ used: 699, text_tokens: 619 })
+      .where("chat_id", "=", chatId)
       .execute();
-    strictEqual(await hasUsageRemaining(db, -1), true);
-    await handleUsageCommand(db, -1, "+unlimited", true, t);
-    const reservation = await textCharge(db).reserve(10000);
-    await reservation.settle(10000);
-    strictEqual((await getUsageStatus(db, -1)).used, 10000 / TOKENS_PER_CREDIT);
-    strictEqual(await hasUsageRemaining(db, -1), true);
+    strictEqual(await textCharge(db, chatId).charge(1), false);
+    strictEqual(await hasUsageRemaining(db, chatId, 2), false);
+    strictEqual((await consumeUsage(db, chatId)).ok, false);
   } finally {
     await db.destroy();
   }
 });
 
-test("default (uncapped) reservations work for unlimited and finite chats with real chat ids", async () => {
+test("usage displays always show two decimal places without rounding stored spend", async () => {
   const db = await database();
-  const chatId = -1001756869879;
+  const chatId = -1;
   try {
-    // Production streaming calls reserve() without an explicit cap.
-    const finite = await textCharge(db, chatId).reserve();
-    strictEqual(finite.tokens, 50 * TOKENS_PER_CREDIT);
-    await finite.settle(10);
+    for (const [used, textTokens, displayed] of [
+      [0, 0, "0.00"],
+      [110, 498, "110.80"],
+      [100, 578, "100.93"],
+      [7, 0, "7.00"],
+      [0, 619, "1.00"],
+    ] as const) {
+      await db
+        .insertInto("credit_usage")
+        .values({
+          chat_id: chatId,
+          usage_date: getUsageDate(),
+          used,
+          text_tokens: textTokens,
+        })
+        .onConflict((c) =>
+          c
+            .columns(["chat_id", "usage_date"])
+            .doUpdateSet({ used, text_tokens: textTokens }),
+        )
+        .execute();
+      const output = await handleUsageCommand(db, chatId, "", false, t);
+      strictEqual(
+        output.includes(
+          `settings-usage-line:${JSON.stringify({ used: displayed, quota: 50 })}`,
+        ),
+        true,
+      );
+      strictEqual(
+        (await getUsageStatus(db, chatId)).used,
+        used + textTokens / TOKENS_PER_CREDIT,
+      );
+    }
+  } finally {
+    await db.destroy();
+  }
+});
 
-    await handleUsageCommand(db, chatId, "+unlimited", true, t);
-    const unlimited = await textCharge(db, chatId).reserve();
-    strictEqual(unlimited.tokens, Number.MAX_SAFE_INTEGER);
+test("live text charges share a balance and parallel overshoot saturates at the quota", async () => {
+  const db = await database();
+  try {
+    await handleUsageCommand(db, -1, "-49", true, t);
+    const first = textCharge(db);
+    const second = textCharge(db);
+    strictEqual(await first.hasRemaining(), true);
+    strictEqual(await second.hasRemaining(), true);
+    await first.charge(100);
+    strictEqual((await getUsageStatus(db, -1)).used, 100 / TOKENS_PER_CREDIT);
+    strictEqual(await second.hasRemaining(), true);
+    const results = await Promise.all([first.charge(400), second.charge(400)]);
+    deepStrictEqual(results, [true, false]);
+    strictEqual((await getUsageStatus(db, -1)).used, 1);
+    strictEqual(await first.charge(10000), false);
+    strictEqual(await second.charge(10000), false);
+    strictEqual((await getUsageStatus(db, -1)).used, 1);
+    strictEqual((await consumeUsage(db, -1)).ok, false);
+    strictEqual((await getUsageStatus(db, 1)).used, 0);
+    await rejects(() => first.charge(-1));
+  } finally {
+    await db.destroy();
+  }
+});
+
+test("live text consumption emits only the debit applied below the cap", async () => {
+  const db = await database();
+  const events: number[] = [];
+  try {
+    await handleUsageCommand(db, -1, "-49", true, t);
+    const charge = createTextCreditCharge({
+      database: db,
+      chat: { id: -1, type: "supergroup" },
+      telemetry: {
+        event: (_name: string, payload: { credits: number }) =>
+          events.push(payload.credits),
+      },
+    } as unknown as Context);
+    await charge.charge(100);
+    await charge.charge(1000);
+    await charge.charge(1000);
+    strictEqual(events.length, 2);
     strictEqual(
-      (await db.selectFrom("credit_text_reservations").selectAll().execute())
-        .length,
-      0,
+      events.reduce((a, b) => a + b, 0),
+      1,
     );
-    await unlimited.settle(1240);
-    strictEqual(
-      (await getUsageStatus(db, chatId)).used,
-      1250 / TOKENS_PER_CREDIT,
+    strictEqual((await getUsageStatus(db, -1)).used, 1);
+  } finally {
+    await db.destroy();
+  }
+});
+
+test("credit errors show the actual shortage to two decimal places", async () => {
+  const db = await database();
+  try {
+    await handleUsageCommand(db, -1, "-49", true, t);
+    const charge = createCreditCharge({
+      database: db,
+      chat: { id: -1, type: "supergroup" },
+      telemetry: { event: () => {} },
+    } as unknown as Context);
+    await textCharge(db).charge(310);
+    await rejects(() => charge("request"), /0\.50 available; 1\.00 required/);
+    await textCharge(db).charge(1000);
+    await rejects(
+      () => charge("request"),
+      /Daily credit limit reached \(1\.00\/1\)/,
     );
   } finally {
     await db.destroy();
@@ -133,8 +263,7 @@ test("usage migration preserves existing credit charges and initializes text acc
       .execute();
     await migrateUsage(db);
     strictEqual((await getUsageStatus(db, -1)).used, 7);
-    const reservation = await textCharge(db).reserve(TOKENS_PER_CREDIT);
-    await reservation.settle(TOKENS_PER_CREDIT);
+    await textCharge(db).charge(TOKENS_PER_CREDIT);
     await migrateUsage(db);
     strictEqual((await getUsageStatus(db, -1)).used, 8);
   } finally {
@@ -291,12 +420,10 @@ test("each request costs one fixed credit plus one credit per 620 generated text
       const charge = createCreditCharge(ctx, guest);
       await charge("request");
       strictEqual((await getUsageStatus(db, chatId)).used, 1);
-      const first = await createTextCreditCharge(ctx, guest).reserve(620);
-      await first.settle(620);
+      await createTextCreditCharge(ctx, guest).charge(620);
       strictEqual((await getUsageStatus(db, chatId)).used, 2);
       await charge("request");
-      const second = await createTextCreditCharge(ctx, guest).reserve(620);
-      await second.settle(310);
+      await createTextCreditCharge(ctx, guest).charge(310);
       strictEqual((await getUsageStatus(db, chatId)).used, 3.5);
       await handleUsageCommand(db, chatId, "-46", true, t);
       await rejects(() => charge("request"));
@@ -333,15 +460,7 @@ test("ADMIN_ID has unlimited credits in every chat and guest mode without granti
         ] as const)
           await charge(kind);
         const meter = createTextCreditCharge(ctx, guest);
-        const reservations = await Promise.all([
-          meter.reserve(10000),
-          meter.reserve(10000),
-        ]);
-        strictEqual(reservations[0].tokens, 10000);
-        strictEqual(reservations[1].tokens, 10000);
-        await Promise.all(
-          reservations.map((reservation) => reservation.settle(10000)),
-        );
+        await Promise.all([meter.charge(10000), meter.charge(10000)]);
         strictEqual(events.length, 6);
         for (const event of events) {
           strictEqual(event.usage_limit, "unlimited");
@@ -352,7 +471,14 @@ test("ADMIN_ID has unlimited credits in every chat and guest mode without granti
         strictEqual(await hasUsageRemaining(db, chatId), false);
         await rejects(() => createCreditCharge(regular, guest)("request"));
         await rejects(() => createCreditCharge(regular, guest)("tool"));
-        await rejects(() => createTextCreditCharge(regular, guest).reserve(1));
+        strictEqual(
+          await createTextCreditCharge(regular, guest).hasRemaining(),
+          false,
+        );
+        strictEqual(
+          await createTextCreditCharge(regular, guest).charge(1),
+          false,
+        );
         const status = await getUsageStatus(db, chatId);
         strictEqual(status.quota, 0);
         strictEqual(status.unlimited, false);
@@ -364,21 +490,23 @@ test("ADMIN_ID has unlimited credits in every chat and guest mode without granti
   }
 });
 
-test("reservations last as long as the request and are freed when the bot restarts", async () => {
+test("migration removes legacy reservations without changing usage", async () => {
   const db = await database();
   try {
-    await handleUsageCommand(db, -1, "-49", true, t);
-    await textCharge(db).reserve(TOKENS_PER_CREDIT);
-    // A long-running request keeps holding its balance well past two minutes.
-    const [row] = await db
-      .selectFrom("credit_text_reservations")
-      .select(sql<number>`julianday(expires_at) - julianday('now')`.as("days"))
+    await consumeUsage(db, -1, 10);
+    await db.schema
+      .createTable("credit_text_reservations")
+      .addColumn("tokens", "integer")
       .execute();
-    strictEqual(row.days > 0.99, true);
-    strictEqual(await hasUsageRemaining(db, -1), false);
-    // Startup migration: the previous process is gone, so its hold is too.
     await migrateUsage(db);
+    strictEqual((await getUsageStatus(db, -1)).used, 10);
     strictEqual(await hasUsageRemaining(db, -1), true);
+    strictEqual(
+      (await db.introspection.getTables()).some(
+        (table) => table.name === "credit_text_reservations",
+      ),
+      false,
+    );
   } finally {
     await db.destroy();
   }

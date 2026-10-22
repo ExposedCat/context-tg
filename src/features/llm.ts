@@ -73,9 +73,8 @@ import {
 } from "./trolling-mode.ts";
 import {
   type CreditCharge,
+  CreditLimitError,
   type TextCreditCharge,
-  TextCreditLimitError,
-  type TextCreditReservation,
 } from "./usage.ts";
 
 export type { LlmReport } from "./llm-tools/reports.ts";
@@ -279,6 +278,8 @@ const CORRUPTED_IMAGE_REMOVAL_NOTICE_PATTERN =
 const MARKDOWN_TOOL_OUTPUTS = new Set<string>(["read_web_page"]);
 
 type LlmRequestState = {
+  creditExhausted?: boolean;
+  creditWrapUpStarted?: boolean;
   toolBudget: LlmToolBudget;
   timing: ReturnType<typeof createLlmCallTiming>;
   financeMcp?: FinanceMcpTools;
@@ -353,10 +354,16 @@ function getClient(): OpenAI {
     apiKey: APP_ENV.LLM_API_KEY,
     baseURL: APP_ENV.LLM_BASE_URL,
     timeout: NO_TIMEOUT_MS,
-    // Retry attempts must each reserve budget in the application loop.
+    // The application handles retries and credit checks.
     maxRetries: 0,
   });
 }
+
+// A local checkpoint can preserve streamed text without executing partial tool
+// arguments. The outer loop uses it to request exactly one final answer.
+const creditLimitedResponses = new WeakSet<ApiResponse>();
+const TEXT_CHARGE_BATCH_TOKENS = 128;
+const TEXT_CHARGE_INTERVAL_MS = 1000;
 
 async function createModelResponse(
   client: OpenAI,
@@ -366,31 +373,18 @@ async function createModelResponse(
   onStreamEvent?: LlmRequestOptions["onStreamEvent"],
   textCredits?: TextCreditCharge,
   preservePartial = false,
+  creditWrapUp = false,
 ): Promise<ApiResponse> {
-  let textReservation: TextCreditReservation | undefined;
   const textMeter = new TextCreditMeter();
   let abortStream: (() => void) | undefined;
   let receivedEvent = false;
+  let billedTokens = 0;
+  let lastCharge = performance.now();
   try {
-    textReservation = await textCredits?.reserve();
     throwIfAborted(signal);
-    // Normal streaming answers have no application token ceiling. The wallet
-    // meters visible text; input, reasoning and tool arguments do not spend it.
-    const nonStreamingAllowance =
-      !APP_ENV.LLM_STREAMING &&
-      textReservation &&
-      textReservation.tokens < Number.MAX_SAFE_INTEGER
-        ? textReservation.tokens
-        : Infinity;
-    const maxOutputTokens = Math.min(
-      outputLimit ?? Infinity,
-      nonStreamingAllowance,
-    );
     const modelParams = {
       ...params,
-      ...(Number.isFinite(maxOutputTokens)
-        ? { max_output_tokens: maxOutputTokens }
-        : {}),
+      ...(outputLimit !== undefined ? { max_output_tokens: outputLimit } : {}),
     };
     let response: ApiResponse;
     if (APP_ENV.LLM_STREAMING) {
@@ -404,20 +398,26 @@ async function createModelResponse(
         receivedEvent = true;
         throwIfAborted(signal);
         textMeter.observe(event);
-        if (textReservation && textMeter.tokens >= textReservation.tokens) {
-          abortStream();
-          return textMeter.limitedResponse(textReservation.tokens);
-        }
-        await onStreamEvent?.(event);
-        throwIfAborted(signal);
         if (
           event.type === "response.completed" ||
           event.type === "response.incomplete" ||
           event.type === "response.failed"
         ) {
           terminalResponse = event.response;
-          break;
+          textMeter.complete(event.response);
         }
+        if (
+          !(await flushTextCredits(terminalResponse !== undefined)) &&
+          !creditWrapUp
+        ) {
+          abortStream();
+          const checkpoint = textMeter.limitedResponse(textMeter.tokens, "");
+          creditLimitedResponses.add(checkpoint);
+          return checkpoint;
+        }
+        await onStreamEvent?.(event);
+        throwIfAborted(signal);
+        if (terminalResponse) break;
       }
       throwIfAborted(signal);
       if (!terminalResponse)
@@ -425,10 +425,10 @@ async function createModelResponse(
       response = terminalResponse;
     } else {
       response = await client.responses.create(modelParams, { signal });
+      textMeter.complete(response);
+      if (!(await flushTextCredits(true)) && !creditWrapUp)
+        creditLimitedResponses.add(response);
     }
-    textMeter.complete(response);
-    if (textReservation && textMeter.tokens > textReservation.tokens)
-      return textMeter.limitedResponse(textReservation.tokens);
     if (
       preservePartial &&
       response.incomplete_details?.reason === "max_output_tokens"
@@ -444,10 +444,7 @@ async function createModelResponse(
     return response;
   } catch (error) {
     throwIfAborted(signal);
-    if (error instanceof TextCreditLimitError) throw error;
     if (receivedEvent) {
-      // Never replay a generation after receiving stream events: it may have
-      // generated tool arguments or text that was already charged.
       logError("Model stream ended early", { cause: error });
       throw new LlmRequestError(
         "Response stream interrupted",
@@ -458,22 +455,26 @@ async function createModelResponse(
     throw error;
   } finally {
     abortStream?.();
-    await settleTextCredits(textReservation, textMeter.tokens);
+    await flushTextCredits(true);
   }
-}
 
-async function settleTextCredits(
-  reservation: TextCreditReservation | undefined,
-  tokens: number,
-) {
-  try {
-    await reservation?.settle(tokens);
-  } catch {
-    throw new LlmRequestError(
-      "Text credit settlement failed",
-      "Text credit accounting could not complete; the request was stopped.",
-      "token_limit",
+  async function flushTextCredits(force = false): Promise<boolean> {
+    if (!textCredits) return true;
+    const tokens = textMeter.tokens;
+    if (
+      !force &&
+      tokens - billedTokens < TEXT_CHARGE_BATCH_TOKENS &&
+      performance.now() - lastCharge < TEXT_CHARGE_INTERVAL_MS
+    )
+      return true;
+    // Tokenization may merge the last token as deltas arrive. Batches only
+    // charge the positive increment; small boundary overlaps are acceptable.
+    const remaining = await textCredits.charge(
+      Math.max(0, tokens - billedTokens),
     );
+    billedTokens = Math.max(billedTokens, tokens);
+    lastCharge = performance.now();
+    return remaining;
   }
 }
 
@@ -1369,6 +1370,7 @@ async function runFunctionToolCall(
     throwIfAborted(signal);
   } catch (error) {
     throwIfAborted(signal);
+    if (error instanceof CreditLimitError) state.creditExhausted = true;
     const details = getErrorDetail(error);
     state.errors.push({ tool: call.name, details });
     state.hadToolErrors = true;
@@ -1625,6 +1627,7 @@ async function createLlmResponse(
   financeMcp?: FinanceMcpTools,
   onStreamEvent?: LlmRequestOptions["onStreamEvent"],
   textCredits?: TextCreditCharge,
+  creditWrapUp = false,
 ): Promise<ApiResponse> {
   throwIfAborted(signal);
   const toolDefinitions = getToolDefinitions(tools, financeMcp);
@@ -1660,6 +1663,7 @@ async function createLlmResponse(
     onStreamEvent,
     textCredits,
     true,
+    creditWrapUp,
   );
 }
 
@@ -1688,24 +1692,40 @@ async function createLlmResponseWithRetries(
     throwIfAborted(options.signal);
     const immediate = !state.receivedResponse;
 
+    if (options.textCredits && !(await options.textCredits.hasRemaining()))
+      state.creditExhausted = true;
+    const creditWrapUp = state.creditExhausted === true;
+    if (creditWrapUp) state.creditWrapUpStarted = true;
     try {
       const response = await createLlmResponse(
         client,
         currentInput,
-        state.toolBudget.exhausted ? [] : tools,
+        creditWrapUp || state.toolBudget.exhausted ? [] : tools,
         state.inputItems,
         model,
-        state.toolBudget.exhausted
-          ? `${instructions}\n\n${TOOL_LIMIT_WRAP_UP}`
-          : instructions,
+        creditWrapUp
+          ? `${instructions}\n\n${CREDIT_LIMIT_WRAP_UP}`
+          : state.toolBudget.exhausted
+            ? `${instructions}\n\n${TOOL_LIMIT_WRAP_UP}`
+            : instructions,
         settings,
         options.signal,
-        state.toolBudget.exhausted ? undefined : state.financeMcp,
+        creditWrapUp || state.toolBudget.exhausted
+          ? undefined
+          : state.financeMcp,
         options.onStreamEvent,
         options.textCredits,
+        creditWrapUp,
       );
+      const creditLimited = creditLimitedResponses.has(response);
+      if (creditLimited) state.creditExhausted = true;
       recordResponseDebug(response, state, model, settings);
-      const responseError = getResponseError(response);
+      // Exhaustion can interrupt reasoning before any visible text exists.
+      // An empty local checkpoint still needs its final turn, not an empty-
+      // response retry.
+      const responseError = creditLimited
+        ? undefined
+        : getResponseError(response);
 
       if (responseError) {
         if (responseError.kind === "token_limit") {
@@ -1757,16 +1777,23 @@ async function createLlmResponseWithRetries(
           checkpoint,
         );
       }
-      if (
-        error instanceof TextCreditLimitError ||
-        (error instanceof LlmRequestError && error.kind === "token_limit")
-      ) {
+      if (error instanceof LlmRequestError && error.kind === "token_limit") {
         throw new LlmRequestError(
           "Request token limit reached",
-          error instanceof LlmRequestError ? error.details : error.message,
+          error.details,
           "token_limit",
           state.lastResponseId,
         );
+      }
+      if (creditWrapUp) {
+        throw error instanceof LlmRequestError
+          ? error
+          : new LlmRequestError(
+              "Final answer failed",
+              getErrorDetail(error),
+              "error",
+              state.lastResponseId,
+            );
       }
       lastError = error;
       const recoveredInput = recoverUnavailableReadImageInput(
@@ -1888,6 +1915,9 @@ async function createLlmResponseWithRetries(
   );
 }
 
+const CREDIT_LIMIT_WRAP_UP =
+  "The daily credit limit has been reached. Stop all tool use and research. Give one concise final answer using the information already available. Briefly mention anything you could not finish because the daily credit limit was reached.";
+
 const TOOL_LIMIT_WRAP_UP =
   "Tool limit reached, wrap up. Do not call any more tools. Finish your answer using the results already available, and briefly state any remaining limitation.";
 
@@ -1930,6 +1960,39 @@ async function resolveFunctionToolCalls(
   while (true) {
     const functionCalls = getFunctionToolCalls(response);
 
+    if (options.textCredits && !(await options.textCredits.hasRemaining()))
+      state.creditExhausted = true;
+    if (state.creditExhausted && !state.creditWrapUpStarted) {
+      await options.onProgress?.({
+        toolCallCount,
+        responseId: state.lastResponseId,
+        segments: getResponseProgressSegments(response),
+      });
+      response = await createLlmResponseWithRetries(
+        client,
+        [
+          ...functionCalls.map((call) =>
+            createToolOutput(
+              call,
+              JSON.stringify({
+                error: "Daily credit limit reached",
+                details: CREDIT_LIMIT_WRAP_UP,
+              }),
+            ),
+          ),
+          { type: "message", role: "developer", content: CREDIT_LIMIT_WRAP_UP },
+        ],
+        tools,
+        state.lastResponseId,
+        state,
+        options,
+        model,
+        instructions,
+        settings,
+      );
+      continue;
+    }
+
     if (functionCalls.length === 0) {
       const segments = getResponseProgressSegments(response, true);
       if (segments.length > 0) {
@@ -1950,12 +2013,14 @@ async function resolveFunctionToolCalls(
 
     // Even an oversized parallel batch only executes the remaining allowance.
     // Every denied call gets a result, keeping the replay/checkpoint valid.
-    if (wrapUpRequested) {
+    if (wrapUpRequested || state.creditWrapUpStarted) {
       const meter = new TextCreditMeter();
       meter.complete(response);
       response = meter.limitedResponse(
         meter.tokens,
-        "Tool limit reached. I could not finish the answer with the available results.",
+        state.creditWrapUpStarted
+          ? "Daily credit limit reached. I could not finish the answer with the available results."
+          : "Tool limit reached. I could not finish the answer with the available results.",
       );
       await recordResponse(
         response,
@@ -2156,16 +2221,6 @@ async function requestLlmWithInstructions(
 
     status = state.hadToolErrors ? "with_errors" : "success";
     return result;
-  } catch (error) {
-    if (error instanceof TextCreditLimitError) {
-      throw new LlmRequestError(
-        "Request token limit reached",
-        error.message,
-        "token_limit",
-        state.lastResponseId,
-      );
-    }
-    throw error;
   } finally {
     try {
       await state.financeMcp?.close().catch((error) => {

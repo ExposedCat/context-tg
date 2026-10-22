@@ -42,98 +42,91 @@ function wallet(database: Database, chatId = -1) {
   } as unknown as Context);
 }
 
-test("wallet exhaustion aborts after ten funded text tokens and preserves the partial answer", async () => {
+test("exhaustion flushes live usage, preserves progress and requests one final answer without tools", async () => {
   setLlmDeploymentName("small", "stream-test");
   const database = await initDatabase()();
   const originalFetch = globalThis.fetch;
   let requests = 0;
   let closed = false;
+  const partial = "123".repeat(140);
+  const progress: string[] = [];
   try {
     await handleUsageCommand(database, -1, "-49", true, (key) => key);
-    const spent = await wallet(database).reserve(TOKENS_PER_CREDIT);
-    await spent.settle(TOKENS_PER_CREDIT - 10);
-    globalThis.fetch = (async (_url, init) => {
-      requests++;
-      // Only visible text spends the ten remaining token credits; the
-      // application does not cap reasoning or the provider's output size.
-      strictEqual(JSON.parse(String(init?.body)).max_output_tokens, undefined);
-      return new Response(
-        new ReadableStream<Uint8Array>({
-          start(controller) {
-            controller.enqueue(frame(created));
-            for (const part of [
-              "1",
-              " ",
-              "2",
-              " ",
-              "3",
-              " ",
-              "4",
-              " ",
-              "5",
-              " ",
-              "6",
-              " ",
-            ]) {
-              controller.enqueue(frame({ ...delta, delta: part }));
-            }
-          },
-          cancel() {
-            closed = true;
-          },
-        }),
-        { headers: { "content-type": "text/event-stream" } },
-      );
-    }) as typeof fetch;
-    const result = await requestLlm(
-      "Count",
-      [],
-      undefined,
-      { textCredits: wallet(database) },
-      "Be brief.",
-    );
-    strictEqual(requests, 1);
-    strictEqual(closed, true);
-    ok(result.response?.startsWith("1 2 3 4 5 "));
-    ok(result.response?.includes("Text credit limit reached"));
-    ok(!result.response?.includes("6 "));
-    strictEqual((await getUsageStatus(database, -1)).used, 1);
-    strictEqual(
-      (
-        await database
-          .selectFrom("credit_text_reservations")
-          .selectAll()
-          .execute()
-      ).length,
-      0,
-    );
-    await rejects(
-      () =>
-        requestLlm(
-          "More",
-          [],
-          undefined,
-          { textCredits: wallet(database) },
-          "Be brief.",
-        ),
-      (error) =>
-        error instanceof LlmRequestError && error.kind === "token_limit",
-    );
-    strictEqual(requests, 1);
-
-    // An unlimited chat continues the conversation: the local limit notice in
-    // history must not leak its synthetic id, and nothing is cut off.
-    await handleUsageCommand(database, -1, "+unlimited", true, (key) => key);
-    let replayedIds: string[] = [];
+    await wallet(database).charge(TOKENS_PER_CREDIT - 10);
     globalThis.fetch = (async (_url, init) => {
       requests++;
       const body = JSON.parse(String(init?.body));
-      replayedIds = body.input
-        .map((item: { id?: string }) => item.id)
-        .filter((id: string | undefined) => id !== undefined);
+      strictEqual(body.max_output_tokens, undefined);
+      if (requests === 1)
+        return new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.enqueue(frame(created));
+              controller.enqueue(frame({ ...delta, delta: partial }));
+            },
+            cancel() {
+              closed = true;
+            },
+          }),
+          { headers: { "content-type": "text/event-stream" } },
+        );
+      strictEqual(body.tools, undefined);
+      ok(body.instructions.includes("daily credit limit has been reached"));
+      ok(
+        body.input.some(
+          (item: { role?: string; content?: unknown }) =>
+            item.role === "assistant" &&
+            JSON.stringify(item.content).includes(partial),
+        ),
+      );
       return sse([
         created,
-        delta,
+        { type: "response.completed", response: response("resp_quota_final") },
+      ]);
+    }) as typeof fetch;
+    const result = await requestLlm(
+      "Count",
+      ["set_reply_message_id"],
+      undefined,
+      {
+        textCredits: wallet(database),
+        onProgress: ({ segments }) => {
+          progress.push(
+            ...(segments ?? []).flatMap((s) => (s.text ? [s.text] : [])),
+          );
+        },
+        chargeCredits: async () => {
+          throw new Error("Tools must not execute after exhaustion");
+        },
+      },
+      "Be brief.",
+    );
+    strictEqual(requests, 2);
+    strictEqual(closed, true);
+    strictEqual(result.response, "Hello!");
+    ok(progress.some((text) => text.includes(partial)));
+    strictEqual((await getUsageStatus(database, -1)).used, 1);
+    const { createCreditCharge } = await import("./usage.ts");
+    await rejects(
+      () =>
+        createCreditCharge({
+          database,
+          chat: { id: -1, type: "supergroup" },
+          telemetry: { event: () => {} },
+        } as unknown as Context)("request"),
+      /Daily credit limit reached/,
+    );
+    strictEqual(requests, 2);
+    await handleUsageCommand(database, -1, "+unlimited", true, (key) => key);
+    globalThis.fetch = (async (_url, init) => {
+      const body = JSON.parse(String(init?.body));
+      ok(
+        body.input.every(
+          (item: { id?: string }) => !item.id?.startsWith("msg-local-"),
+        ),
+      );
+      return sse([
+        created,
         { type: "response.completed", response: response("resp_unlimited") },
       ]);
     }) as typeof fetch;
@@ -144,9 +137,373 @@ test("wallet exhaustion aborts after ten funded text tokens and preserves the pa
       { textCredits: wallet(database) },
       "Be brief.",
     );
+    strictEqual(continued.response, "Hello!");
+  } finally {
+    globalThis.fetch = originalFetch;
+    await database.destroy();
+  }
+});
+
+test("two active streams publish batches and both finish once a parallel task drains the balance", async () => {
+  setLlmDeploymentName("small", "stream-test");
+  const database = await initDatabase()();
+  const originalFetch = globalThis.fetch;
+  const chunk = "123".repeat(128);
+  let readyCount = 0;
+  let ready!: () => void;
+  const bothReady = new Promise<void>((resolve) => {
+    ready = resolve;
+  });
+  let release!: () => void;
+  const paused = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let starts = 0;
+  let finals = 0;
+  let closed = 0;
+  const requests: Array<ReturnType<typeof requestLlm>> = [];
+  globalThis.fetch = (async (_url, init) => {
+    const body = JSON.parse(String(init?.body));
+    if (body.instructions.includes("daily credit limit has been reached")) {
+      finals++;
+      strictEqual(body.tools, undefined);
+      return sse([
+        created,
+        {
+          type: "response.completed",
+          response: response(`resp_shared_final_${finals}`),
+        },
+      ]);
+    }
+    starts++;
+    return new Response(
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(frame(created));
+          controller.enqueue(frame({ ...delta, delta: chunk }));
+          controller.enqueue(frame({ ...delta, delta: chunk }));
+        },
+        cancel() {
+          closed++;
+        },
+      }),
+      { headers: { "content-type": "text/event-stream" } },
+    );
+  }) as typeof fetch;
+  try {
+    await handleUsageCommand(database, -1, "-49", true, (key) => key);
+    for (let i = 0; i < 2; i++)
+      requests.push(
+        requestLlm(
+          "Work",
+          ["set_reply_message_id"],
+          undefined,
+          {
+            textCredits: wallet(database),
+            onStreamEvent: async (event) => {
+              if (event.type === "response.output_text.delta") {
+                if (++readyCount === 2) ready();
+                await paused;
+              }
+            },
+            chargeCredits: async () => {
+              throw new Error("Exhausted tasks must not run tools");
+            },
+          },
+          "Be brief.",
+        ),
+      );
+    await bothReady;
+    strictEqual(starts, 2);
+    strictEqual(
+      (await getUsageStatus(database, -1)).used,
+      256 / TOKENS_PER_CREDIT,
+    );
+    await wallet(database).charge(500);
+    strictEqual((await getUsageStatus(database, -1)).used, 1);
+    release();
+    const answers = await Promise.all(requests);
+    deepStrictEqual(
+      answers.map((answer) => answer.response),
+      ["Hello!", "Hello!"],
+    );
+    strictEqual(finals, 2);
+    strictEqual(closed, 2);
+    strictEqual((await getUsageStatus(database, -1)).used, 1);
+  } finally {
+    release();
+    await Promise.allSettled(requests);
+    globalThis.fetch = originalFetch;
+    await database.destroy();
+  }
+});
+
+test("credit exhaustion during a tool batch disables further tools, including a disobedient final turn", async () => {
+  setLlmDeploymentName("small", "stream-test");
+  const database = await initDatabase()();
+  const originalFetch = globalThis.fetch;
+  const { createCreditCharge } = await import("./usage.ts");
+  const ctx = {
+    database,
+    chat: { id: -1, type: "supergroup" },
+    telemetry: { event: () => {} },
+  } as unknown as Context;
+  const tool = (id: string) => ({
+    type: "function_call",
+    id,
+    call_id: id,
+    name: "set_reply_message_id",
+    arguments: '{"message_id":7}',
+    status: "completed",
+  });
+  let requests = 0;
+  globalThis.fetch = (async (_url, init) => {
+    const body = JSON.parse(String(init?.body));
+    requests++;
+    if (requests === 1)
+      return sse([
+        created,
+        {
+          type: "response.completed",
+          response: response("resp_credit_tools", [
+            tool("first"),
+            tool("denied"),
+          ]),
+        },
+      ]);
+    strictEqual(body.tools, undefined);
+    ok(body.instructions.includes("daily credit limit has been reached"));
+    // Even a provider ignoring tools-disabled must not start another loop.
+    return sse([
+      created,
+      {
+        type: "response.completed",
+        response: response("resp_ignored_credit_limit", [tool("ignored")]),
+      },
+    ]);
+  }) as typeof fetch;
+  try {
+    await handleUsageCommand(database, -1, "-49", true, (key) => key);
+    const answer = await requestLlm(
+      "Reply",
+      ["set_reply_message_id"],
+      undefined,
+      {
+        textCredits: wallet(database),
+        chargeCredits: createCreditCharge(ctx),
+        context: { chatId: -1, messageId: 1 },
+      },
+      "Be brief.",
+    );
     strictEqual(requests, 2);
-    ok(replayedIds.every((id) => !id.startsWith("msg-local-")));
-    ok(!continued.response?.includes("Text credit limit reached"));
+    strictEqual(answer.replyMessageId, 7);
+    ok(answer.response?.includes("Daily credit limit reached"));
+    strictEqual((await getUsageStatus(database, -1)).used, 1);
+  } finally {
+    globalThis.fetch = originalFetch;
+    await database.destroy();
+  }
+});
+
+test("exhaustion during reasoning before any text still gets a final answer", async () => {
+  setLlmDeploymentName("small", "stream-test");
+  const database = await initDatabase()();
+  const originalFetch = globalThis.fetch;
+  const originalNow = performance.now;
+  let offset = 0;
+  let requests = 0;
+  let closed = false;
+  performance.now = () => originalNow.call(performance) + offset;
+  globalThis.fetch = (async () => {
+    if (++requests === 2)
+      return sse([
+        created,
+        {
+          type: "response.completed",
+          response: response("resp_no_text_final"),
+        },
+      ]);
+    return new Response(
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(frame(created));
+          controller.enqueue(
+            frame({
+              type: "response.output_item.added",
+              output_index: 0,
+              item: { id: "rs_pending", type: "reasoning", summary: [] },
+            }),
+          );
+        },
+        cancel() {
+          closed = true;
+        },
+      }),
+      { headers: { "content-type": "text/event-stream" } },
+    );
+  }) as unknown as typeof fetch;
+  try {
+    await handleUsageCommand(database, -1, "-49", true, (key) => key);
+    const answer = await requestLlm(
+      "Think",
+      [],
+      undefined,
+      {
+        textCredits: wallet(database),
+        onStreamEvent: async (event) => {
+          if (event.type === "response.created" && requests === 1) {
+            await wallet(database).charge(TOKENS_PER_CREDIT);
+            offset += 1001;
+          }
+        },
+      },
+      "Be brief.",
+    );
+    strictEqual(answer.response, "Hello!");
+    strictEqual(requests, 2);
+    strictEqual(closed, true);
+    strictEqual((await getUsageStatus(database, -1)).used, 1);
+  } finally {
+    performance.now = originalNow;
+    globalThis.fetch = originalFetch;
+    await database.destroy();
+  }
+});
+
+test("small text batches publish after one second before the response completes", async () => {
+  setLlmDeploymentName("small", "stream-test");
+  const database = await initDatabase()();
+  const originalFetch = globalThis.fetch;
+  const originalNow = performance.now;
+  let offset = 0;
+  performance.now = () => originalNow.call(performance) + offset;
+  globalThis.fetch = (async () =>
+    sse([
+      created,
+      delta,
+      { type: "response.completed", response: response("resp_timed_charge") },
+    ])) as unknown as typeof fetch;
+  try {
+    await requestLlm(
+      "Hello",
+      [],
+      undefined,
+      {
+        textCredits: wallet(database),
+        onStreamEvent: async (event) => {
+          if (event.type === "response.created") offset += 1001;
+          if (event.type === "response.output_text.delta")
+            strictEqual(
+              (await getUsageStatus(database, -1)).used,
+              countTextTokens("Hello") / TOKENS_PER_CREDIT,
+            );
+        },
+      },
+      "Be brief.",
+    );
+    strictEqual(
+      (await getUsageStatus(database, -1)).used,
+      countTextTokens("Hello!") / TOKENS_PER_CREDIT,
+    );
+  } finally {
+    performance.now = originalNow;
+    globalThis.fetch = originalFetch;
+    await database.destroy();
+  }
+});
+
+test("non-streaming output can overlap the quota and still gets one final turn", async () => {
+  setLlmDeploymentName("small", "stream-test");
+  const { APP_ENV } = await import("./env.ts");
+  const previousStreaming = APP_ENV.LLM_STREAMING;
+  const database = await initDatabase()();
+  const originalFetch = globalThis.fetch;
+  let requests = 0;
+  Object.assign(APP_ENV, { LLM_STREAMING: false });
+  globalThis.fetch = (async (_url, init) => {
+    const body = JSON.parse(String(init?.body));
+    strictEqual(body.stream, undefined);
+    strictEqual(body.max_output_tokens, undefined);
+    if (++requests === 2) {
+      strictEqual(body.tools, undefined);
+      ok(body.instructions.includes("daily credit limit has been reached"));
+    }
+    return Response.json(response(`resp_nonstream_${requests}`));
+  }) as typeof fetch;
+  try {
+    await handleUsageCommand(database, -1, "-49", true, (key) => key);
+    await wallet(database).charge(TOKENS_PER_CREDIT - 1);
+    const answer = await requestLlm(
+      "Hello",
+      ["set_reply_message_id"],
+      undefined,
+      { textCredits: wallet(database) },
+      "Be brief.",
+    );
+    strictEqual(answer.response, "Hello!");
+    strictEqual(requests, 2);
+    strictEqual((await getUsageStatus(database, -1)).used, 1);
+  } finally {
+    Object.assign(APP_ENV, { LLM_STREAMING: previousStreaming });
+    globalThis.fetch = originalFetch;
+    await database.destroy();
+  }
+});
+
+test("an exhausted task does not retry a failed final response", async () => {
+  setLlmDeploymentName("small", "stream-test");
+  const database = await initDatabase()();
+  const originalFetch = globalThis.fetch;
+  let requests = 0;
+  let transportFailure = false;
+  globalThis.fetch = (async (_url, init) => {
+    requests++;
+    if (transportFailure) return new Response("Unavailable", { status: 503 });
+    const body = JSON.parse(String(init?.body));
+    strictEqual(body.tools, undefined);
+    ok(body.instructions.includes("daily credit limit has been reached"));
+    return sse([
+      created,
+      {
+        type: "response.failed",
+        response: {
+          ...response("resp_failed_final", []),
+          status: "failed",
+          error: { code: "content_filter", message: "Blocked" },
+        },
+      },
+    ]);
+  }) as typeof fetch;
+  try {
+    await handleUsageCommand(database, -1, "-49", true, (key) => key);
+    await wallet(database).charge(TOKENS_PER_CREDIT);
+    await rejects(
+      () =>
+        requestLlm(
+          "Reply",
+          ["set_reply_message_id"],
+          undefined,
+          { textCredits: wallet(database) },
+          "Be brief.",
+        ),
+      LlmRequestError,
+    );
+    strictEqual(requests, 1);
+    requests = 0;
+    transportFailure = true;
+    await rejects(
+      () =>
+        requestLlm(
+          "Reply",
+          [],
+          undefined,
+          { textCredits: wallet(database) },
+          "Be brief.",
+        ),
+      LlmRequestError,
+    );
+    strictEqual(requests, 1);
+    strictEqual((await getUsageStatus(database, -1)).used, 1);
   } finally {
     globalThis.fetch = originalFetch;
     await database.destroy();
@@ -233,7 +590,7 @@ test("text credits count progress and final text, excluding input, reasoning and
   }
 });
 
-test("canceling streamed text charges only received text and refunds unused reservation", async () => {
+test("canceling streamed text flushes only received text", async () => {
   setLlmDeploymentName("small", "stream-test");
   const database = await initDatabase()();
   const originalFetch = globalThis.fetch;
@@ -272,16 +629,92 @@ test("canceling streamed text charges only received text and refunds unused rese
       (await getUsageStatus(database, -1)).used,
       countTextTokens("Hello") / TOKENS_PER_CREDIT,
     );
+  } finally {
+    globalThis.fetch = originalFetch;
+    await database.destroy();
+  }
+});
+
+test("a paused stream leaves credits for a concurrent request and charges long answers in batches", async () => {
+  setLlmDeploymentName("small", "stream-test");
+  const database = await initDatabase()();
+  const originalFetch = globalThis.fetch;
+  const { createCreditCharge } = await import("./usage.ts");
+  const ctx = {
+    database,
+    chat: { id: -1, type: "supergroup" },
+    telemetry: { event: () => {} },
+  } as unknown as Context;
+  const chargeCredits = createCreditCharge(ctx);
+  const text = "123".repeat(TOKENS_PER_CREDIT * 2 + 10);
+  let started!: () => void;
+  const ready = new Promise<void>((resolve) => {
+    started = resolve;
+  });
+  let release!: () => void;
+  const paused = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let requests = 0;
+  globalThis.fetch = (async () => {
+    const answer = ++requests === 1 ? text : "Hello!";
+    return sse([
+      created,
+      { ...delta, delta: answer },
+      {
+        type: "response.completed",
+        response: response(`resp_parallel_${requests}`, [
+          {
+            type: "message",
+            id: "msg_pending",
+            role: "assistant",
+            status: "completed",
+            content: [{ type: "output_text", text: answer, annotations: [] }],
+          },
+        ]),
+      },
+    ]);
+  }) as unknown as typeof fetch;
+  let first: ReturnType<typeof requestLlm> | undefined;
+  try {
+    await chargeCredits("request");
+    first = requestLlm(
+      "Long answer",
+      [],
+      undefined,
+      {
+        textCredits: wallet(database),
+        onStreamEvent: async (event) => {
+          if (event.type === "response.created") {
+            started();
+            await paused;
+          }
+        },
+      },
+      "Answer the request.",
+    );
+    await ready;
+    strictEqual((await getUsageStatus(database, -1)).used, 1);
+    await chargeCredits("request");
+    await chargeCredits("tool", "set_reply_message_id");
+    const second = await requestLlm(
+      "Hello",
+      [],
+      undefined,
+      { textCredits: wallet(database) },
+      "Be brief.",
+    );
+    strictEqual(second.response, "Hello!");
+    release();
+    strictEqual((await first).response, text);
     strictEqual(
-      (
-        await database
-          .selectFrom("credit_text_reservations")
-          .selectAll()
-          .execute()
-      ).length,
-      0,
+      (await getUsageStatus(database, -1)).used,
+      3 +
+        (countTextTokens(text) + countTextTokens("Hello!")) / TOKENS_PER_CREDIT,
     );
   } finally {
+    release();
+    await first?.catch(() => {});
     globalThis.fetch = originalFetch;
     await database.destroy();
   }

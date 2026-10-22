@@ -106,7 +106,7 @@ test("addressed usage adjustments respond with or without command entities and p
     strictEqual(calls[0]?.method, "sendMessage");
     match(
       String(calls[0].payload.text).replace(/[\u2068\u2069]/g, ""),
-      /Credits used: 0 \/ 100/,
+      /Credits used: 0\.00 \/ 100/,
     );
     strictEqual(passedThrough, 0);
 

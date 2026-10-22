@@ -9,13 +9,22 @@ in private chats.
 Guest spend recorded under the previous personal-balance policy stays on those
 personal balances; only new guest requests use the group balance.
 
-A request costs 1 credit. Each tool invocation costs 1 more; web search adds 1,
+A request costs 1 credit, plus 1 per 620 assistant text tokens (progress and final
+answers). Each tool invocation costs 1 more; web search adds 1,
 and each image API attempt adds 5 (including the alternate-model retry).
 Charges happen before work and are retained on failure, cancellation, or failed
 delivery. Model continuations/recovery for the same request aren't new requests.
-There is no per-request tool-call or tool-round cap. Tool work that cannot afford
-its next charge is skipped and reported as a tool-call failure. Troll/proactive
-triggers are silent when credits run out. Commands themselves are free.
+Text charges are flushed in 128-token batches or after one second on the next
+stream event, and at completion, cancellation or failure. No credits are
+reserved for future output, so tasks can run in parallel. When the shared
+balance runs out, active tasks stop further work and get one final model turn
+with all tools disabled. Finite usage caps at 100% of the quota; small overlaps
+and final wrap-up text do not push it above the limit. New requests are rejected
+with a daily-limit or actual-shortage message. `/usage` and credit errors show
+two decimal places. Commands themselves are free.
+
+The per-request tool-call budget also forces a final turn without tools.
+Troll/proactive triggers are silent when credits run out.
 
 `/usage` shows today's spend and prices. Bot admins can adjust the persistent
 daily allowance with `/usage +N` or `/usage -N` (minimum zero). `/usage +unlimited`

@@ -269,12 +269,11 @@ test("automatic responses choose one before generation and advance both counters
           chat.id,
           Math.floor(usage.quota - usage.used),
         );
-        const remaining = await createTextCreditCharge({
+        await createTextCreditCharge({
           database,
           chat,
           telemetry: { event: () => {} },
-        } as unknown as Context).reserve(620);
-        await remaining.settle(remaining.tokens);
+        } as unknown as Context).charge(620);
         await receive();
         const troll = await database
           .selectFrom("chat_trolling")

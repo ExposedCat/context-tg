@@ -16,26 +16,18 @@ export type ChatUsageTable = {
   used: number;
   text_tokens: Generated<number>;
 };
-export type TextCreditReservationsTable = {
-  id: string;
-  chat_id: number;
-  usage_date: string;
-  tokens: number;
-  expires_at: string;
-};
-export type TextCreditReservation = {
-  tokens: number;
-  settle: (tokens: number) => Promise<void>;
-};
 export type TextCreditCharge = {
-  reserve: (tokens?: number) => Promise<TextCreditReservation>;
+  charge: (tokens: number) => Promise<boolean>;
+  hasRemaining: () => Promise<boolean>;
 };
-export class TextCreditLimitError extends Error {
-  constructor() {
+export class CreditLimitError extends Error {
+  constructor(status: UsageStatus, amount: number) {
     super(
-      "Your text credit allowance is exhausted. Try again after the daily reset.",
+      status.used >= status.quota
+        ? `Daily credit limit reached (${status.used.toFixed(2)}/${status.quota}). Resets at 00:00 UTC.`
+        : `Not enough credits for this action: ${Math.max(0, status.quota - status.used).toFixed(2)} available; ${amount.toFixed(2)} required. Resets at 00:00 UTC.`,
     );
-    this.name = "TextCreditLimitError";
+    this.name = "CreditLimitError";
   }
 }
 export type UsageStatus = { used: number; quota: number; unlimited: boolean };
@@ -77,18 +69,11 @@ export async function migrateUsage(database: Database) {
       .addColumn("text_tokens", "integer", (c) => c.notNull().defaultTo(0))
       .execute();
   }
+  // Reservations are obsolete. Drop legacy holds without changing balances.
   await database.schema
-    .createTable("credit_text_reservations")
-    .ifNotExists()
-    .addColumn("id", "text", (c) => c.primaryKey())
-    .addColumn("chat_id", "integer", (c) => c.notNull())
-    .addColumn("usage_date", "text", (c) => c.notNull())
-    .addColumn("tokens", "integer", (c) => c.notNull())
-    .addColumn("expires_at", "text", (c) => c.notNull())
+    .dropTable("credit_text_reservations")
+    .ifExists()
     .execute();
-  // Runs at startup in the bot's only process, so every remaining reservation
-  // belongs to a request that died with the previous process.
-  await database.deleteFrom("credit_text_reservations").execute();
 }
 export function getUsageDate(date = new Date()): string {
   return date.toISOString().slice(0, 10);
@@ -126,12 +111,8 @@ export async function hasUsageRemaining(
   userId?: number,
 ): Promise<boolean> {
   if (isBotAdminId(userId)) return true;
-  const rows = await sql<{
-    remaining: number;
-  }>`select ${availableTextTokens(chatId, getUsageDate())} as remaining`.execute(
-    database,
-  );
-  return rows.rows[0].remaining > 0;
+  const status = await getUsageStatus(database, chatId);
+  return status.unlimited || status.used < status.quota;
 }
 
 function availableTextTokens(chatId: number, date: string, unlimited = false) {
@@ -140,8 +121,7 @@ function availableTextTokens(chatId: number, date: string, unlimited = false) {
   return sql<number>`cast(case when coalesce((select unlimited from credit_limits where chat_id = ${chatId}), 0) = 1
     then 9007199254740991 else
     coalesce((select quota from credit_limits where chat_id = ${chatId}), ${defaultQuota(chatId)}) * ${n}
-    - coalesce((select used * ${n} + text_tokens from credit_usage where chat_id = ${chatId} and usage_date = ${date}), 0)
-    - coalesce((select sum(tokens) from credit_text_reservations where chat_id = ${chatId} and usage_date = ${date} and expires_at > datetime('now')), 0) end as real)`;
+    - coalesce((select used * ${n} + text_tokens from credit_usage where chat_id = ${chatId} and usage_date = ${date}), 0) end as real)`;
 }
 
 export function createTextCreditCharge(
@@ -152,67 +132,50 @@ export function createTextCreditCharge(
   const chatId = ctx.chat.id;
   const unlimited = isBotAdmin(ctx);
   return {
-    reserve: async (maxTokens = Number.MAX_SAFE_INTEGER) => {
-      if (!Number.isSafeInteger(maxTokens) || maxTokens <= 0)
-        throw new Error("Invalid token allowance.");
-      const id = crypto.randomUUID();
-      const date = getUsageDate();
-      // Admin requests and unlimited chats do not reserve anything. A sentinel
-      // reservation (2^53-1) would be read back through @db/sqlite's default
-      // 32-bit integer path as -1 and abort the stream on its first token.
-      const exempt =
-        unlimited ||
-        (await getUsageStatus(ctx.database, chatId, date)).unlimited;
-      const remaining = availableTextTokens(chatId, date);
-      const result = exempt
-        ? undefined
-        : await sql<{
-            tokens: number;
-          }>`insert into credit_text_reservations (id, chat_id, usage_date, tokens, expires_at)
-        select ${id}, ${chatId}, ${date}, min(${maxTokens}, ${remaining}), datetime('now', '+1 day')
-        where ${remaining} > 0 returning cast(tokens as real) as tokens`.execute(
-            ctx.database,
+    hasRemaining: () => hasUsageRemaining(ctx.database, chatId, ctx.from?.id),
+    charge: async (tokens) => {
+      if (!Number.isSafeInteger(tokens) || tokens < 0)
+        throw new Error("Invalid token usage.");
+      // Serialize the read and debit so parallel batches share one balance.
+      // Only real output is charged; excess output and final wrap-ups are free
+      // once a finite balance reaches its quota.
+      const result = await ctx.database.transaction().execute(async (db) => {
+        const date = getUsageDate();
+        const status = await getUsageStatus(db, chatId, date);
+        const exempt = unlimited || status.unlimited;
+        const balance = await sql<{
+          remaining: number;
+        }>`select ${availableTextTokens(chatId, date, unlimited)} as remaining`.execute(
+          db,
+        );
+        const remaining = balance.rows[0].remaining;
+        const charged = exempt
+          ? tokens
+          : Math.min(tokens, Math.max(0, remaining));
+        if (charged > 0) {
+          await sql`insert into credit_usage (chat_id, usage_date, used, text_tokens)
+            values (${chatId}, ${date}, 0, ${charged})
+            on conflict (chat_id, usage_date) do update set text_tokens = credit_usage.text_tokens + ${charged}`.execute(
+            db,
           );
-      const tokens = exempt ? maxTokens : result?.rows[0]?.tokens;
-      if (!tokens || tokens <= 0) throw new TextCreditLimitError();
-      let settlement: Promise<void> | undefined;
-      return {
-        tokens,
-        settle: (used) => {
-          if (settlement) return settlement;
-          settlement = (async () => {
-            if (!Number.isSafeInteger(used) || used < 0)
-              throw new Error("Invalid token usage.");
-            const charged = Math.min(tokens, used);
-            if (charged > 0) {
-              await sql`insert into credit_usage (chat_id, usage_date, used, text_tokens)
-                values (${chatId}, ${date}, 0, ${charged})
-                on conflict (chat_id, usage_date) do update set text_tokens = credit_usage.text_tokens + ${charged}`.execute(
-                ctx.database,
-              );
-            }
-            await ctx.database
-              .deleteFrom("credit_text_reservations")
-              .where("id", "=", id)
-              .execute();
-            if (charged > 0)
-              ctx.telemetry.event("credit_usage", {
-                credits: charged / TOKENS_PER_CREDIT,
-                credit_kind: "text",
-                usage_owner: chatId,
-                usage_limit:
-                  unlimited ||
-                  (await getUsageStatus(ctx.database, chatId, date)).unlimited
-                    ? "unlimited"
-                    : "limited",
-                chat_type: ctx.chat?.type === "private" ? "private" : "group",
-                mode: guest ? "guest" : "normal",
-                tools: [],
-              });
-          })();
-          return settlement;
-        },
-      };
+        }
+        return {
+          charged,
+          exempt,
+          remaining: exempt || remaining > charged,
+        };
+      });
+      if (result.charged > 0)
+        ctx.telemetry.event("credit_usage", {
+          credits: result.charged / TOKENS_PER_CREDIT,
+          credit_kind: "text",
+          usage_owner: chatId,
+          usage_limit: result.exempt ? "unlimited" : "limited",
+          chat_type: ctx.chat?.type === "private" ? "private" : "group",
+          mode: guest ? "guest" : "normal",
+          tools: [],
+        });
+      return result.remaining;
     },
   };
 }
@@ -246,10 +209,7 @@ export function createCreditCharge(ctx: Context, guest = false): CreditCharge {
   return async (kind, tool) => {
     const amount = CREDIT_PRICES[kind];
     const status = await consumeUsage(ctx.database, owner, amount, unlimited);
-    if (!status.ok)
-      throw new Error(
-        `Not enough credits: ${status.used}/${status.quota} used today.`,
-      );
+    if (!status.ok) throw new CreditLimitError(status, amount);
     ctx.telemetry.event("credit_usage", {
       credits: amount,
       credit_kind: kind,
@@ -334,7 +294,7 @@ export async function handleUsageCommand(
   return [
     translate("settings-usage-title", { date: getUsageDate() }),
     translate("settings-usage-line", {
-      used: Number(s.used.toFixed(3)),
+      used: s.used.toFixed(2),
       quota: s.unlimited ? "∞" : s.quota,
     }),
     "",
