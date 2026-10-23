@@ -34,6 +34,9 @@ export type GuestResponseThreadsTable = {
     AgentId | null
   >;
   response_id: string;
+  conversation_key: ColumnType<string | null, string | null | undefined>;
+  caller_id: ColumnType<number | null, number | null | undefined>;
+  content_fingerprint: ColumnType<string | null, string | null | undefined>;
   inline_message_id: ColumnType<
     string | null,
     string | null | undefined,
@@ -46,15 +49,9 @@ export type GuestResponseThreadsTable = {
 export type Thread = Selectable<ThreadsTable>;
 export type CreateThread = Insertable<ThreadsTable>;
 export type ThreadKey = Pick<Thread, "chat_id" | "message_id">;
+export type GuestThreadLinksTable = ThreadsTable & { conversation_key: string };
 export type GuestResponseThread = Selectable<GuestResponseThreadsTable>;
 export type CreateGuestResponseThread = Insertable<GuestResponseThreadsTable>;
-export type GuestResponseThreadDateKey = Pick<
-  GuestResponseThread,
-  "chat_id"
-> & {
-  date: Date;
-  toleranceSeconds?: number;
-};
 
 export async function migrateThreads(database: Database) {
   await database.schema
@@ -126,6 +123,51 @@ export async function migrateThreads(database: Database) {
       "response_fingerprint",
     ])
     .execute();
+
+  const guestColumns = (await database.introspection.getTables()).find(
+    (table) => table.name === "guest_response_threads",
+  )?.columns;
+  for (const [name, type] of [
+    ["conversation_key", "text"],
+    ["caller_id", "integer"],
+    ["content_fingerprint", "text"],
+  ] as const) {
+    if (!guestColumns?.some((column) => column.name === name)) {
+      await database.schema
+        .alterTable("guest_response_threads")
+        .addColumn(name, type)
+        .execute();
+    }
+  }
+
+  await database.schema
+    .createIndex("guest_response_content_index")
+    .ifNotExists()
+    .on("guest_response_threads")
+    .columns([
+      "conversation_key",
+      "caller_id",
+      "content_fingerprint",
+      "created_at",
+    ])
+    .execute();
+
+  await database.schema
+    .createTable("guest_thread_links")
+    .ifNotExists()
+    .addColumn("conversation_key", "text", (column) => column.notNull())
+    .addColumn("chat_id", "integer", (column) => column.notNull())
+    .addColumn("message_id", "integer", (column) => column.notNull())
+    .addColumn("thread_id", "integer", (column) => column.notNull())
+    .addColumn("agent_id", "text")
+    .addColumn("agent_name", "text")
+    .addColumn("response_id", "text")
+    .addPrimaryKeyConstraint("guest_thread_links_primary_key", [
+      "conversation_key",
+      "chat_id",
+      "message_id",
+    ])
+    .execute();
 }
 
 export async function getThread(
@@ -195,6 +237,7 @@ export async function saveThread(
     .values(row)
     .onConflict((conflict) =>
       conflict.columns(["chat_id", "message_id"]).doUpdateSet({
+        thread_id: row.thread_id,
         agent_id: row.agent_id,
         agent_name: row.agent_name,
         response_id: row.response_id,
@@ -205,25 +248,74 @@ export async function saveThread(
   return row;
 }
 
-export async function getGuestResponseThreadByDate(
+export async function getGuestResponseThread(
   database: Database,
-  { chat_id, date, toleranceSeconds = 30 }: GuestResponseThreadDateKey,
+  {
+    conversationKey,
+    callerId,
+    contentFingerprint,
+    date,
+  }: {
+    conversationKey: string;
+    callerId: number;
+    contentFingerprint: string;
+    date: Date;
+  },
 ): Promise<GuestResponseThread | undefined> {
-  const start = new Date(date.getTime() - toleranceSeconds * 1000);
-  const end = new Date(date.getTime() + toleranceSeconds * 1000);
+  const start = new Date(date.getTime() - 30_000);
+  const end = new Date(date.getTime() + 30_000);
   const rows = await database
     .selectFrom("guest_response_threads")
     .selectAll()
-    .where("chat_id", "=", chat_id)
+    .where("conversation_key", "=", conversationKey)
+    .where("caller_id", "=", callerId)
+    .where("content_fingerprint", "=", contentFingerprint)
     .where("created_at", ">=", start.toISOString())
     .where("created_at", "<=", end.toISOString())
     .execute();
 
-  return rows.toSorted(
-    (left, right) =>
-      Math.abs(new Date(left.created_at).getTime() - date.getTime()) -
-      Math.abs(new Date(right.created_at).getTime() - date.getTime()),
-  )[0];
+  // A timestamp is only a bound, never a reason to select another response.
+  return rows.length === 1 ? rows[0] : undefined;
+}
+
+export async function getGuestThreadLink(
+  database: Database,
+  key: ThreadKey & { conversation_key: string },
+): Promise<Thread | undefined> {
+  return await database
+    .selectFrom("guest_thread_links")
+    .selectAll()
+    .where("conversation_key", "=", key.conversation_key)
+    .where("chat_id", "=", key.chat_id)
+    .where("message_id", "=", key.message_id)
+    .executeTakeFirst();
+}
+
+export async function saveGuestThreadLink(
+  database: Database,
+  thread: CreateThread & { conversation_key: string },
+): Promise<Thread> {
+  const row = {
+    ...thread,
+    agent_id: thread.agent_id ?? null,
+    agent_name: thread.agent_name ?? null,
+    response_id: thread.response_id ?? null,
+  };
+  await database
+    .insertInto("guest_thread_links")
+    .values(row)
+    .onConflict((conflict) =>
+      conflict
+        .columns(["conversation_key", "chat_id", "message_id"])
+        .doUpdateSet({
+          thread_id: row.thread_id,
+          agent_id: row.agent_id,
+          agent_name: row.agent_name,
+          response_id: row.response_id,
+        }),
+    )
+    .execute();
+  return row;
 }
 
 export async function saveGuestResponseThread(
@@ -233,6 +325,9 @@ export async function saveGuestResponseThread(
   const now = new Date().toISOString();
   const row: GuestResponseThread = {
     ...thread,
+    conversation_key: thread.conversation_key ?? null,
+    caller_id: thread.caller_id ?? null,
+    content_fingerprint: thread.content_fingerprint ?? null,
     agent_id: thread.agent_id ?? null,
     inline_message_id: thread.inline_message_id ?? null,
     created_at: thread.created_at ?? now,
@@ -245,6 +340,9 @@ export async function saveGuestResponseThread(
     .onConflict((conflict) =>
       conflict.columns(["chat_id", "response_fingerprint"]).doUpdateSet({
         trigger_message_id: row.trigger_message_id,
+        conversation_key: row.conversation_key,
+        caller_id: row.caller_id,
+        content_fingerprint: row.content_fingerprint,
         thread_id: row.thread_id,
         agent_id: row.agent_id,
         response_id: row.response_id,

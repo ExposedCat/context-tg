@@ -23,6 +23,10 @@ import { parseDanbooruOptions } from "./danbooru-options.ts";
 import type { Database } from "./database.ts";
 import { APP_ENV } from "./env.ts";
 import {
+  getGuestContentFingerprint,
+  getGuestConversationKey,
+} from "./guest-threads.ts";
+import {
   downloadTelegramImageDataUrl,
   formatImageMarkdown,
   resolveRichMessageImageMedia,
@@ -83,10 +87,12 @@ import { countTextTokens } from "./text-tokens.ts";
 import {
   createThread,
   type GuestResponseThread,
-  getGuestResponseThreadByDate,
+  getGuestResponseThread,
+  getGuestThreadLink,
   getLatestTopicThread,
   getThread,
   saveGuestResponseThread,
+  saveGuestThreadLink,
   saveThread,
   type Thread,
 } from "./threads.ts";
@@ -2326,7 +2332,9 @@ async function handleChatRequest(
     const requestedTools = options.tools ?? agent.tools;
     const responseId =
       thread?.response_id &&
-      (!explicitAgent || explicitAgent.id === threadAgent.id)
+      (threadAgent.id === guestAgent.id ||
+        !explicitAgent ||
+        explicitAgent.id === threadAgent.id)
         ? thread.response_id
         : undefined;
     progressResponseId = responseId;
@@ -2648,11 +2656,13 @@ function getThreadResponseId(
 async function backfillGuestReplyThread(
   ctx: Context,
   chatId: number,
+  conversationKey: string,
   reply: TextMessage,
   guestThread: GuestResponseThread,
-): Promise<Thread | GuestResponseThread> {
+): Promise<Thread> {
   try {
-    return await saveThread(ctx.database, {
+    return await saveGuestThreadLink(ctx.database, {
+      conversation_key: conversationKey,
       chat_id: chatId,
       message_id: reply.message_id,
       thread_id: guestThread.thread_id,
@@ -2665,16 +2675,31 @@ async function backfillGuestReplyThread(
       responseId: guestThread.response_id,
       error,
     });
-    return guestThread;
+    return {
+      chat_id: chatId,
+      message_id: reply.message_id,
+      thread_id: guestThread.thread_id,
+      response_id: guestThread.response_id,
+      agent_id: guestThread.agent_id ?? guestAgent.id,
+      agent_name: null,
+    };
   }
 }
 
 async function getGuestReplyThread(
   ctx: Context,
-  chatId: number,
+  message: TextMessage,
   reply: TextMessage,
-): Promise<Thread | GuestResponseThread | undefined> {
-  const thread = await getThread(ctx.database, {
+): Promise<Thread | undefined> {
+  if (!ctx.chat) return undefined;
+  const chatId = ctx.chat.id;
+  const conversationKey = getGuestConversationKey(
+    message,
+    getMessageTopicId(message, reply),
+  );
+  if (!conversationKey) return undefined;
+  const thread = await getGuestThreadLink(ctx.database, {
+    conversation_key: conversationKey,
     chat_id: chatId,
     message_id: reply.message_id,
   });
@@ -2683,20 +2708,45 @@ async function getGuestReplyThread(
     return thread;
   }
 
-  if (reply.date === undefined) {
-    return thread;
+  // Ordinary group messages share stable IDs with guest messages. Private
+  // guest IDs must never be looked up in a user's direct conversation with us.
+  if (ctx.chat.type !== "private") {
+    const groupThread = await getThread(ctx.database, {
+      chat_id: chatId,
+      message_id: reply.message_id,
+    });
+    if (groupThread?.response_id) return groupThread;
   }
-
-  const dateThread = await getGuestResponseThreadByDate(ctx.database, {
-    chat_id: chatId,
+  const callerId =
+    reply.guest_bot_caller_user?.id ?? reply.guest_bot_caller_chat?.id;
+  const text =
+    reply.text ?? reply.caption ?? getRichMessageText(reply.rich_message);
+  const contentFingerprint = text && getGuestContentFingerprint(text);
+  if (
+    reply.from?.id !== ctx.me.id ||
+    callerId === undefined ||
+    !contentFingerprint ||
+    reply.date === undefined
+  )
+    return thread;
+  const responseThread = await getGuestResponseThread(ctx.database, {
+    conversationKey,
+    callerId,
+    contentFingerprint,
     date: new Date(reply.date * 1000),
   });
 
-  if (!dateThread) {
+  if (!responseThread) {
     return thread;
   }
 
-  return await backfillGuestReplyThread(ctx, chatId, reply, dateThread);
+  return await backfillGuestReplyThread(
+    ctx,
+    chatId,
+    conversationKey,
+    reply,
+    responseThread,
+  );
 }
 
 async function saveGuestChatResponseThread(
@@ -2712,26 +2762,48 @@ async function saveGuestChatResponseThread(
   }
 
   try {
-    await saveThread(ctx.database, {
+    const conversationKey = getGuestConversationKey(
+      message,
+      getMessageTopicId(message, getActualReply(message)),
+    );
+    if (!conversationKey) return;
+    const link = {
       chat_id: chatId,
-      message_id: message.message_id,
       thread_id: threadId,
       response_id: llmResponse.response_id,
       agent_id: guestAgent.id,
+    };
+    await saveGuestThreadLink(ctx.database, {
+      ...link,
+      conversation_key: conversationKey,
+      message_id: message.message_id,
     });
+    if (ctx.chat?.type !== "private")
+      await saveThread(ctx.database, {
+        ...link,
+        message_id: message.message_id,
+      });
 
     for (const sentMessage of delivery.sentMessages) {
-      await createThread(ctx.database, {
-        chat_id: chatId,
+      await saveGuestThreadLink(ctx.database, {
+        ...link,
+        conversation_key: conversationKey,
         message_id: sentMessage.message_id,
-        thread_id: threadId,
-        response_id: llmResponse.response_id,
-        agent_id: guestAgent.id,
       });
+      if (ctx.chat?.type !== "private")
+        await saveThread(ctx.database, {
+          ...link,
+          message_id: sentMessage.message_id,
+        });
     }
 
     await saveGuestResponseThread(ctx.database, {
       chat_id: chatId,
+      conversation_key: conversationKey,
+      caller_id: message.sender_chat?.id ?? message.from?.id,
+      content_fingerprint: getGuestContentFingerprint(
+        delivery.responseReferences[0]?.text ?? "",
+      ),
       response_fingerprint: llmResponse.response_id,
       trigger_message_id: message.message_id,
       thread_id: threadId,
@@ -2776,9 +2848,16 @@ async function handleGuestChatRequest(
   try {
     const reply = getActualReply(message);
     const replyContext = getReplyContext(message, reply);
+    const topicId = getMessageTopicId(message, reply);
     const thread = reply
-      ? await getGuestReplyThread(ctx, chatId, reply)
-      : undefined;
+      ? await getGuestReplyThread(ctx, message, reply)
+      : ctx.chat.type !== "private" && topicId !== undefined
+        ? await getLatestTopicThread(ctx.database, {
+            chatId,
+            threadId: topicId,
+            beforeMessageId: message.message_id,
+          })
+        : undefined;
     const threadId =
       thread?.thread_id ??
       getMessageTopicId(message, reply) ??
@@ -3167,12 +3246,15 @@ chatComposer.on("message", async (ctx, next) => {
   const isDirectBotReply = isDirectReplyToBot(reply, ctx.me.id);
   const addressed = text ? isAddressed(text, ctx.me.username) : false;
   let thread = reply
-    ? await getThread(ctx.database, {
-        chat_id: ctx.chat.id,
-        message_id: reply.message_id,
-      })
+    ? ctx.chat.type !== "private" &&
+      (reply.guest_bot_caller_user || reply.guest_bot_caller_chat)
+      ? await getGuestReplyThread(ctx, message, reply)
+      : await getThread(ctx.database, {
+          chat_id: ctx.chat.id,
+          message_id: reply.message_id,
+        })
     : undefined;
-  if (!thread && privateChat && conversationTopicId !== undefined) {
+  if (!thread && !reply && conversationTopicId !== undefined) {
     thread = await getLatestTopicThread(ctx.database, {
       chatId: ctx.chat.id,
       threadId: conversationTopicId,

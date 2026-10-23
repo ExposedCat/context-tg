@@ -223,6 +223,19 @@ option that lets users create threads if users should manage their own topics.
 
 ## Conversation context
 
+Forum topics keep separate conversation histories. An addressed message without
+an explicit reply continues that topic; a reply resumes the checkpoint belonging
+to its parent. Ordinary group reply chains remain separate conversations and
+their reply-chain IDs are not treated as forum topic IDs.
+
+Guest replies in a DM between two people share history across both participants,
+even though Telegram supplies different chat and message IDs from each side.
+Guest links are stored separately from direct bot chats. When a guest response's
+message ID is first seen, its conversation, caller and rendered content identify
+the saved response within the delivery time window. Ambiguous matches start a
+new branch instead of selecting a response by timestamp proximity. Resolved
+message links persist across restarts.
+
 Conversation requests use native Responses API compaction with `store: false`.
 Set `LLM_COMPACT_THRESHOLD` to a positive integer token threshold (default:
 100,000). Choose a value below the smallest conversation deployment's context

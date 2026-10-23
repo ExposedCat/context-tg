@@ -32,6 +32,7 @@ import { createSqliteDialect, openSqlite } from "./sqlite.ts";
 import { migrateTasks, type TasksTable } from "./tasks.ts";
 import {
   type GuestResponseThreadsTable,
+  type GuestThreadLinksTable,
   migrateThreads,
   type ThreadsTable,
 } from "./threads.ts";
@@ -50,6 +51,7 @@ export type DatabaseSchema = {
   user_settings: UserSettingsTable;
   threads: ThreadsTable;
   guest_response_threads: GuestResponseThreadsTable;
+  guest_thread_links: GuestThreadLinksTable;
   llm_chat_responses: LlmResponseHistoryTable;
   llm_response_memory: { response_id: string; memory_state: string };
   llm_settings: LlmSettingsTable;
