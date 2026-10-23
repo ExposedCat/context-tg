@@ -122,3 +122,6 @@ trolling-mode-mild = М’який
 trolling-mode-clean = Без обзивань
 
 configure-progress = Оновлення перебігу роботи
+
+guest-thread-reply-button = ↪ Відповісти
+guest-thread-reply-hint = Дай відповідь на це повідомлення, щоб продовжити розмову.

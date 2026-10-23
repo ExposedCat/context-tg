@@ -1,6 +1,10 @@
 import type { ColumnType, Insertable, Selectable } from "kysely";
 import type { AgentId } from "./agents/index.ts";
 import type { Database } from "./database.ts";
+import {
+  getGuestInlineMessageId,
+  getGuestMessageScope,
+} from "./guest-threads.ts";
 
 export type ThreadsTable = {
   chat_id: number;
@@ -36,6 +40,7 @@ export type GuestResponseThreadsTable = {
   response_id: string;
   conversation_key: ColumnType<string | null, string | null | undefined>;
   caller_id: ColumnType<number | null, number | null | undefined>;
+  // Retained for compatibility with databases created by older versions.
   content_fingerprint: ColumnType<string | null, string | null | undefined>;
   inline_message_id: ColumnType<
     string | null,
@@ -141,15 +146,14 @@ export async function migrateThreads(database: Database) {
   }
 
   await database.schema
-    .createIndex("guest_response_content_index")
+    .dropIndex("guest_response_content_index")
+    .ifExists()
+    .execute();
+  await database.schema
+    .createIndex("guest_response_reference_index")
     .ifNotExists()
     .on("guest_response_threads")
-    .columns([
-      "conversation_key",
-      "caller_id",
-      "content_fingerprint",
-      "created_at",
-    ])
+    .columns(["conversation_key", "response_fingerprint"])
     .execute();
 
   await database.schema
@@ -168,6 +172,45 @@ export async function migrateThreads(database: Database) {
       "message_id",
     ])
     .execute();
+
+  // Recover exact numeric links for existing guest answers from their stored
+  // inline identifiers. Old content/time guesses are not copied into new scopes.
+  const references = await database
+    .selectFrom("guest_response_threads")
+    .selectAll()
+    .where("conversation_key", "is not", null)
+    .where("caller_id", "is not", null)
+    .where("inline_message_id", "is not", null)
+    .execute();
+  for (const reference of references) {
+    if (!reference.conversation_key || reference.caller_id === null) continue;
+    const messageId = getGuestInlineMessageId(reference);
+    for (const id of new Set([
+      reference.trigger_message_id,
+      ...(messageId === undefined ? [] : [messageId]),
+    ])) {
+      await database
+        .insertInto("guest_thread_links")
+        .values({
+          conversation_key: getGuestMessageScope(
+            reference.conversation_key,
+            reference.chat_id,
+            reference.caller_id,
+          ),
+          chat_id: reference.chat_id,
+          message_id: id,
+          thread_id: reference.thread_id,
+          response_id: reference.response_id,
+          agent_id: reference.agent_id,
+        })
+        .onConflict((conflict) =>
+          conflict
+            .columns(["conversation_key", "chat_id", "message_id"])
+            .doNothing(),
+        )
+        .execute();
+    }
+  }
 }
 
 export async function getThread(
@@ -252,30 +295,18 @@ export async function getGuestResponseThread(
   database: Database,
   {
     conversationKey,
-    callerId,
-    contentFingerprint,
-    date,
+    referenceId,
   }: {
     conversationKey: string;
-    callerId: number;
-    contentFingerprint: string;
-    date: Date;
+    referenceId: string;
   },
 ): Promise<GuestResponseThread | undefined> {
-  const start = new Date(date.getTime() - 30_000);
-  const end = new Date(date.getTime() + 30_000);
-  const rows = await database
+  return await database
     .selectFrom("guest_response_threads")
     .selectAll()
     .where("conversation_key", "=", conversationKey)
-    .where("caller_id", "=", callerId)
-    .where("content_fingerprint", "=", contentFingerprint)
-    .where("created_at", ">=", start.toISOString())
-    .where("created_at", "<=", end.toISOString())
-    .execute();
-
-  // A timestamp is only a bound, never a reason to select another response.
-  return rows.length === 1 ? rows[0] : undefined;
+    .where("response_fingerprint", "=", referenceId)
+    .executeTakeFirst();
 }
 
 export async function getGuestThreadLink(

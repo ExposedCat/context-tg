@@ -230,11 +230,15 @@ their reply-chain IDs are not treated as forum topic IDs.
 
 Guest replies in a DM between two people share history across both participants,
 even though Telegram supplies different chat and message IDs from each side.
-Guest links are stored separately from direct bot chats. When a guest response's
-message ID is first seen, its conversation, caller and rendered content identify
-the saved response within the delivery time window. Ambiguous matches start a
-new branch instead of selecting a response by timestamp proximity. Resolved
-message links persist across restarts.
+Guest links are stored separately from direct bot chats. Every guest response
+has a small Reply button carrying a persistent response reference; replying
+normally to the message follows that reference from either participant's view.
+Clicking the button shows a reminder to use Telegram's Reply action. Exact
+message IDs are also recovered from Telegram's inline delivery identifiers.
+Neither message content nor timestamps select a parent. Duplicate answers,
+edited text and delayed replies keep their own branches. Old answers without
+a reference can resume where their inline identifier provides an exact match;
+otherwise they start a new branch. All message links persist across restarts.
 
 Conversation requests use native Responses API compaction with `store: false`.
 Set `LLM_COMPACT_THRESHOLD` to a positive integer token threshold (default:

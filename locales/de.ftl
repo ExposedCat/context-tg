@@ -120,3 +120,6 @@ trolling-mode-mild = Mild
 trolling-mode-clean = Ohne Beschimpfungen
 
 configure-progress = Fortschrittsmeldungen
+
+guest-thread-reply-button = ↪ Antworten
+guest-thread-reply-hint = Antworte auf diese Nachricht, um das Gespräch fortzusetzen.
