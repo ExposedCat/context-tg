@@ -1583,7 +1583,32 @@ function pruneCompactedInput(
 function preparePreviousResponseInput(
   inputItems: ResponseInputItem[],
 ): ResponseInputItem[] {
-  return closePendingToolCalls(pruneCompactedInput(inputItems));
+  return closePendingToolCalls(
+    pruneCompactedInput(inputItems).flatMap(clearStaleToolLimitNotice),
+  );
+}
+
+// The tool allowance belongs to one response. Replayed wrap-up notices from an
+// earlier response would otherwise tell the model to stop using tools for the
+// rest of the thread.
+function clearStaleToolLimitNotice(
+  item: ResponseInputItem,
+): ResponseInputItem[] {
+  if (
+    item.type === "message" &&
+    item.role === "developer" &&
+    typeof item.content === "string" &&
+    TOOL_LIMIT_WRAP_UP_NOTICES.includes(item.content)
+  ) {
+    return [];
+  }
+  if (item.type === "function_call_output" && typeof item.output === "string") {
+    let output = item.output;
+    for (const notice of TOOL_LIMIT_WRAP_UP_NOTICES)
+      output = output.replaceAll(notice, STALE_TOOL_LIMIT_NOTICE);
+    if (output !== item.output) return [{ ...item, output }];
+  }
+  return [item];
 }
 
 async function recordResponse(
@@ -1919,13 +1944,23 @@ const CREDIT_LIMIT_WRAP_UP =
   "The daily credit limit has been reached. Stop all tool use and research. Give one concise final answer using the information already available. Briefly mention anything you could not finish because the daily credit limit was reached.";
 
 const TOOL_LIMIT_WRAP_UP =
-  "Tool limit reached, wrap up. Do not call any more tools. Finish your answer using the results already available, and briefly state any remaining limitation.";
+  "Tool limit reached, wrap up. This limit applies only to the current answer, not to the conversation or thread. Make no more tool calls in this answer; finish it using the results already available, and briefly state any remaining limitation. The next user message starts with a fresh tool allowance.";
+
+// Stored histories may contain the wording used before the allowance was
+// explicitly scoped to one answer.
+const TOOL_LIMIT_WRAP_UP_NOTICES = [
+  TOOL_LIMIT_WRAP_UP,
+  "Tool limit reached, wrap up. Do not call any more tools. Finish your answer using the results already available, and briefly state any remaining limitation.",
+];
+
+const STALE_TOOL_LIMIT_NOTICE =
+  "An earlier answer reached its tool limit here. That limit applied only to that answer; tools are available again for the current request.";
 
 function createToolLimitOutput(call: FunctionToolCall): FunctionCallOutput {
   return createToolOutput(
     call,
     JSON.stringify({
-      error: "Tool limit reached",
+      error: "Tool limit reached for this answer",
       details: TOOL_LIMIT_WRAP_UP,
     }),
   );
@@ -2020,7 +2055,7 @@ async function resolveFunctionToolCalls(
         meter.tokens,
         state.creditWrapUpStarted
           ? "Daily credit limit reached. I could not finish the answer with the available results."
-          : "Tool limit reached. I could not finish the answer with the available results.",
+          : "Tool limit reached for this answer. I could not finish it with the available results.",
       );
       await recordResponse(
         response,

@@ -481,3 +481,99 @@ test("a shared reply parent does not merge unrelated local windows", () => {
   strictEqual(windows.length, 2);
   ok(windows.every((window) => window.messages[0].message_id === 2));
 });
+
+test("forum General topic history excludes other topics unless the whole chat is requested", async () => {
+  const { getMessageTopicScope } = await import("./telegram.ts");
+  const {
+    executeGetMessageContext,
+    executeReadLastMessages,
+    executeSearchChat,
+  } = await import("./llm-tools/chat.ts");
+  const forum = { type: "supergroup", is_forum: true };
+  strictEqual(getMessageTopicScope({ chat: forum }, undefined), null);
+  strictEqual(
+    getMessageTopicScope(
+      { chat: forum, message_thread_id: 70, is_topic_message: true },
+      undefined,
+    ),
+    70,
+  );
+  strictEqual(
+    getMessageTopicScope({ chat: { type: "supergroup" } }, undefined),
+    undefined,
+  );
+  // Ordinary reply chains in General are not topics.
+  strictEqual(
+    getMessageTopicScope({ chat: forum, message_thread_id: 5 }, undefined),
+    null,
+  );
+
+  const originalFetch = globalThis.fetch;
+  let filters: Array<{ must: unknown[] }> = [];
+  globalThis.fetch = (async (input, init) => {
+    const url = String(input);
+    const body = init?.body ? JSON.parse(String(init.body)) : undefined;
+    if (url === `${TEST_ENV.EMBEDDER_BASE_URL}/embeddings`)
+      return Response.json({ data: [{ index: 0, embedding: [1, 0] }] });
+    ok(url.startsWith(TEST_ENV.QDRANT_URL), `Unexpected request: ${url}`);
+    if (body?.filter) filters.push(body.filter);
+    if (url.endsWith("/points/search"))
+      return Response.json({
+        result: [
+          {
+            id: "general",
+            score: 1,
+            payload: {
+              text: "General plans",
+              date: new Date(0).toISOString(),
+              date_timestamp: 0,
+              sender_name: "User",
+              sender_id: 1,
+              chat_id: -1,
+              message_id: 5,
+              reply_to_message_id: 4,
+            },
+          },
+        ],
+      });
+    if (url.endsWith("/points/scroll"))
+      return Response.json({ result: { points: [] } });
+    return Response.json({ result: { payload_schema: {} } });
+  }) as typeof fetch;
+  const context = { chatId: -1, messageId: 10, generalTopic: true };
+  const general = { is_empty: { key: "thread_id" } };
+  const threadFilters = () =>
+    filters.map((filter) =>
+      filter.must.filter((part) =>
+        JSON.stringify(part).includes('"thread_id"'),
+      ),
+    );
+  try {
+    for (const run of [
+      () =>
+        executeReadLastMessages({ count: 5, target: "topic_thread" }, context),
+      () =>
+        executeSearchChat(
+          { queries: ["plans"], target: "topic_thread" },
+          context,
+        ),
+      () => executeGetMessageContext({ message_id: 5, radius: 2 }, context),
+    ]) {
+      filters = [];
+      await run();
+      ok(filters.length > 0);
+      for (const scope of threadFilters()) deepStrictEqual(scope, [general]);
+    }
+    for (const run of [
+      () => executeReadLastMessages({ count: 5, target: "group" }, context),
+      () => executeSearchChat({ queries: ["plans"], target: "group" }, context),
+    ]) {
+      filters = [];
+      await run();
+      ok(filters.length > 0);
+      for (const scope of threadFilters()) deepStrictEqual(scope, []);
+    }
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});

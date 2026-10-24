@@ -101,12 +101,16 @@ charges. Captions and rich message text count; reply chains, thread history,
 instructions, tool definitions and media do not. Configure these limits in `.env`:
 
 - `LLM_MAX_USER_INPUT_TOKENS=5000`: combined current message and immediate reply text.
-- `LLM_MAX_TOOL_CALLS=12`: total tool executions per request, including parallel batches.
+- `LLM_MAX_TOOL_CALLS=50`: total tool executions per response, including parallel batches.
 
-After the tool allowance is used, further tool calls receive a "Tool limit
-reached, wrap up" result. The agent gets one final turn with all tools disabled,
-including Finance MCP, to answer using the results already available. Excess
-calls do not execute or spend credits. Tool results remain limited to 16 KB each.
+The tool allowance applies to each response, not to the thread: every new user
+message starts with the full allowance. After it is used, further tool calls
+receive a "Tool limit reached, wrap up" result. The agent gets one final turn
+with all tools disabled, including Finance MCP, to answer using the results
+already available. Excess calls do not execute or spend credits. Every limit
+notice states that the limit covers only the current answer, and wrap-up notices from earlier responses are removed or neutralized
+when thread history is replayed, so they cannot stop tool use in later replies.
+Tool results remain limited to 16 KB each.
 
 There is no separate application cap on generated tokens for assistant replies.
 Available text credits fund progress and answers; exhausted tasks get one final
@@ -228,17 +232,17 @@ an explicit reply continues that topic; a reply resumes the checkpoint belonging
 to its parent. Ordinary group reply chains remain separate conversations and
 their reply-chain IDs are not treated as forum topic IDs.
 
-Guest replies in a DM between two people share history across both participants,
-even though Telegram supplies different chat and message IDs from each side.
-Guest links are stored separately from direct bot chats. Every guest response
-has a small Reply button carrying a persistent response reference; replying
-normally to the message follows that reference from either participant's view.
-Clicking the button shows a reminder to use Telegram's Reply action. Exact
-message IDs are also recovered from Telegram's inline delivery identifiers.
-Neither message content nor timestamps select a parent. Duplicate answers,
-edited text and delayed replies keep their own branches. Old answers without
-a reference can resume where their inline identifier provides an exact match;
-otherwise they start a new branch. All message links persist across restarts.
+Guest replies follow exact message IDs decoded from Telegram's inline delivery
+identifiers. Guest links are separate from direct bot chats and are scoped to
+the caller's account in DMs and basic groups. No extra buttons or message
+markers are added. Known IDs keep their branches even after text edits.
+For an unknown ID from another participant's view, the bot can recover a text
+answer only when its rendered content matches exactly one saved response by
+the original caller in the same conversation. The recovered ID is persisted;
+subsequent replies use that ID directly. Matching never uses timestamps,
+recency or delivery order. Repeated identical answers remain ambiguous until
+an exact ID is known; missing caller metadata and media-only replies cannot
+use text recovery. Known message links persist across restarts.
 
 Conversation requests use native Responses API compaction with `store: false`.
 Set `LLM_COMPACT_THRESHOLD` to a positive integer token threshold (default:

@@ -12,6 +12,8 @@ export type LlmToolContext = {
   userName?: string;
   replyMessageId?: number;
   threadId?: number;
+  // The request came from a forum's General topic, which has no topic id.
+  generalTopic?: boolean;
   danbooru?: DanbooruOverrides;
 };
 

@@ -1,11 +1,10 @@
 import { test } from "bun:test";
-import { deepStrictEqual, ok, strictEqual } from "node:assert";
+import { deepStrictEqual, strictEqual } from "node:assert";
 import {
-  createGuestThreadReference,
   decodeGuestInlineMessageId,
+  getGuestContentFingerprint,
   getGuestInlineMessageId,
   getGuestMessageScope,
-  getGuestThreadReference,
 } from "./guest-threads.ts";
 
 test("inline identifiers decode the actual legacy and 64-bit message identity", () => {
@@ -41,6 +40,44 @@ test("inline identifiers decode the actual legacy and 64-bit message identity", 
     Buffer.alloc(28).toString("base64url"),
   ])
     strictEqual(decodeGuestInlineMessageId(id), undefined);
+});
+
+test("content recovery compares rendered text without erasing meaningful differences", () => {
+  for (const [markdown, plain] of [
+    [
+      "**9.6 million** in [euros](https://example.test)",
+      "9.6 million in euros",
+    ],
+    ["A &amp; B", "A & B"],
+    ["One\n\nTwo", "One\nTwo"],
+    ["| A | B |\n|---|---|\n|1|2|", "A | B\n1 | 2"],
+    [
+      "<table><tr><th>A</th><th>B</th></tr><tr><td>1</td><td>2</td></tr></table>",
+      "A | B\n1 | 2",
+    ],
+  ])
+    strictEqual(
+      getGuestContentFingerprint(markdown, "markdown"),
+      getGuestContentFingerprint(plain),
+      markdown,
+    );
+  for (const [left, right] of [
+    ["A | B", "A B"],
+    ["4", "4 🙂"],
+    ["-4", "4"],
+    ["yes", "Yes"],
+    ["a_b", "ab"],
+  ]) {
+    strictEqual(
+      getGuestContentFingerprint(left) === getGuestContentFingerprint(right),
+      false,
+    );
+  }
+  strictEqual(
+    getGuestContentFingerprint("![image](tg://photo?id=example)", "markdown"),
+    undefined,
+  );
+  strictEqual(getGuestContentFingerprint("  "), undefined);
 });
 
 test("native numeric links verify which account owns the identifier", () => {
@@ -80,41 +117,4 @@ test("native numeric links verify which account owns the identifier", () => {
     getGuestMessageScope("chat:-1000000000123:0", -1000000000123, 100),
     "chat:-1000000000123:0:messages",
   );
-});
-
-test("guest references are unique, fit callback limits and reject conflicting buttons", () => {
-  const first = createGuestThreadReference();
-  const second = createGuestThreadReference();
-  ok(first.referenceId !== second.referenceId);
-  ok(Buffer.byteLength(first.callbackData) <= 64);
-  const button = (callback_data: string) => ({ callback_data });
-  strictEqual(
-    getGuestThreadReference({
-      inline_keyboard: [[button(first.callbackData)]],
-    }),
-    first.referenceId,
-  );
-  strictEqual(
-    getGuestThreadReference({
-      inline_keyboard: [
-        [button(first.callbackData), button(first.callbackData)],
-      ],
-    }),
-    first.referenceId,
-  );
-  strictEqual(
-    getGuestThreadReference({
-      inline_keyboard: [
-        [button(first.callbackData), button(second.callbackData)],
-      ],
-    }),
-    undefined,
-  );
-  strictEqual(
-    getGuestThreadReference({
-      inline_keyboard: [[button("guest-thread:garbage")]],
-    }),
-    undefined,
-  );
-  strictEqual(getGuestThreadReference(undefined), undefined);
 });

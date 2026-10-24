@@ -61,7 +61,7 @@ export const APP_ENV = {
     "LLM_MAX_USER_INPUT_TOKENS",
     5000,
   ),
-  LLM_MAX_TOOL_CALLS: getPositiveIntegerEnv("LLM_MAX_TOOL_CALLS", 12),
+  LLM_MAX_TOOL_CALLS: getPositiveIntegerEnv("LLM_MAX_TOOL_CALLS", 50),
   FINANCE_MCP_URL:
     getOptionalEnv("FINANCE_MCP_URL") ?? "http://127.0.0.1:8000/mcp",
   KEENABLE_API_KEY: getRequiredEnv("KEENABLE_API_KEY"),

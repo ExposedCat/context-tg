@@ -1,8 +1,10 @@
 import {
   ensureMessagePayloadIndexes,
   getCollectionPath,
+  getThreadScopeMust,
   isMessageMetadata,
   type MessageMetadata,
+  type MessageThreadScope,
   type QdrantResponse,
   qdrantRequest,
 } from "./messages.ts";
@@ -10,7 +12,7 @@ import {
 export type LastMessagesContext = {
   chatId: number;
   messageId?: number;
-  threadId?: number;
+  threadId?: MessageThreadScope;
 };
 
 export type MessageWindowContext = {
@@ -18,7 +20,7 @@ export type MessageWindowContext = {
   anchorMessageId: number;
   before: number;
   after: number;
-  threadId?: number;
+  threadId?: MessageThreadScope;
 };
 
 type QdrantScrollPoint = {
@@ -47,9 +49,7 @@ function getMessageScopeMust({
 }: Pick<LastMessagesContext, "chatId" | "threadId">) {
   return [
     { key: "chat_id", match: { value: chatId } },
-    ...(threadId !== undefined
-      ? [{ key: "thread_id", match: { value: threadId } }]
-      : []),
+    ...getThreadScopeMust(threadId),
   ];
 }
 

@@ -8,8 +8,12 @@ import {
   type MessageSearchWindow,
   searchMessageWindows,
 } from "../message-search.ts";
-import type { MessageMetadata, MessageSearchResult } from "../messages.ts";
-import type { FunctionToolRunner } from "./types.ts";
+import type {
+  MessageMetadata,
+  MessageSearchResult,
+  MessageThreadScope,
+} from "../messages.ts";
+import type { FunctionToolRunner, LlmToolContext } from "./types.ts";
 import {
   getFiniteNumber,
   getMissingContextResponse,
@@ -147,11 +151,15 @@ function parseRadius(value: unknown): number {
   return Math.max(1, Math.min(10, Math.floor(radius ?? 1)));
 }
 
+function getCurrentTopicScope(context: LlmToolContext): MessageThreadScope {
+  return context.threadId ?? (context.generalTopic ? null : undefined);
+}
+
 function getTargetThreadId(
   target: unknown,
-  threadId: number | undefined,
-): number | undefined {
-  return target === "group" ? undefined : threadId;
+  context: LlmToolContext,
+): MessageThreadScope {
+  return target === "group" ? undefined : getCurrentTopicScope(context);
 }
 
 function formatMessageData(
@@ -256,7 +264,7 @@ export const executeSearchChat: FunctionToolRunner = async (args, context) => {
     from: getOptionalDate(args?.from),
     to: getOptionalDate(args?.to),
     chatId: context.chatId,
-    threadId: getTargetThreadId(args?.target, context.threadId),
+    threadId: getTargetThreadId(args?.target, context),
     senderId: getFiniteNumber(args?.sender_id),
     limit: 6,
   });
@@ -289,7 +297,7 @@ export const executeGetMessageContext: FunctionToolRunner = async (
     anchorMessageId: messageId,
     before: radius,
     after: radius,
-    threadId: context.threadId,
+    threadId: getCurrentTopicScope(context),
   });
 
   return formatMessageContextJson(messageId, radius, messages);
@@ -311,7 +319,7 @@ export const executeReadLastMessages: FunctionToolRunner = async (
   const messages = await readLastMessages(parseCount(args?.count), {
     chatId: context.chatId,
     ...(anchorMessageId !== undefined ? { messageId: anchorMessageId } : {}),
-    threadId: getTargetThreadId(args?.target, context.threadId),
+    threadId: getTargetThreadId(args?.target, context),
   });
 
   return formatMessagesJson(messages);

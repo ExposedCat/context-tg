@@ -1,9 +1,3 @@
-import { randomUUID } from "node:crypto";
-
-export const GUEST_THREAD_CALLBACK_PREFIX = "guest-thread:";
-const REFERENCE_PATTERN =
-  /^guest-thread:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/;
-
 type GuestMessage = {
   chat?: { id?: number; type?: string };
   from?: { id: number };
@@ -35,32 +29,44 @@ export function getGuestMessageScope(
     : `${conversationKey}:viewer:${callerId}`;
 }
 
-export function createGuestThreadReference() {
-  const referenceId = randomUUID();
-  return {
-    referenceId,
-    callbackData: `${GUEST_THREAD_CALLBACK_PREFIX}${referenceId}`,
-  };
-}
-
-export function getGuestThreadReference(
-  markup:
-    | {
-        inline_keyboard: ReadonlyArray<
-          ReadonlyArray<{ text?: string; callback_data?: string }>
-        >;
-      }
-    | undefined,
+// This is a fallback for an unknown ID in another participant's view. Hash
+// rendered text without case folding or removing punctuation; never rank
+// candidates by their dates or insertion order.
+export function getGuestContentFingerprint(
+  text: string,
+  format: "markdown" | "plain" = "plain",
 ): string | undefined {
-  const references = new Set(
-    markup?.inline_keyboard.flatMap((row) =>
-      row.flatMap((button) => {
-        const match = button.callback_data?.match(REFERENCE_PATTERN);
-        return match ? [match[1]] : [];
-      }),
-    ),
-  );
-  return references.size === 1 ? references.values().next().value : undefined;
+  let content = text;
+  if (format === "markdown") {
+    // Text alone cannot identify an image-only or mixed-media response.
+    if (/!\[[^\]]*\]\(|<img\b/i.test(text)) return undefined;
+    const line = (value: string) => `${value}\n`;
+    const cell = (value: string) => `${value} | `;
+    content = Bun.markdown.render(text, {
+      paragraph: line,
+      heading: line,
+      code: line,
+      listItem: line,
+      th: cell,
+      td: cell,
+      tr: (value) => line(value.replace(/ \| $/, "")),
+      html: (value) =>
+        Bun.markdown.render(
+          value
+            .replaceAll(/<\/t[dh]>/gi, " | ")
+            .replaceAll(/<\/(?:tr|p)>|<br\s*\/?>/gi, "\n")
+            .replaceAll(/<[^>]*>/g, "")
+            .replaceAll(/ \| (?=\n|$)/g, ""),
+          {},
+          { noHtmlBlocks: true, noHtmlSpans: true },
+        ),
+    });
+  }
+  content = normalizeWhitespace(content).normalize("NFC");
+  // Versioned so old, more lossy fingerprints cannot enter this lookup.
+  return content
+    ? `text-v2:${createHash("sha256").update(content).digest("hex")}`
+    : undefined;
 }
 
 // TDLib base64url-encodes the bare inputBotInlineMessageID (20 bytes) or
@@ -114,3 +120,6 @@ export function getGuestInlineMessageId({
     chat_id <= -1_000_000_000_000 ? chat_id + 1_000_000_000_000 : caller_id;
   return decoded.ownerId === expectedOwner ? decoded.messageId : undefined;
 }
+
+import { createHash } from "node:crypto";
+import { normalizeWhitespace } from "../utils/text.ts";

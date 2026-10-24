@@ -268,6 +268,85 @@ test("tool exhaustion produces a final answer with tools disabled instead of a u
   }
 });
 
+test("the tool allowance resets for each response in the same thread", async () => {
+  setLlmDeploymentName("small", "budget-test");
+  const originalFetch = globalThis.fetch;
+  let phase: "first" | "second" = "first";
+  let requests = 0;
+  let executions = 0;
+  let secondRequestBody: { tools?: unknown[]; input: unknown[] } | undefined;
+  globalThis.fetch = (async (_url, init) => {
+    const body = JSON.parse(String(init?.body));
+    requests++;
+    if (phase === "second" && !secondRequestBody) {
+      secondRequestBody = body;
+      return Response.json(
+        createApiResponse(`resp_thread_second_${requests}`, [
+          {
+            type: "function_call" as const,
+            id: `fc_second_${requests}`,
+            call_id: `call_second_${requests}`,
+            name: "set_reply_message_id",
+            arguments: '{"message_id":7}',
+            status: "completed" as const,
+          },
+        ]),
+      );
+    }
+    if (!body.tools)
+      return Response.json(budgetTestAnswer(`resp_thread_wrap_${requests}`));
+    if (phase === "second")
+      return Response.json(budgetTestAnswer(`resp_thread_done_${requests}`));
+    return Response.json(
+      createApiResponse(
+        `resp_thread_first_${requests}`,
+        Array.from({ length: 13 }, (_, i) => ({
+          type: "function_call" as const,
+          id: `fc_${requests}_${i}`,
+          call_id: `call_${requests}_${i}`,
+          name: "set_reply_message_id",
+          arguments: '{"message_id":7}',
+          status: "completed" as const,
+        })),
+      ),
+    );
+  }) as typeof fetch;
+  const options = {
+    context: { chatId: 1, messageId: 1 },
+    chargeCredits: async () => {
+      executions++;
+    },
+  };
+  try {
+    const first = await requestLlm(
+      "Use every tool",
+      ["set_reply_message_id"],
+      undefined,
+      options,
+      "Be brief.",
+    );
+    strictEqual(executions, 12);
+    ok(first.response_id);
+
+    phase = "second";
+    const second = await requestLlm(
+      "Use a tool again",
+      ["set_reply_message_id"],
+      first.response_id,
+      options,
+      "Be brief.",
+    );
+    strictEqual(second.response, "Done.");
+    strictEqual(executions, 13);
+    ok(secondRequestBody?.tools?.length);
+    const replayed = JSON.stringify(secondRequestBody?.input);
+    ok(!replayed.includes("Make no more tool calls"));
+    ok(replayed.includes("applied only to that answer"));
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("a provider ignoring tools-disabled cannot start another tool loop and partial text is retained", async () => {
   setLlmDeploymentName("small", "budget-test");
   const originalFetch = globalThis.fetch;
@@ -2795,6 +2874,8 @@ test("periodic trolling delivers to the selected context message or without a re
           {
             message_id: 2,
             message_thread_id: 7,
+            is_topic_message: true,
+            chat: { type: "supergroup", is_forum: true },
           },
           { id: 2, first_name: "Trigger user" },
           -100,

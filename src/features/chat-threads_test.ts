@@ -7,10 +7,7 @@ Bun.env.LLM_STREAMING = "false";
 const { chatComposer } = await import("./chat.ts");
 const { initDatabase } = await import("./database.ts");
 const { setLlmDeploymentName } = await import("./llm-deployments.ts");
-const { getGuestThreadReference } = await import("./guest-threads.ts");
-const { getGuestResponseThread, migrateThreads, saveThread } = await import(
-  "./threads.ts"
-);
+const { migrateThreads, saveThread } = await import("./threads.ts");
 
 type Message = NonNullable<Context["message"]>;
 type Reply = NonNullable<Message["reply_to_message"]>;
@@ -80,7 +77,6 @@ async function fixture() {
     message_thread_id?: number;
     reply_parameters?: { message_id?: number };
   }> = [];
-  const markups = new Map<string, NonNullable<Message["reply_markup"]>>();
   let answer = "Done.";
   let sentId = 1000;
   let current: Message = groupMessage(1);
@@ -125,11 +121,6 @@ async function fixture() {
     get sentId() {
       return sentId;
     },
-    markup(responseId: string) {
-      const markup = markups.get(responseId);
-      ok(markup, `No actual delivered reference for ${responseId}`);
-      return markup;
-    },
     async send(
       message: Message,
       previous: string | null,
@@ -150,18 +141,11 @@ async function fixture() {
       ctx.database = database;
       ctx.telemetry = { event: () => {} } as Context["telemetry"];
       ctx.answerGuestQuery = async (result) => {
-        ok(result.reply_markup);
-        const referenceId = getGuestThreadReference(result.reply_markup);
-        ok(referenceId);
-        const row = await getGuestResponseThread(database, {
-          conversationKey:
-            message.chat.type === "private"
-              ? `dm:${[message.chat.id, message.from?.id].sort((a, b) => Number(a) - Number(b)).join(":")}:0`
-              : `chat:${message.chat.id}:${message.message_thread_id ?? 0}`,
-          referenceId,
-        });
-        ok(row, "The reference must be durable before Telegram can deliver it");
-        markups.set(`resp_thread_${requests.length}`, result.reply_markup);
+        strictEqual(
+          result.reply_markup,
+          undefined,
+          "Guest answers must not add UI controls",
+        );
         const owner =
           message.chat.type === "supergroup"
             ? message.chat.id + 1_000_000_000_000
@@ -191,61 +175,6 @@ async function fixture() {
   };
 }
 
-test("guest DM replies follow delivered references across participant views and restarts", async () => {
-  const f = await fixture();
-  try {
-    const first = await f.send(
-      { ...dm(100), text: "9.6 million crowns in euros" },
-      null,
-    );
-    const second = await f.send(
-      {
-        ...dm(900, bob, alice),
-        text: "Czech",
-        reply_to_message: { ...parent(899), reply_markup: f.markup(first) },
-      },
-      first,
-    );
-    const third = await f.send(
-      {
-        ...dm(104),
-        text: "convert that",
-        reply_to_message: {
-          ...parent(103, "Same answer.", bob),
-          reply_markup: f.markup(second),
-        },
-      },
-      second,
-    );
-    for (const text of ["9.6 million crowns in euros", "Czech", "convert that"])
-      ok(JSON.stringify(f.requests.at(-1)?.input).includes(text));
-    await migrateThreads(f.database);
-    await migrateThreads(f.database);
-    await f.send(
-      {
-        ...dm(904, bob, alice),
-        text: "old branch",
-        reply_to_message: { ...parent(899), reply_markup: f.markup(first) },
-      },
-      first,
-    );
-    ok(!JSON.stringify(f.requests.at(-1)?.input).includes("convert that"));
-    strictEqual(
-      (
-        await f.database
-          .selectFrom("guest_thread_links")
-          .selectAll()
-          .where("message_id", "=", 104)
-          .executeTakeFirstOrThrow()
-      ).thread_id,
-      100,
-    );
-    ok(third);
-  } finally {
-    await f.close();
-  }
-});
-
 test("guest replies use exact IDs even when content is edited and delivery IDs are non-adjacent", async () => {
   const f = await fixture();
   try {
@@ -259,165 +188,6 @@ test("guest replies use exact IDs even when content is edited and delivery IDs a
     );
     // No incrementing of a trigger ID or matching the identical answer text.
     await f.send({ ...dm(170), reply_to_message: parent(101, "560") }, null);
-  } finally {
-    await f.close();
-  }
-});
-
-test("identical guest answers stay separate by reference and keep old explicit branches", async () => {
-  const f = await fixture();
-  try {
-    const first = await f.send(dm(100), null);
-    const second = await f.send(dm(110), null);
-    await f.send(
-      {
-        ...dm(900, bob, alice),
-        reply_to_message: { ...parent(899), reply_markup: f.markup(first) },
-      },
-      first,
-    );
-    await f.send(
-      {
-        ...dm(902, bob, alice),
-        reply_to_message: { ...parent(898), reply_markup: f.markup(second) },
-      },
-      second,
-    );
-    // No stable identifier means no inference from content or delivery order.
-    await f.send(
-      { ...dm(904, bob, alice), reply_to_message: parent(897) },
-      null,
-    );
-  } finally {
-    await f.close();
-  }
-});
-
-test("delivered references still work if a future inline ID encoding cannot be decoded", async () => {
-  const f = await fixture();
-  try {
-    // A zero native message ID is rejected by the decoder. The delivered
-    // reference remains authoritative without any timestamp/content recovery.
-    const first = await f.send(dm(100), null, "Same answer.", true, 0);
-    await f.send(
-      {
-        ...dm(900, bob, alice),
-        reply_to_message: { ...parent(899), reply_markup: f.markup(first) },
-      },
-      first,
-    );
-  } finally {
-    await f.close();
-  }
-});
-
-test("guest response identity is independent of delivery dates, reply dates and missing dates", async () => {
-  const f = await fixture();
-  try {
-    const first = await f.send(
-      { ...dm(100), text: "@test_bot число 560", date: 1792753502 },
-      null,
-      "560",
-      true,
-      2199079,
-    );
-    await f.database
-      .updateTable("guest_response_threads")
-      .set({
-        created_at: "1999-01-01T00:00:00.000Z",
-        updated_at: "1999-01-01T00:00:00.000Z",
-      })
-      .execute();
-    const second = await f.send(
-      {
-        ...dm(2199080),
-        date: 1792753526,
-        text: "как думаешь 2+2 сколько будет",
-        reply_to_message: { ...parent(2199079, "560"), date: 1792753514 },
-      },
-      first,
-      "4 🙂",
-      true,
-      2199081,
-    );
-    await f.send(
-      {
-        ...dm(2199082),
-        date: 1,
-        text: "какое первое сообщение я тебе написал",
-        reply_to_message: { ...parent(2199081, "4 🙂"), date: 2 },
-      },
-      second,
-      "число 560",
-    );
-    ok(JSON.stringify(f.requests.at(-1)?.input).includes("число 560"));
-    // Both views can resume the original answer with no date fields available.
-    const missingDates = {
-      ...dm(900, bob, alice),
-      reply_to_message: { ...parent(899), reply_markup: f.markup(first) },
-    };
-    Reflect.deleteProperty(missingDates, "date");
-    Reflect.deleteProperty(missingDates.reply_to_message, "date");
-    await f.send(missingDates, first);
-  } finally {
-    await f.close();
-  }
-});
-
-test("references cannot cross DM participants, forum topics or direct bot chat storage", async () => {
-  const f = await fixture();
-  try {
-    await saveThread(f.database, {
-      chat_id: bob.id,
-      message_id: 50,
-      thread_id: 50,
-      response_id: "private-secret",
-      agent_id: "normal",
-    });
-    const first = await f.send(dm(100), null);
-    await f.send({ ...dm(110), reply_to_message: parent(50) }, null);
-    await f.send(
-      {
-        ...dm(120, carol, bob),
-        reply_to_message: { ...parent(101), reply_markup: f.markup(first) },
-      },
-      null,
-    );
-    await f.send(
-      {
-        ...dm(130),
-        reply_to_message: {
-          ...parent(101),
-          from: bob,
-          reply_markup: f.markup(first),
-        },
-      },
-      null,
-    );
-    const topic = await f.send(groupMessage(10, 7), null);
-    await f.send(
-      {
-        ...groupMessage(12, 8),
-        reply_to_message: {
-          ...parent(11),
-          reply_markup: f.markup(topic),
-          message_thread_id: 8,
-          is_topic_message: true,
-        },
-      },
-      null,
-    );
-    strictEqual(
-      (
-        await f.database
-          .selectFrom("threads")
-          .selectAll()
-          .where("chat_id", "=", bob.id)
-          .where("message_id", "=", 50)
-          .executeTakeFirstOrThrow()
-      ).response_id,
-      "private-secret",
-    );
   } finally {
     await f.close();
   }
@@ -521,7 +291,6 @@ test("guest forum messages retain topic history and explicit reply branches", as
           ...parent(11),
           message_thread_id: 7,
           is_topic_message: true,
-          reply_markup: f.markup(first),
         },
       },
       first,
@@ -612,9 +381,9 @@ test("basic group guest IDs are scoped to each caller's account", async () => {
         ...groupMessage(14),
         chat,
         from: carol,
-        reply_to_message: { ...parent(800), reply_markup: f.markup(first) },
+        reply_to_message: { ...parent(800) },
       },
-      first,
+      null,
     );
   } finally {
     await f.close();
@@ -632,7 +401,6 @@ test("group history survives guest-to-member and member-to-guest replies", async
           ...parent(11),
           message_thread_id: 7,
           is_topic_message: true,
-          reply_markup: f.markup(first),
         },
       },
       first,
@@ -715,38 +483,241 @@ test("migration restores exact legacy inline IDs without restoring content or ti
   }
 });
 
-test("Reply button answers with a hint and does not generate another model request", async () => {
+test("duplicate guest answers resume exact parents and old branches after restart", async () => {
   const f = await fixture();
   try {
-    const first = await f.send(dm(100), null);
-    const callbackData = f.markup(first).inline_keyboard[0][0];
-    ok("callback_data" in callbackData && callbackData.callback_data);
-    const hints: string[] = [];
-    const ctx = new GrammyContext(
+    const first = await f.send(
+      { ...dm(100), text: "first root" },
+      null,
+      "Same answer.",
+      true,
+      153,
+    );
+    const second = await f.send(
+      { ...dm(160), text: "second root" },
+      null,
+      "Same answer.",
+      true,
+      199,
+    );
+    await f.send(
+      { ...dm(210), reply_to_message: parent(153, "Edited text") },
+      first,
+    );
+    await migrateThreads(f.database);
+    await migrateThreads(f.database);
+    await f.send({ ...dm(220), reply_to_message: parent(199) }, second);
+    await f.send({ ...dm(230), reply_to_message: parent(153) }, first);
+    ok(!JSON.stringify(f.requests.at(-1)?.input).includes("second root"));
+  } finally {
+    await f.close();
+  }
+});
+
+test("the 560 reply chain keeps full history without dates or additional controls", async () => {
+  const f = await fixture();
+  try {
+    const first = await f.send(
+      { ...dm(100), text: "@test_bot число 560", date: 1792753502 },
+      null,
+      "560",
+      true,
+      2199079,
+    );
+    await f.database
+      .updateTable("guest_response_threads")
+      .set({
+        created_at: "1999-01-01T00:00:00.000Z",
+        updated_at: "1999-01-01T00:00:00.000Z",
+      })
+      .execute();
+    const second = await f.send(
       {
-        update_id: 1,
-        callback_query: {
-          id: "query",
-          from: bob,
-          chat_instance: "test",
-          inline_message_id: "inline",
-          data: callbackData.callback_data,
+        ...dm(2199080),
+        date: 1792753526,
+        text: "как думаешь 2+2 сколько будет",
+        reply_to_message: { ...parent(2199079, "560"), date: 1792753514 },
+      },
+      first,
+      "4 🙂",
+      true,
+      2199081,
+    );
+    const last = {
+      ...dm(2199082),
+      text: "какое первое сообщение я тебе написал",
+      reply_to_message: parent(2199081, "4 🙂"),
+    };
+    Reflect.deleteProperty(last, "date");
+    Reflect.deleteProperty(last.reply_to_message, "date");
+    await f.send(last, second, "число 560");
+    const input = JSON.stringify(f.requests.at(-1)?.input);
+    for (const text of ["число 560", "2+2", "какое первое сообщение"])
+      ok(input.includes(text));
+  } finally {
+    await f.close();
+  }
+});
+
+test("a unique answer binds the other DM participant's ID without crossing conversations", async () => {
+  const f = await fixture();
+  try {
+    const first = await f.send(dm(100), null, "560", true, 153);
+    // Bob sees a different ID. Unique content and the original caller identify
+    // the response; the resolved numeric ID is persisted for subsequent replies.
+    await f.send(
+      { ...dm(900, bob, alice), reply_to_message: parent(899, "560") },
+      first,
+    );
+    // Another participant's conversation with the same peer must stay isolated.
+    await f.send(
+      { ...dm(160, carol, bob), reply_to_message: parent(153, "560") },
+      null,
+    );
+    await saveThread(f.database, {
+      chat_id: bob.id,
+      message_id: 50,
+      thread_id: 50,
+      response_id: "private-secret",
+      agent_id: "normal",
+    });
+    await f.send({ ...dm(180), reply_to_message: parent(50) }, null);
+  } finally {
+    await f.close();
+  }
+});
+
+test("alternating DM participants retain the original currency request without controls or time windows", async () => {
+  const f = await fixture();
+  try {
+    const first = await f.send(
+      { ...dm(100), text: "9.6 million crowns in euros" },
+      null,
+      "Which **crowns** — [CZK](https://example.test/czk)?",
+    );
+    const second = await f.send(
+      {
+        ...dm(900, bob, alice),
+        text: "Czech",
+        reply_to_message: {
+          ...parent(899),
+          text: undefined,
+          rich_message: {
+            blocks: [{ type: "paragraph", text: "Which crowns — CZK?" }],
+          },
         },
       },
-      f.api,
-      bot,
-    ) as Context;
-    ctx.answerCallbackQuery = async (options) => {
-      hints.push(typeof options === "string" ? options : (options?.text ?? ""));
-      return true;
+      first,
+      "9.6 million Czech crowns in euros, understood.",
+    );
+    // The age of either message cannot influence content recovery.
+    await f.database
+      .updateTable("guest_response_threads")
+      .set({
+        created_at: "1999-01-01T00:00:00.000Z",
+        updated_at: "1999-01-01T00:00:00.000Z",
+      })
+      .execute();
+    const last = {
+      ...dm(104),
+      text: "convert that",
+      reply_to_message: parent(
+        103,
+        "9.6 million Czech crowns in euros, understood.",
+        bob,
+      ),
     };
-    await chatComposer.middleware()(ctx, async () => {
-      throw new Error("Button was skipped");
-    });
-    deepStrictEqual(hints, [
-      "Reply to this message to continue this conversation.",
-    ]);
-    strictEqual(f.requests.length, 1);
+    Reflect.deleteProperty(last, "date");
+    Reflect.deleteProperty(last.reply_to_message, "date");
+    await f.send(last, second, "Conversion complete.");
+    const input = JSON.stringify(f.requests.at(-1)?.input);
+    for (const text of ["9.6 million crowns in euros", "Czech", "convert that"])
+      ok(input.includes(text));
+    await migrateThreads(f.database);
+    // The alias survives restart, formatting changes and later duplicates.
+    await f.send(
+      dm(110),
+      null,
+      "Which **crowns** — [CZK](https://example.test/czk)?",
+    );
+    await f.send(
+      { ...dm(904, bob, alice), reply_to_message: parent(899, "Edited text") },
+      first,
+    );
+  } finally {
+    await f.close();
+  }
+});
+
+test("content recovery never chooses among identical answers by their age or delivery order", async () => {
+  const f = await fixture();
+  try {
+    const first = await f.send(dm(100), null, "Same answer.");
+    // Recover an alias while the content is unique.
+    await f.send(
+      { ...dm(900, bob, alice), reply_to_message: parent(899) },
+      first,
+      "Bob's separate answer.",
+    );
+    const second = await f.send(dm(110), null, "Same answer.");
+    await f.database
+      .updateTable("guest_response_threads")
+      .set({ created_at: "1900-01-01T00:00:00.000Z" })
+      .where("response_id", "=", first)
+      .execute();
+    await f.send(
+      { ...dm(904, bob, alice), reply_to_message: parent(898) },
+      null,
+      "Cannot disambiguate.",
+    );
+    // Exact aliases and the original account's native IDs still win.
+    await f.send(
+      { ...dm(906, bob, alice), reply_to_message: parent(899) },
+      first,
+      "Alias retained.",
+    );
+    await f.send(
+      { ...dm(120), reply_to_message: parent(111) },
+      second,
+      "Native ID retained.",
+    );
+  } finally {
+    await f.close();
+  }
+});
+
+test("content recovery verifies the bot author and the original caller", async () => {
+  const f = await fixture();
+  try {
+    const first = await f.send(dm(100), null, "4");
+    const second = await f.send(dm(900, bob, alice), null, "4");
+    await f.send(
+      { ...dm(904, bob, alice), reply_to_message: parent(899, "4", alice) },
+      first,
+      "Alice's branch.",
+    );
+    await f.send(
+      { ...dm(104), reply_to_message: parent(103, "4", bob) },
+      second,
+      "Bob's branch.",
+    );
+    await f.send(
+      {
+        ...dm(906, bob, alice),
+        reply_to_message: { ...parent(898, "4", alice), from: alice },
+      },
+      null,
+      "Human copy.",
+    );
+    const missingCaller = {
+      ...parent(897, "4"),
+      guest_bot_caller_user: undefined,
+    };
+    await f.send(
+      { ...dm(908, bob, alice), reply_to_message: missingCaller },
+      null,
+      "No caller.",
+    );
   } finally {
     await f.close();
   }

@@ -40,7 +40,6 @@ export type GuestResponseThreadsTable = {
   response_id: string;
   conversation_key: ColumnType<string | null, string | null | undefined>;
   caller_id: ColumnType<number | null, number | null | undefined>;
-  // Retained for compatibility with databases created by older versions.
   content_fingerprint: ColumnType<string | null, string | null | undefined>;
   inline_message_id: ColumnType<
     string | null,
@@ -150,10 +149,14 @@ export async function migrateThreads(database: Database) {
     .ifExists()
     .execute();
   await database.schema
-    .createIndex("guest_response_reference_index")
+    .dropIndex("guest_response_reference_index")
+    .ifExists()
+    .execute();
+  await database.schema
+    .createIndex("guest_response_content_lookup_index")
     .ifNotExists()
     .on("guest_response_threads")
-    .columns(["conversation_key", "response_fingerprint"])
+    .columns(["conversation_key", "caller_id", "content_fingerprint"])
     .execute();
 
   await database.schema
@@ -291,22 +294,28 @@ export async function saveThread(
   return row;
 }
 
-export async function getGuestResponseThread(
+export async function getUniqueGuestResponseByContent(
   database: Database,
   {
     conversationKey,
-    referenceId,
+    callerId,
+    contentFingerprint,
   }: {
     conversationKey: string;
-    referenceId: string;
+    callerId: number;
+    contentFingerprint: string;
   },
 ): Promise<GuestResponseThread | undefined> {
-  return await database
+  const rows = await database
     .selectFrom("guest_response_threads")
     .selectAll()
     .where("conversation_key", "=", conversationKey)
-    .where("response_fingerprint", "=", referenceId)
-    .executeTakeFirst();
+    .where("caller_id", "=", callerId)
+    .where("content_fingerprint", "=", contentFingerprint)
+    .where("inline_message_id", "is not", null)
+    .limit(2)
+    .execute();
+  return rows.length === 1 ? rows[0] : undefined;
 }
 
 export async function getGuestThreadLink(

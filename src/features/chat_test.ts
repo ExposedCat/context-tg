@@ -671,12 +671,24 @@ test("group replies retain their parent and history scope while forum topics sta
         scope: 70,
         previous: "resp_group_10",
       },
+      {
+        id: 90,
+        general: true,
+        replyId: 85,
+        replyBot: false,
+        text: "laylo summarize General",
+        anchor: 85,
+        scope: undefined,
+        previous: null,
+      },
     ];
     for (const [index, test] of cases.entries()) {
+      const messageChat =
+        "general" in test ? { ...chat, is_forum: true as const } : chat;
       const reply = {
         message_id: test.replyId,
         date: 0,
-        chat,
+        chat: messageChat,
         from: test.replyBot ? bot : user,
         text: `Parent ${test.replyId}`,
         message_thread_id: test.replyTopic,
@@ -689,7 +701,7 @@ test("group replies retain their parent and history scope while forum topics sta
           message: {
             message_id: test.id,
             date: 0,
-            chat,
+            chat: messageChat,
             from: user,
             text: test.text,
             message_thread_id: test.topic,
@@ -715,6 +727,8 @@ test("group replies retain their parent and history scope while forum topics sta
         ...(test.scope !== undefined
           ? [{ key: "thread_id", match: { value: test.scope } }]
           : []),
+        // Forum General messages have no topic id; only General is read.
+        ...("general" in test ? [{ is_empty: { key: "thread_id" } }] : []),
         ...(test.anchor !== undefined
           ? [{ key: "message_id", range: { lte: test.anchor } }]
           : []),

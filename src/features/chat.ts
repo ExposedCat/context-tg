@@ -23,12 +23,10 @@ import { parseDanbooruOptions } from "./danbooru-options.ts";
 import type { Database } from "./database.ts";
 import { APP_ENV } from "./env.ts";
 import {
-  createGuestThreadReference,
-  GUEST_THREAD_CALLBACK_PREFIX,
+  getGuestContentFingerprint,
   getGuestConversationKey,
   getGuestInlineMessageId,
   getGuestMessageScope,
-  getGuestThreadReference,
 } from "./guest-threads.ts";
 import {
   downloadTelegramImageDataUrl,
@@ -83,6 +81,7 @@ import {
 } from "./tasks.ts";
 import {
   getMessageTopicId,
+  getMessageTopicScope,
   isImplicitTopicReply,
   disabledLinkPreviewOptions as linkPreviewOptions,
 } from "./telegram.ts";
@@ -90,11 +89,10 @@ import { createLlmCallTelemetry } from "./telemetry.ts";
 import { countTextTokens } from "./text-tokens.ts";
 import {
   createThread,
-  type GuestResponseThread,
-  getGuestResponseThread,
   getGuestThreadLink,
   getLatestTopicThread,
   getThread,
+  getUniqueGuestResponseByContent,
   saveGuestResponseThread,
   saveGuestThreadLink,
   saveThread,
@@ -130,9 +128,6 @@ type LlmContextMessage = {
   via_bot?: TelegramUser;
   guest_bot_caller_user?: TelegramUser;
   guest_bot_caller_chat?: TelegramChat;
-  reply_markup?: {
-    inline_keyboard: Array<Array<{ text: string; callback_data?: string }>>;
-  };
 };
 
 type TextMessage = LlmContextMessage & {
@@ -252,8 +247,8 @@ type SentRichMarkdownMessage = {
 };
 
 type GuestResponseReference = {
-  reference_id: string;
   inline_message_id: string;
+  content_fingerprint?: string;
 };
 
 type GuestResponseDelivery = {
@@ -957,6 +952,7 @@ function getLlmToolContext(
   message: TextMessage,
 ): LlmToolContext {
   const reply = getActualReply(message);
+  const topicScope = getMessageTopicScope(message, reply);
 
   return {
     chatId,
@@ -964,7 +960,8 @@ function getLlmToolContext(
     userId: message.from?.id,
     userName: getTelegramUserName(message.from),
     replyMessageId: reply?.message_id,
-    threadId: getMessageTopicId(message, reply),
+    threadId: topicScope ?? undefined,
+    ...(topicScope === null ? { generalTopic: true } : {}),
     danbooru: parseDanbooruOptions(message.text ?? message.caption ?? "")
       .overrides,
   };
@@ -1875,7 +1872,6 @@ async function buildGuestArticleResult(
   database: Database,
   message: TextMessage,
   richMarkdown: string,
-  reference?: { callbackData: string; label: string },
 ): Promise<Parameters<Context["answerGuestQuery"]>[0]> {
   const content = getGuestArticleRichMarkdown(richMarkdown);
 
@@ -1884,20 +1880,6 @@ async function buildGuestArticleResult(
     id: `guest-${message.message_id}`,
     title: "Laylo",
     description: formatGuestResultDescription(content),
-    ...(reference
-      ? {
-          reply_markup: {
-            inline_keyboard: [
-              [
-                {
-                  text: reference.label,
-                  callback_data: reference.callbackData,
-                },
-              ],
-            ],
-          },
-        }
-      : {}),
     input_message_content: {
       rich_message: await buildGuestRichMessage(database, content),
     },
@@ -1908,55 +1890,28 @@ async function sendGuestLlmResponse(
   ctx: Context,
   message: TextMessage,
   llmResponse: LlmResponse,
-  threadId: number,
 ): Promise<GuestResponseDelivery> {
   const formattedResponse = formatLlmResponse(llmResponse);
   const richMarkdown = formattedResponse.richMarkdown.trim();
-  const conversationKey = getGuestConversationKey(
-    message,
-    getMessageTopicId(message, getActualReply(message)),
-  );
-  const reference =
-    llmResponse.response_id && conversationKey && ctx.chat
-      ? createGuestThreadReference()
-      : undefined;
-  // Persist before delivery: a reply can arrive as soon as Telegram posts it.
-  if (reference && conversationKey && ctx.chat && llmResponse.response_id) {
-    await saveGuestResponseThread(ctx.database, {
-      chat_id: ctx.chat.id,
-      conversation_key: conversationKey,
-      caller_id: message.sender_chat?.id ?? message.from?.id,
-      response_fingerprint: reference.referenceId,
-      trigger_message_id: message.message_id,
-      thread_id: threadId,
-      response_id: llmResponse.response_id,
-      agent_id: guestAgent.id,
-    });
-  }
   const result = await buildGuestArticleResult(
     ctx.database,
     message,
     formattedResponse.richMarkdown,
-    reference
-      ? {
-          ...reference,
-          label: ctx.t?.("guest-thread-reply-button") ?? "↪ Reply",
-        }
-      : undefined,
   );
 
   try {
     const sentGuestMessage = await ctx.answerGuestQuery(result);
     return {
       sentMessages: [],
-      responseReferences: reference
-        ? [
-            {
-              reference_id: reference.referenceId,
-              inline_message_id: sentGuestMessage.inline_message_id,
-            },
-          ]
-        : [],
+      responseReferences: [
+        {
+          inline_message_id: sentGuestMessage.inline_message_id,
+          content_fingerprint: getGuestContentFingerprint(
+            getGuestArticleRichMarkdown(formattedResponse.richMarkdown),
+            "markdown",
+          ),
+        },
+      ],
     };
   } catch (error) {
     logError("Failed to answer guest query:", error);
@@ -2692,43 +2647,8 @@ async function handleChatRequest(
   }
 }
 
-function getThreadResponseId(
-  thread: Thread | GuestResponseThread | undefined,
-): string | undefined {
+function getThreadResponseId(thread: Thread | undefined): string | undefined {
   return thread?.response_id ?? undefined;
-}
-
-async function backfillGuestReplyThread(
-  ctx: Context,
-  chatId: number,
-  conversationKey: string,
-  reply: TextMessage,
-  guestThread: GuestResponseThread,
-): Promise<Thread> {
-  try {
-    return await saveGuestThreadLink(ctx.database, {
-      conversation_key: conversationKey,
-      chat_id: chatId,
-      message_id: reply.message_id,
-      thread_id: guestThread.thread_id,
-      response_id: guestThread.response_id,
-      agent_id: guestThread.agent_id ?? guestAgent.id,
-    });
-  } catch (error) {
-    logError("Failed to backfill guest reply thread:", {
-      messageId: reply.message_id,
-      responseId: guestThread.response_id,
-      error,
-    });
-    return {
-      chat_id: chatId,
-      message_id: reply.message_id,
-      thread_id: guestThread.thread_id,
-      response_id: guestThread.response_id,
-      agent_id: guestThread.agent_id ?? guestAgent.id,
-      agent_name: null,
-    };
-  }
 }
 
 async function getGuestReplyThread(
@@ -2748,28 +2668,6 @@ async function getGuestReplyThread(
     chatId,
     message.from?.id ?? 0,
   );
-  const referenceId = getGuestThreadReference(reply.reply_markup);
-  if (referenceId) {
-    if (reply.from?.id !== ctx.me.id) return undefined;
-    const responseThread = await getGuestResponseThread(ctx.database, {
-      conversationKey,
-      referenceId,
-    });
-    const callerId =
-      reply.guest_bot_caller_user?.id ?? reply.guest_bot_caller_chat?.id;
-    if (
-      !responseThread ||
-      (callerId !== undefined && callerId !== responseThread.caller_id)
-    )
-      return undefined;
-    return await backfillGuestReplyThread(
-      ctx,
-      chatId,
-      messageScope,
-      reply,
-      responseThread,
-    );
-  }
   const thread = await getGuestThreadLink(ctx.database, {
     conversation_key: messageScope,
     chat_id: chatId,
@@ -2795,7 +2693,38 @@ async function getGuestReplyThread(
     )
       return groupThread;
   }
-  return thread;
+  const callerId =
+    reply.guest_bot_caller_user?.id ?? reply.guest_bot_caller_chat?.id;
+  // Only another account's view needs content recovery. In the original view
+  // the delivery ID is authoritative, even if the text has since been edited.
+  if (
+    ctx.chat.type === "supergroup" ||
+    reply.from?.id !== ctx.me.id ||
+    callerId === undefined ||
+    callerId === message.from?.id ||
+    hasImageAttachments(reply)
+  )
+    return thread;
+  const text =
+    reply.text ?? reply.caption ?? getRichMessageText(reply.rich_message);
+  const contentFingerprint = text && getGuestContentFingerprint(text);
+  if (!contentFingerprint) return thread;
+  const response = await getUniqueGuestResponseByContent(ctx.database, {
+    conversationKey,
+    callerId,
+    contentFingerprint,
+  });
+  if (!response) return thread;
+  // Cache the second account's message ID. All later replies to this parent
+  // resume by ID even when its text changes or another identical answer appears.
+  return await saveGuestThreadLink(ctx.database, {
+    conversation_key: messageScope,
+    chat_id: chatId,
+    message_id: reply.message_id,
+    thread_id: response.thread_id,
+    response_id: response.response_id,
+    agent_id: response.agent_id ?? guestAgent.id,
+  });
 }
 
 async function saveGuestChatResponseThread(
@@ -2856,12 +2785,13 @@ async function saveGuestChatResponseThread(
         chat_id: chatId,
         conversation_key: conversationKey,
         caller_id: message.sender_chat?.id ?? message.from?.id,
-        response_fingerprint: reference.reference_id,
+        response_fingerprint: llmResponse.response_id,
         trigger_message_id: message.message_id,
         thread_id: threadId,
         response_id: llmResponse.response_id,
         agent_id: guestAgent.id,
         inline_message_id: reference.inline_message_id,
+        content_fingerprint: reference.content_fingerprint,
       });
       const messageId = getGuestInlineMessageId(responseThread);
       if (messageId !== undefined) {
@@ -2975,12 +2905,7 @@ async function handleGuestChatRequest(
     let delivery: GuestResponseDelivery;
 
     try {
-      delivery = await sendGuestLlmResponse(
-        ctx,
-        message,
-        llmResponse,
-        threadId,
-      );
+      delivery = await sendGuestLlmResponse(ctx, message, llmResponse);
     } catch (error) {
       if (!isUnavailableRichMessagePhotoError(error)) {
         throw error;
@@ -3008,12 +2933,7 @@ async function handleGuestChatRequest(
       );
 
       try {
-        delivery = await sendGuestLlmResponse(
-          ctx,
-          message,
-          llmResponse,
-          threadId,
-        );
+        delivery = await sendGuestLlmResponse(ctx, message, llmResponse);
       } catch (retryError) {
         if (!isUnavailableRichMessagePhotoError(retryError)) {
           throw retryError;
@@ -3028,12 +2948,7 @@ async function handleGuestChatRequest(
             stripRichMessageImages(llmResponse.response ?? "") ||
             "I couldn't send that image.",
         };
-        delivery = await sendGuestLlmResponse(
-          ctx,
-          message,
-          llmResponse,
-          threadId,
-        );
+        delivery = await sendGuestLlmResponse(ctx, message, llmResponse);
       }
     }
 
@@ -3157,7 +3072,7 @@ async function sendProactiveAgentResponse(
   const messages = await readLastMessages(PROACTIVE_CONTEXT_MESSAGE_COUNT, {
     chatId,
     messageId: message.message_id,
-    threadId,
+    threadId: getMessageTopicScope(textMessage, reply),
   });
 
   if (messages.length === 0) {
@@ -3220,17 +3135,6 @@ export async function replyWithResumeTask(
     taskText: `Resume: ${task.task_text}`,
   });
 }
-
-chatComposer.callbackQuery(
-  new RegExp(`^${GUEST_THREAD_CALLBACK_PREFIX}`),
-  async (ctx) => {
-    await ctx.answerCallbackQuery({
-      text:
-        ctx.t?.("guest-thread-reply-hint") ??
-        "Reply to this message to continue this conversation.",
-    });
-  },
-);
 
 chatComposer.on("guest_message", async (ctx, next) => {
   if (!ctx.chat || !ctx.guestMessage) {
@@ -3336,9 +3240,7 @@ chatComposer.on("message", async (ctx, next) => {
   const addressed = text ? isAddressed(text, ctx.me.username) : false;
   let thread = reply
     ? ctx.chat.type !== "private" &&
-      (reply.guest_bot_caller_user ||
-        reply.guest_bot_caller_chat ||
-        getGuestThreadReference(reply.reply_markup))
+      (reply.guest_bot_caller_user || reply.guest_bot_caller_chat)
       ? await getGuestReplyThread(ctx, message, reply)
       : await getThread(ctx.database, {
           chat_id: ctx.chat.id,

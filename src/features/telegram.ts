@@ -7,8 +7,21 @@ export const disabledLinkPreviewOptions = {
 type TopicMessage = {
   message_thread_id?: number;
   is_topic_message?: boolean;
-  chat?: { type?: string };
+  chat?: { type?: string; is_forum?: boolean };
 };
+
+// Forum General topic messages have no topic id. Return null for them so
+// history can be scoped to General; undefined means the chat has no topics.
+export function getMessageTopicScope(
+  message: TopicMessage,
+  reply: TopicMessage | undefined,
+): number | null | undefined {
+  const topicId = getMessageTopicId(message, reply);
+  if (topicId !== undefined) return topicId;
+  return message.chat?.type === "supergroup" && message.chat.is_forum === true
+    ? null
+    : undefined;
+}
 
 // Supergroups also use message_thread_id for ordinary reply chains. Only
 // forum messages and private chat topics should scope history and delivery.

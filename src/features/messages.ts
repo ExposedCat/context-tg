@@ -108,10 +108,23 @@ export type MessageSearchOptions = {
   from?: Date;
   to?: Date;
   chatId?: number;
-  threadId?: number;
+  threadId?: MessageThreadScope;
   senderId?: number;
   limit?: number;
 };
+
+// A topic id scopes history to that topic, null to a forum's General topic,
+// and undefined to the whole chat. General messages are stored without a
+// thread_id because Telegram gives them no topic id.
+export type MessageThreadScope = number | null | undefined;
+
+export function getThreadScopeMust(
+  threadId: MessageThreadScope,
+): Record<string, unknown>[] {
+  if (threadId === undefined) return [];
+  if (threadId === null) return [{ is_empty: { key: "thread_id" } }];
+  return [{ key: "thread_id", match: { value: threadId } }];
+}
 
 export type MessageSearchResult = MessageMetadata & {
   id: string | number;
@@ -681,9 +694,7 @@ function getSearchFilter(
     must.push({ key: "chat_id", match: { value: options.chatId } });
   }
 
-  if (options.threadId !== undefined) {
-    must.push({ key: "thread_id", match: { value: options.threadId } });
-  }
+  must.push(...getThreadScopeMust(options.threadId));
 
   if (options.senderId !== undefined) {
     must.push({ key: "sender_id", match: { value: options.senderId } });

@@ -11,6 +11,7 @@ import {
   getPromptDateTimeFromEpochSeconds,
 } from "./llm-prompt.ts";
 import type { MessageMetadata } from "./messages.ts";
+import { getMessageTopicScope } from "./telegram.ts";
 import { createLlmCallTelemetry } from "./telemetry.ts";
 import {
   DEFAULT_TROLLING_MODE,
@@ -307,9 +308,20 @@ function buildTrollingRequest(
   ];
 }
 
+type TopicFields = {
+  message_thread_id?: number;
+  is_topic_message?: boolean;
+};
+
+type TrollTriggerMessage = TopicFields & {
+  message_id: number;
+  chat?: { type?: string; is_forum?: boolean };
+  reply_to_message?: TopicFields;
+};
+
 export async function maybeSendPeriodicTroll(
   ctx: Context,
-  message: { message_id: number; message_thread_id?: number },
+  message: TrollTriggerMessage,
   sender: Sender,
   chatId: number,
 ): Promise<void> {
@@ -319,7 +331,7 @@ export async function maybeSendPeriodicTroll(
 
 export async function preparePeriodicTroll(
   ctx: Context,
-  message: { message_id: number; message_thread_id?: number },
+  message: TrollTriggerMessage,
   sender: Sender,
   chatId: number,
 ): Promise<(() => Promise<void>) | undefined> {
@@ -336,14 +348,15 @@ export async function preparePeriodicTroll(
 
 async function sendPeriodicTroll(
   ctx: Context,
-  message: { message_id: number; message_thread_id?: number },
+  message: TrollTriggerMessage,
   sender: Sender,
   chatId: number,
 ): Promise<void> {
+  const topicScope = getMessageTopicScope(message, message.reply_to_message);
   const messages = await readLastMessages(TROLLING_CONTEXT_MESSAGE_COUNT, {
     chatId,
     messageId: message.message_id,
-    threadId: message.message_thread_id,
+    threadId: topicScope,
   });
 
   if (messages.length === 0) {
@@ -373,7 +386,8 @@ async function sendPeriodicTroll(
       context: {
         chatId,
         messageId: message.message_id,
-        threadId: message.message_thread_id,
+        threadId: topicScope ?? undefined,
+        ...(topicScope === null ? { generalTopic: true } : {}),
       },
       agentId: trollAgent.id,
       telemetry,
