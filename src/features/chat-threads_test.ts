@@ -193,7 +193,7 @@ test("guest replies use exact IDs even when content is edited and delivery IDs a
   }
 });
 
-test("forum topics continue independently and explicit replies resume their own checkpoint", async () => {
+test("forum topics start fresh without explicit replies and preserve reply checkpoints", async () => {
   const f = await fixture();
   try {
     const first = await f.send(
@@ -203,18 +203,9 @@ test("forum topics continue independently and explicit replies resume their own 
       false,
     );
     const rootReplyId = f.sentId;
-    await f.send(
-      groupMessage(11, 7),
-      first,
-      "Topic seven continuation.",
-      false,
-    );
-    const other = await f.send(
-      groupMessage(12, 8),
-      null,
-      "Topic eight root.",
-      false,
-    );
+    await f.send(groupMessage(11, 7), null, "New topic seven request.", false);
+    ok(!JSON.stringify(f.requests.at(-1)?.input).includes("Topic seven root."));
+    await f.send(groupMessage(12, 8), null, "Topic eight root.", false);
     await f.send(
       {
         ...groupMessage(13, 7),
@@ -230,12 +221,8 @@ test("forum topics continue independently and explicit replies resume their own 
       "Old branch.",
       false,
     );
-    await f.send(
-      groupMessage(14, 8),
-      other,
-      "Topic eight continuation.",
-      false,
-    );
+    ok(JSON.stringify(f.requests.at(-1)?.input).includes("Topic seven root."));
+    await f.send(groupMessage(14, 8), null, "New topic eight request.", false);
     await f.send(
       {
         ...groupMessage(15, 7),
@@ -261,10 +248,11 @@ test("forum topics continue independently and explicit replies resume their own 
           forum_topic_created: { name: "Eight", icon_color: 1 },
         },
       },
-      "resp_thread_5",
-      "Implicit topic continuation.",
+      null,
+      "Implicit topic reply starts fresh.",
       false,
     );
+    ok(!JSON.stringify(f.requests.at(-1)?.input).includes("Topic eight root."));
     deepStrictEqual(
       f.deliveries.map((delivery) => delivery.message_thread_id),
       [7, 7, 8, 7, 8, 7, 8],
@@ -278,12 +266,14 @@ test("forum topics continue independently and explicit replies resume their own 
   }
 });
 
-test("guest forum messages retain topic history and explicit reply branches", async () => {
+test("guest forum messages start fresh without explicit replies and preserve reply branches", async () => {
   const f = await fixture();
   try {
-    const first = await f.send(groupMessage(10, 7), null);
+    const first = await f.send(groupMessage(10, 7), null, "Topic seven root.");
     await f.send(groupMessage(12, 8), null);
-    await f.send(groupMessage(14, 7), first);
+    await migrateThreads(f.database);
+    await f.send({ ...groupMessage(14, 7), from: bob }, null);
+    ok(!JSON.stringify(f.requests.at(-1)?.input).includes("Topic seven root."));
     await f.send(
       {
         ...groupMessage(16, 7),
@@ -295,6 +285,21 @@ test("guest forum messages retain topic history and explicit reply branches", as
       },
       first,
     );
+    ok(JSON.stringify(f.requests.at(-1)?.input).includes("Topic seven root."));
+    await f.send(
+      {
+        ...groupMessage(18, 7),
+        reply_to_message: {
+          ...parent(7, "Topic service"),
+          from: bob,
+          message_thread_id: 7,
+          is_topic_message: true,
+          forum_topic_created: { name: "Seven", icon_color: 1 },
+        },
+      },
+      null,
+    );
+    ok(!JSON.stringify(f.requests.at(-1)?.input).includes("Topic seven root."));
   } finally {
     await f.close();
   }

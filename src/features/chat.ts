@@ -2841,16 +2841,9 @@ async function handleGuestChatRequest(
   try {
     const reply = getActualReply(message);
     const replyContext = getReplyContext(message, reply);
-    const topicId = getMessageTopicId(message, reply);
     const thread = reply
       ? await getGuestReplyThread(ctx, message, reply)
-      : ctx.chat.type !== "private" && topicId !== undefined
-        ? await getLatestTopicThread(ctx.database, {
-            chatId,
-            threadId: topicId,
-            beforeMessageId: message.message_id,
-          })
-        : undefined;
+      : undefined;
     const threadId =
       thread?.thread_id ??
       getMessageTopicId(message, reply) ??
@@ -3247,7 +3240,9 @@ chatComposer.on("message", async (ctx, next) => {
           message_id: reply.message_id,
         })
     : undefined;
-  if (!thread && !reply && conversationTopicId !== undefined) {
+  // Only DMs inherit history without a reply. A forum topic scopes tools and
+  // delivery, but does not make separate group requests one conversation.
+  if (privateChat && !thread && !reply && conversationTopicId !== undefined) {
     thread = await getLatestTopicThread(ctx.database, {
       chatId: ctx.chat.id,
       threadId: conversationTopicId,

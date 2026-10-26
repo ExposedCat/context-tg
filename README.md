@@ -227,10 +227,13 @@ option that lets users create threads if users should manage their own topics.
 
 ## Conversation context
 
-Forum topics keep separate conversation histories. An addressed message without
-an explicit reply continues that topic; a reply resumes the checkpoint belonging
-to its parent. Ordinary group reply chains remain separate conversations and
-their reply-chain IDs are not treated as forum topic IDs.
+Only private chats automatically continue saved conversations without a reply.
+In groups, including forum topics, each addressed message without an explicit
+reply starts a fresh conversation in both normal and guest mode. An explicit
+reply resumes the checkpoint belonging to its parent; older group messages can
+otherwise be read through history tools. Forum topic IDs scope delivery and
+history tools, not automatic conversation continuation. Ordinary group reply-chain
+IDs are not treated as forum topic IDs.
 
 Guest replies follow exact message IDs decoded from Telegram's inline delivery
 identifiers. Guest links are separate from direct bot chats and are scoped to
