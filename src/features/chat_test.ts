@@ -29,7 +29,6 @@ const [
     chatComposer,
     formatLlmToolError,
     formatModelFailureResponse,
-    getAzureDownMessage,
     getErrorRecoveryPrompt,
     getMessagesImageAttachments,
     getUserInputLimitError,
@@ -1280,22 +1279,94 @@ test("guest usage commands report and adjust group credits without changing pers
   }
 });
 
-test("model failures without activity preserve escaped diagnostics and resume commands", () => {
+test("model failures hide diagnostics and preserve resume commands", () => {
   strictEqual(
     formatModelFailureResponse(
-      new Error("status 400: blocked <image> & context"),
+      Object.assign(new Error("blocked <image> & context"), { status: 400 }),
       "/resume_1283340",
     ),
     [
-      "Failed to generate response",
-      "<blockquote>status 400: blocked &lt;image&gt; &amp; context</blockquote>",
+      "Failed to generate response (400)",
       "/resume_1283340",
       "![⚠️](tg://emoji?id=5881702736843511327)",
     ].join("\n\n"),
   );
 });
 
-test("failed model follow-ups retain tools with progress enabled or disabled", async () => {
+test("initial 401 failures show only the code in normal and guest chats", async () => {
+  const { setLlmDeploymentName } = await import("./llm-deployments.ts");
+  const database = await initDatabase()();
+  const originalFetch = globalThis.fetch;
+  const chat = { id: -401, type: "supergroup", title: "Test" } as const;
+  const bot = {
+    id: 42,
+    is_bot: true,
+    first_name: "Test",
+    username: "test_bot",
+  } as Context["me"];
+  const api = new Api("test");
+  const sent: string[] = [];
+  let calls = 0;
+  api.sendChatAction = async () => true;
+  api.sendRichMessage = async (_chatId, content) => {
+    sent.push(content.markdown ?? "");
+    return {
+      message_id: 100,
+      date: 0,
+      chat,
+      from: bot,
+      rich_message: { blocks: [{ type: "paragraph", text: "Sent" }] },
+    };
+  };
+  globalThis.fetch = (async (input) => {
+    strictEqual(String(input), `${TEST_ENV.LLM_BASE_URL}/responses`);
+    calls++;
+    return Response.json(
+      { error: { code: "401", message: "Invalid subscription key" } },
+      { status: 401 },
+    );
+  }) as typeof fetch;
+  try {
+    setLlmDeploymentName("small", "test-model");
+    for (const mode of ["normal", "guest"] as const) {
+      sent.length = 0;
+      calls = 0;
+      const message = {
+        message_id: 1,
+        date: 0,
+        from: { id: 1, is_bot: false, first_name: "User" },
+        chat,
+        text: "laylo hello",
+      };
+      const ctx = new GrammyContext(
+        {
+          update_id: 1,
+          ...(mode === "guest" ? { guest_message: message } : { message }),
+        },
+        api,
+        bot,
+      ) as Context;
+      ctx.database = database;
+      ctx.telemetry = { event: () => {} } as Context["telemetry"];
+      ctx.answerGuestQuery = async (result) => {
+        sent.push(JSON.stringify(result));
+        return { inline_message_id: "test" };
+      };
+      await chatComposer.middleware()(ctx, async () => {});
+      strictEqual(calls, 1);
+      strictEqual(sent.length, 1);
+      ok(sent[0].includes("Failed to generate response (401)"));
+      ok(!sent[0].includes("Invalid subscription key"));
+      ok(!sent[0].includes("/resume"));
+    }
+  } finally {
+    globalThis.fetch = originalFetch;
+    setLlmDeploymentName("small", "");
+    await database.destroy();
+  }
+});
+
+test("failed model follow-ups retain activity and suppress resume for 401", async () => {
   const { setLlmDeploymentName } = await import("./llm-deployments.ts");
   const { persistChatProgressEnabled } = await import("./llm-models.ts");
   const { getThread } = await import("./threads.ts");
@@ -1311,6 +1382,7 @@ test("failed model follow-ups retain tools with progress enabled or disabled", a
   const api = new Api("test");
   const sent: string[] = [];
   let modelCalls = 0;
+  let failureStatus = 400;
   let sentMessageId = 100;
   api.sendChatAction = async () => true;
   api.sendRichMessage = async (_chatId, richMessage) => {
@@ -1331,13 +1403,13 @@ test("failed model follow-ups retain tools with progress enabled or disabled", a
       return Response.json(
         {
           error: {
-            code: "content_policy_violation",
+            code: failureStatus === 401 ? "401" : "content_policy_violation",
             type: "invalid_request_error",
             message:
               "Image processing blocked due to content policy violation.",
           },
         },
-        { status: 400 },
+        { status: failureStatus },
       );
     }
     return Response.json({
@@ -1381,7 +1453,15 @@ test("failed model follow-ups retain tools with progress enabled or disabled", a
 
   try {
     setLlmDeploymentName("small", "test-model");
-    for (const [index, progressEnabled] of [true, false].entries()) {
+    for (const [index, [status, progressEnabled]] of (
+      [
+        [400, true],
+        [400, false],
+        [401, true],
+        [401, false],
+      ] as const
+    ).entries()) {
+      failureStatus = status;
       await persistChatProgressEnabled(database, chat.id, progressEnabled);
       modelCalls = 0;
       sent.length = 0;
@@ -1407,9 +1487,9 @@ test("failed model follow-ups retain tools with progress enabled or disabled", a
       strictEqual(modelCalls, 13);
       strictEqual(sent.length, 1);
       strictEqual(sent[0].includes("Checking **sources**."), progressEnabled);
-      ok(sent[0].includes("Failed to generate response"));
-      ok(sent[0].includes("content policy violation"));
-      ok(sent[0].includes(`/resume_${messageId}`));
+      ok(sent[0].includes(`Failed to generate response (${status})`));
+      ok(!sent[0].includes("content policy violation"));
+      strictEqual(sent[0].includes(`/resume_${messageId}`), status !== 401);
       ok(
         sent[0].endsWith(
           [
@@ -1433,36 +1513,29 @@ test("failed model follow-ups retain tools with progress enabled or disabled", a
   }
 });
 
-test("Azure upstream outages use a plain custom-emoji message", () => {
-  deepStrictEqual(
-    getAzureDownMessage(
-      new Error(
-        "status 503: server_error: no healthy upstream: 503 no healthy upstream",
-      ),
-    ),
-    {
-      text: "Azure is down 😔",
-      entities: [
-        {
-          type: "custom_emoji",
-          offset: 14,
-          length: 2,
-          custom_emoji_id: "5384549865625758405",
-        },
-      ],
-    },
-  );
-});
-
-test("other model failures do not use the Azure outage message", () => {
-  strictEqual(
-    getAzureDownMessage(new Error("status 503: another server error")),
-    undefined,
-  );
-  strictEqual(
-    getAzureDownMessage(new Error("status 502: no healthy upstream")),
-    undefined,
-  );
+test("authentication failures omit resume and unknown failures hide diagnostics", () => {
+  for (const [error, code, resumable] of [
+    [
+      Object.assign(new Error("Invalid subscription key"), { status: 401 }),
+      "401",
+      false,
+    ],
+    [
+      Object.assign(new Error("no healthy upstream"), { status: 503 }),
+      "503",
+      true,
+    ],
+    [new Error("Internal diagnostics"), "unknown", true],
+  ] as const) {
+    strictEqual(
+      formatModelFailureResponse(error, "/resume_42"),
+      [
+        `Failed to generate response (${code})`,
+        ...(resumable ? ["/resume_42"] : []),
+        "![⚠️](tg://emoji?id=5881702736843511327)",
+      ].join("\n\n"),
+    );
+  }
 });
 
 test("media-group input includes the largest photo from every message", () => {

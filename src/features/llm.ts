@@ -159,7 +159,7 @@ export type LlmRequestOptions = {
   context?: LlmToolContext;
   agentId?: AgentId;
   onProgress?: (progress: LlmProgress) => void | Promise<void>;
-  onWarning?: (details: string) => void | Promise<void>;
+  onWarning?: (error: unknown) => void | Promise<void>;
   telemetry?: LlmCallTelemetry;
   signal?: AbortSignal;
 };
@@ -972,6 +972,7 @@ export class LlmRequestError extends Error {
       | "token_limit"
       | "stream_interrupted" = "error",
     readonly lastResponseId?: string,
+    readonly code: string = kind === "error" ? "unknown" : kind,
   ) {
     super(message);
     this.name = "LlmRequestError";
@@ -984,6 +985,16 @@ function getErrorObject(error: unknown): Record<string, unknown> | undefined {
   }
 
   return error as Record<string, unknown>;
+}
+
+export function getLlmErrorCode(error: unknown): string {
+  const errorObject = getErrorObject(error);
+  const apiError = getErrorObject(errorObject?.error);
+  const code = errorObject?.status ?? errorObject?.code ?? apiError?.code;
+  return (typeof code === "string" || typeof code === "number") &&
+    /^[\w-]+$/.test(String(code))
+    ? String(code)
+    : "unknown";
 }
 
 function isRateLimitError(error: unknown): boolean {
@@ -1075,6 +1086,8 @@ function getResponseError(response: ApiResponse): LlmRequestError | undefined {
       "LLM response failed",
       `${response.error.code}: ${response.error.message}`,
       isContentFilterError(response.error) ? "content_filter" : "error",
+      undefined,
+      getLlmErrorCode(response.error),
     );
   }
 
@@ -1799,6 +1812,7 @@ async function createLlmResponseWithRetries(
           error.details,
           error.kind,
           checkpoint,
+          error.code,
         );
       }
       if (error instanceof LlmRequestError && error.kind === "token_limit") {
@@ -1807,6 +1821,7 @@ async function createLlmResponseWithRetries(
           error.details,
           "token_limit",
           state.lastResponseId,
+          error.code,
         );
       }
       if (creditWrapUp) {
@@ -1817,6 +1832,7 @@ async function createLlmResponseWithRetries(
               getErrorDetail(error),
               "error",
               state.lastResponseId,
+              getLlmErrorCode(error),
             );
       }
       lastError = error;
@@ -1883,7 +1899,7 @@ async function createLlmResponseWithRetries(
       if (immediate && contentFiltered) {
         if (!state.sentImmediateContentFilterWarning) {
           state.sentImmediateContentFilterWarning = true;
-          await options.onWarning?.(getErrorDetail(error));
+          await options.onWarning?.(error);
         }
       }
 
@@ -1904,6 +1920,7 @@ async function createLlmResponseWithRetries(
           getErrorDetail(error),
           "error",
           checkpointResponseId,
+          getLlmErrorCode(error),
         );
       }
 
@@ -1936,6 +1953,7 @@ async function createLlmResponseWithRetries(
     getErrorDetail(lastError),
     "error",
     checkpointResponseId,
+    getLlmErrorCode(lastError),
   );
 }
 

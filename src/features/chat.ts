@@ -4,7 +4,6 @@ import type { Context } from "../bot.ts";
 import { normalizeRichMarkdown } from "../utils/markdown.ts";
 import {
   escapeHtml,
-  escapeHtmlAttribute,
   normalizeHtmlFilename,
   normalizeWhitespace,
   truncateCodePoints,
@@ -38,6 +37,7 @@ import {
 } from "./images.ts";
 import { readLastMessages } from "./last-messages.ts";
 import {
+  getLlmErrorCode,
   type LlmCitation,
   type LlmDebugInfo,
   type LlmImageInput,
@@ -1042,10 +1042,10 @@ async function submitReaction(
 async function sendLlmWarning(
   ctx: Context,
   message: TextMessage,
-  details: string,
+  error: unknown,
 ): Promise<void> {
   try {
-    await ctx.reply(`Warn: ${sanitizeLlmHtml(details)}`, {
+    await ctx.reply(formatModelFailureMessage(error), {
       ...linkPreviewOptions,
       parse_mode: "HTML",
       ...getReplyDeliveryOptions(message, undefined),
@@ -1084,84 +1084,6 @@ async function withTypingAction<T>(
 ): Promise<T> {
   await submitTypingAction(ctx);
   return await callback();
-}
-
-function getAttributeValue(
-  tagBody: string,
-  attributeName: string,
-): string | null {
-  const match = tagBody.match(
-    new RegExp(
-      `^${attributeName}\\s*=\\s*(?:"([^"]*)"|'([^']*)'|([^\\s"'>]+))$`,
-      "i",
-    ),
-  );
-
-  return match?.[1] ?? match?.[2] ?? match?.[3] ?? null;
-}
-
-function normalizeAllowedTag(tag: string): string | null {
-  const tagBody = tag.slice(1, -1).trim();
-
-  if (/^br\s*\/?$/i.test(tagBody)) {
-    return "\n";
-  }
-
-  if (tagBody.startsWith("/")) {
-    const tagName = tagBody.slice(1).trim().toLocaleLowerCase();
-    return ["b", "code", "a", "blockquote"].includes(tagName)
-      ? `</${tagName}>`
-      : null;
-  }
-
-  const match = tagBody.match(/^([a-z]+)(.*)$/i);
-  const tagName = match?.[1]?.toLocaleLowerCase();
-  const attributes = match?.[2]?.trim() ?? "";
-
-  if (tagName === "b") {
-    return attributes ? null : `<${tagName}>`;
-  }
-
-  if (tagName === "code") {
-    if (!attributes) {
-      return "<code>";
-    }
-
-    const lang = getAttributeValue(attributes, "lang");
-    return lang === null ? null : `<code lang="${escapeHtmlAttribute(lang)}">`;
-  }
-
-  if (tagName === "a") {
-    const href = getAttributeValue(attributes, "href");
-    return href === null ? null : `<a href="${escapeHtmlAttribute(href)}">`;
-  }
-
-  if (tagName === "blockquote") {
-    if (!attributes) {
-      return "<blockquote>";
-    }
-
-    return attributes.toLocaleLowerCase() === "expandable"
-      ? "<blockquote expandable>"
-      : null;
-  }
-
-  return null;
-}
-
-function sanitizeLlmHtml(text: string): string {
-  let sanitized = "";
-  let cursor = 0;
-
-  for (const match of text.matchAll(/<[^>]*>/g)) {
-    const tag = match[0];
-    const index = match.index ?? 0;
-    sanitized += escapeHtml(text.slice(cursor, index));
-    sanitized += normalizeAllowedTag(tag) ?? escapeHtml(tag);
-    cursor = index + tag.length;
-  }
-
-  return sanitized + escapeHtml(text.slice(cursor));
 }
 
 function getUtf8ByteLength(text: string): number {
@@ -1664,48 +1586,8 @@ function getErrorDetails(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function formatHtmlBlockquote(text: string): string {
-  const trimmedText = text.trim() || "Unknown error";
-  return `<blockquote>${escapeHtml(trimmedText)}</blockquote>`;
-}
-
-const AZURE_DOWN_EMOJI = {
-  id: "5384549865625758405",
-  fallback: "😔",
-} as const;
-
-export function getAzureDownMessage(error: unknown):
-  | {
-      text: string;
-      entities: [
-        {
-          type: "custom_emoji";
-          offset: number;
-          length: number;
-          custom_emoji_id: string;
-        },
-      ];
-    }
-  | undefined {
-  const details = getErrorDetails(error);
-
-  if (!/\b503\b/.test(details) || !/no healthy upstream/i.test(details)) {
-    return undefined;
-  }
-
-  const prefix = "Azure is down ";
-
-  return {
-    text: `${prefix}${AZURE_DOWN_EMOJI.fallback}`,
-    entities: [
-      {
-        type: "custom_emoji",
-        offset: prefix.length,
-        length: AZURE_DOWN_EMOJI.fallback.length,
-        custom_emoji_id: AZURE_DOWN_EMOJI.id,
-      },
-    ],
-  };
+function formatModelFailureMessage(error: unknown): string {
+  return `Failed to generate response (${getLlmErrorCode(error)})`;
 }
 
 export function formatModelFailureResponse(
@@ -1716,24 +1598,16 @@ export function formatModelFailureResponse(
 ): string {
   const parts = [
     ...pendingProgress.map((segment) => segment.text?.trim()).filter(Boolean),
-    "Failed to generate response",
-    formatHtmlBlockquote(getErrorDetails(error)),
+    formatModelFailureMessage(error),
   ];
 
-  if (resumeCommand) {
+  if (resumeCommand && getLlmErrorCode(error) !== "401") {
     parts.push(resumeCommand);
   }
 
   parts.push(formatToolUsageMarkdown(tools, true));
 
   return parts.join("\n\n");
-}
-
-function formatGuestModelFailureResponse(error: unknown): string {
-  return [
-    "Failed to generate response",
-    formatMarkdownBlockquote(getErrorDetails(error)),
-  ].join("\n\n");
 }
 
 function isAbortError(error: unknown): boolean {
@@ -2406,8 +2280,7 @@ async function handleChatRequest(
               if (progress.segments)
                 progressUpdates?.add(splitProgressSegments(progress.segments));
             },
-            onWarning: (details: string) =>
-              sendLlmWarning(ctx, message, details),
+            onWarning: (error) => sendLlmWarning(ctx, message, error),
             signal: taskAbortController.signal,
           };
 
@@ -2601,26 +2474,17 @@ async function handleChatRequest(
       }
     }
 
-    const azureDownMessage = getAzureDownMessage(responseError);
-    const sentMessages = azureDownMessage
-      ? [
-          await ctx.reply(azureDownMessage.text, {
-            ...linkPreviewOptions,
-            ...getReplyDeliveryOptions(message, null),
-            entities: azureDownMessage.entities,
-          }),
-        ]
-      : await sendRichMarkdownResponse(
-          ctx,
-          message,
-          formatModelFailureResponse(
-            responseError,
-            resumable ? getResumeCommand(message.message_id) : undefined,
-            [...usedTools],
-            pendingProgress,
-          ),
-          null,
-        );
+    const sentMessages = await sendRichMarkdownResponse(
+      ctx,
+      message,
+      formatModelFailureResponse(
+        responseError,
+        resumable ? getResumeCommand(message.message_id) : undefined,
+        [...usedTools],
+        pendingProgress,
+      ),
+      null,
+    );
     for (const sentMessage of sentMessages) {
       await saveContinuationMessageThread(
         ctx,
@@ -2959,7 +2823,7 @@ async function handleGuestChatRequest(
     await sendGuestMarkdownResponse(
       ctx,
       message,
-      formatGuestModelFailureResponse(error),
+      formatModelFailureMessage(error),
     );
   }
 }
