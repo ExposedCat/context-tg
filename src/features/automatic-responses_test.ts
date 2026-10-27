@@ -12,7 +12,6 @@ for (const [key, value] of Object.entries({
   LLM_API_KEY: "test",
   LLM_STREAMING: "false",
   KEENABLE_API_KEY: "test",
-  LLM_TEMPERATURE: "0.2",
   EMBEDDER_BASE_URL: "https://embedder.test/v1",
   EMBEDDER_API_KEY: "test",
   EMBEDDING_MODEL: "test-embedding",

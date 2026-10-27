@@ -1666,7 +1666,6 @@ async function createLlmResponse(
         ...previousInput.map(normalizeItemForRequest),
         ...input.map(normalizeItemForRequest),
       ],
-      // temperature: APP_ENV.LLM_TEMPERATURE,
       tools: toolDefinitions.length > 0 ? toolDefinitions : undefined,
       tool_choice: toolDefinitions.length > 0 ? "auto" : undefined,
       store: false,

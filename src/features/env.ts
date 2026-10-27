@@ -65,7 +65,6 @@ export const APP_ENV = {
   FINANCE_MCP_URL:
     getOptionalEnv("FINANCE_MCP_URL") ?? "http://127.0.0.1:8000/mcp",
   KEENABLE_API_KEY: getRequiredEnv("KEENABLE_API_KEY"),
-  LLM_TEMPERATURE: getRequiredNumberEnv("LLM_TEMPERATURE"),
   EMBEDDER_BASE_URL: getRequiredEnv("EMBEDDER_BASE_URL"),
   EMBEDDER_API_KEY: getRequiredEnv("EMBEDDER_API_KEY"),
   EMBEDDING_MODEL: getRequiredEnv("EMBEDDING_MODEL"),

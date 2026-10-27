@@ -10,7 +10,6 @@ const TEST_ENV = {
   LLM_BASE_URL: "https://llm.test/v1",
   LLM_API_KEY: "test",
   KEENABLE_API_KEY: "test",
-  LLM_TEMPERATURE: "0.2",
   EMBEDDER_BASE_URL: "https://embedder.test/v1",
   EMBEDDER_API_KEY: "test",
   EMBEDDING_MODEL: "test-embedding",
