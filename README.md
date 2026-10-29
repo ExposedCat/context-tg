@@ -297,6 +297,14 @@ Qdrant is pinned in `compose.yml` because phrase matching requires Qdrant 1.15
 or newer. Before deploying over an older persistent Qdrant volume, take a
 snapshot and follow Qdrant's sequential minor-version upgrade guidance.
 
+Embeddings use their own `EMBEDDER_BASE_URL`, `EMBEDDER_API_KEY`, and
+`EMBEDDING_MODEL`, independently of the text and image endpoint. To move from
+Azure-hosted `text-embedding-3-small` to OpenAI, keep that same model and the
+default 1536 dimensions (the bot does not override `dimensions`). Existing
+vectors are expected to remain compatible; compare embeddings and search results
+before switching. Changing the underlying embedding model requires reindexing,
+even if its vectors have the same dimensions.
+
 Existing messages gain lexical search when the payload index is created. The
 new `reply_to_message_id` payload is recorded only when a message is newly
 indexed or edited, so older messages still receive chronological context but
@@ -417,8 +425,9 @@ for the primary image models, and `/model image DEPLOYMENT_NAME` for their share
 fallback (shown as “Fallback” in settings). The optional `size` tool argument
 selects `small` (the default) or `big`; an unset or failed primary uses the fallback.
 `LLM_IMAGE_MODEL` is no longer used. Both use
-`/images/generations` under the shared base URL; primary image edits use
-`/images/edits`. Separate image endpoint and API key variables are no longer used.
+`/images/generations` under the shared base URL; image edits, including fallback
+edits, use `/images/edits`. All image requests use `moderation: "low"`. Separate
+image endpoint and API key variables are no longer used.
 
 ## Trolling tone
 
@@ -433,17 +442,18 @@ Each chat can select one of three modes using the existing buttons under
 
 Automatic trolling triggers at every configured message interval, without a
 random chance. It first generates a candidate, then makes a separate stateless
-Responses API call to `gpt-61-sol` with reasoning effort `high` and strict
-structured output `{ valid: boolean }`. The validator receives recent messages,
+Responses API call to the model configured with `/model judge MODEL_NAME`,
+with reasoning effort `high` and strict structured output `{ valid: boolean }`. The validator receives recent messages,
 the exact candidate, and the selected mode. It rejects generic,
 off-topic, or inappropriate replies; a `false` verdict means nothing is sent
 and no replacement is generated. A validation failure or invalid response also
 prevents sending and is reported through the automatic-response error log.
 
 The validator uses the existing `LLM_BASE_URL` and `LLM_API_KEY`, so that endpoint
-must support `gpt-61-sol` and Responses structured outputs. No alternative model
-or JSON-mode fallback is used. Candidate text costs token credits even if the
-validator rejects it; the hidden verdict has no separate request charge. The
+must support the configured judge model, reasoning effort `high`, and Responses
+structured outputs. Configure the judge before enabling automatic trolling; an
+unset judge prevents sending. No alternative model or JSON-mode fallback is used.
+Candidate text costs token credits even if the validator rejects it; the hidden verdict has no separate request charge. The
 shared model budget still limits generation and validation. This gate applies
 to automatic trolling; explicit troll-agent conversations keep their existing flow.
 

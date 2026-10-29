@@ -45,6 +45,7 @@ settings-deployment-all = Все
 settings-model-small = Маленькая
 settings-model-big = Большая
 settings-model-openminded = Непредвзятая
+settings-model-judge = Судья
 settings-model-image = Резервная
 settings-model-image_small = Изображения: маленькая
 settings-model-image_big = Изображения: большая

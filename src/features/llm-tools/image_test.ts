@@ -97,6 +97,7 @@ test("generate_image resolves saved ids and uploads all image inputs", async () 
     strictEqual(form.get("model"), "test-image");
     strictEqual(form.get("prompt"), "Combine both references");
     strictEqual(form.get("n"), "1");
+    strictEqual(form.get("moderation"), "low");
     const files = form.getAll("image[]");
     strictEqual(files.length, 2);
     ok(files[0] instanceof File);
@@ -212,6 +213,7 @@ test("generate_image fallback shares the main LLM endpoint and credentials", asy
     const body = await request.json();
     models.push(body.model);
     strictEqual(body.prompt, "Draw a tree");
+    strictEqual(body.moderation, "low");
     if (models.length === 1) {
       return Response.json(
         { error: { message: "Primary unavailable" } },
@@ -220,8 +222,12 @@ test("generate_image fallback shares the main LLM endpoint and credentials", asy
         },
       );
     }
-    strictEqual(body.width, 1024);
-    strictEqual(body.height, 1024);
+    deepStrictEqual(body, {
+      model: "alternate-image",
+      prompt: "Draw a tree",
+      n: 1,
+      moderation: "low",
+    });
     return Response.json({ data: [{ b64_json: "Aw==" }] });
   }) as typeof fetch;
 
@@ -240,6 +246,62 @@ test("generate_image fallback shares the main LLM endpoint and credentials", asy
   } finally {
     globalThis.fetch = originalFetch;
     LLM_DEPLOYMENTS.image.deploymentName = previousDeployment;
+    await database.destroy();
+  }
+});
+
+test("image fallback preserves reference images through the edits endpoint", async () => {
+  const database = await initDatabase()();
+  const previous = LLM_DEPLOYMENTS.image.deploymentName;
+  LLM_DEPLOYMENTS.image.deploymentName = "fallback-image";
+  const originalFetch = globalThis.fetch;
+  const models: string[] = [];
+  const api = {
+    sendPhoto: async () => ({
+      photo: [{ file_id: "edited", width: 1024, height: 1024 }],
+    }),
+  } as unknown as Api;
+  globalThis.fetch = (async (input, init) => {
+    const request = new Request(input, init);
+    if (request.url.startsWith("data:"))
+      return await originalFetch(input, init);
+    if (request.url === "https://images.example.com/reference.png") {
+      return new Response(new Uint8Array([1, 2]), {
+        headers: { "content-type": "image/png" },
+      });
+    }
+    strictEqual(request.url, "https://llm.test/v1/images/edits");
+    const form = await request.formData();
+    models.push(String(form.get("model")));
+    strictEqual(form.get("moderation"), "low");
+    const files = form.getAll("image[]");
+    strictEqual(files.length, 1);
+    ok(files[0] instanceof File);
+    deepStrictEqual(
+      new Uint8Array(await files[0].arrayBuffer()),
+      new Uint8Array([1, 2]),
+    );
+    return models.length === 1
+      ? Response.json(
+          { error: { message: "Primary unavailable" } },
+          { status: 503 },
+        )
+      : Response.json({ data: [{ b64_json: "Aw==" }] });
+  }) as typeof fetch;
+  try {
+    const result = await execute(
+      {
+        prompt: "Edit this",
+        images: ["https://images.example.com/reference.png"],
+      },
+      undefined,
+      { database, api },
+    );
+    ok(typeof result === "object" && result.generatedImageId);
+    deepStrictEqual(models, ["test-image", "fallback-image"]);
+  } finally {
+    globalThis.fetch = originalFetch;
+    LLM_DEPLOYMENTS.image.deploymentName = previous;
     await database.destroy();
   }
 });

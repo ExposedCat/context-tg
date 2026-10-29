@@ -45,6 +45,7 @@ settings-deployment-all = Усі
 settings-model-small = Мала
 settings-model-big = Велика
 settings-model-openminded = Неупереджена
+settings-model-judge = Суддя
 settings-model-image = Резервна
 settings-model-image_small = Зображення: мала
 settings-model-image_big = Зображення: велика

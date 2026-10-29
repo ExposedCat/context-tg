@@ -233,6 +233,8 @@ function formatModelDisplayName(translate: Context["t"], id: string): string {
       return translate("settings-model-big");
     case "openminded":
       return translate("settings-model-openminded");
+    case "judge":
+      return translate("settings-model-judge");
     case "image_small":
       return translate("settings-model-image_small");
     case "image_big":

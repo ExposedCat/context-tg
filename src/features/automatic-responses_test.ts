@@ -42,6 +42,7 @@ test("automatic responses choose one before generation and advance both counters
   const originalRandom = Math.random;
   const previousSmall = getLlmDeployment("small").deploymentName;
   const previousTroll = getLlmDeployment("openminded").deploymentName;
+  const previousJudge = getLlmDeployment("judge").deploymentName;
   const models: string[] = [];
   const sent: string[] = [];
   const draws: number[] = [];
@@ -110,7 +111,7 @@ test("automatic responses choose one before generation and advance both counters
     const body = await request.json();
     models.push(body.model);
     const text =
-      body.model === "gpt-61-sol"
+      body.model === "test-judge"
         ? verdict
         : body.model === "test-troll"
           ? "Topical quip."
@@ -150,11 +151,12 @@ test("automatic responses choose one before generation and advance both counters
   try {
     setLlmDeploymentName("small", "test-proactive");
     setLlmDeploymentName("openminded", "test-troll");
+    setLlmDeploymentName("judge", "test-judge");
     for (const test of [
       {
         name: "both trigger, troll wins",
         draws: [0.1, 0.1],
-        models: ["test-troll", "gpt-61-sol"],
+        models: ["test-troll", "test-judge"],
         sent: ["Topical quip."],
       },
       {
@@ -167,20 +169,20 @@ test("automatic responses choose one before generation and advance both counters
         name: "rejected troll has no fallback",
         draws: [0.1, 0.1],
         verdict: '{"valid":false}',
-        models: ["test-troll", "gpt-61-sol"],
+        models: ["test-troll", "test-judge"],
         sent: [],
       },
       {
         name: "failed validation has no fallback",
         draws: [0.1, 0.1],
         verdict: "invalid JSON",
-        models: ["test-troll", "gpt-61-sol"],
+        models: ["test-troll", "test-judge"],
         sent: [],
       },
       {
         name: "only troll triggers",
         draws: [0.9],
-        models: ["test-troll", "gpt-61-sol"],
+        models: ["test-troll", "test-judge"],
         sent: ["Topical quip."],
       },
       {
@@ -294,6 +296,7 @@ test("automatic responses choose one before generation and advance both counters
     Math.random = originalRandom;
     setLlmDeploymentName("small", previousSmall);
     setLlmDeploymentName("openminded", previousTroll);
+    setLlmDeploymentName("judge", previousJudge);
     await database.destroy();
   }
 });

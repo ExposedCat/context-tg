@@ -78,6 +78,8 @@ const [
   import("./database.ts"),
 ]);
 
+setLlmDeploymentName("judge", "test-judge");
+
 type ResponseOutput =
   | {
       id: string;
@@ -2499,7 +2501,33 @@ test("two-mode trolling preferences migrate once to mild and clean", async () =>
   }
 });
 
-test("trolling validation uses Sol high with strict boolean structured output", async () => {
+test("trolling validation requires a configured judge before making a request", async () => {
+  const { requestTrollingValidation } = await import("./llm.ts");
+  const originalFetch = globalThis.fetch;
+  let requests = 0;
+  globalThis.fetch = (() => {
+    requests++;
+    throw new Error("Unexpected HTTP request");
+  }) as unknown as typeof fetch;
+  setLlmDeploymentName("judge", "");
+  try {
+    await assertRejects(
+      () =>
+        requestTrollingValidation({
+          messages: [],
+          candidate: "A quip",
+          mode: "clean",
+        }),
+      /Admin must run \/model judge/,
+    );
+    strictEqual(requests, 0);
+  } finally {
+    setLlmDeploymentName("judge", "test-judge");
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("trolling validation uses the configured judge with high reasoning and strict boolean structured output", async () => {
   const { requestTrollingValidation } = await import("./llm.ts");
   const originalFetch = globalThis.fetch;
   const input = {
@@ -2512,7 +2540,7 @@ test("trolling validation uses Sol high with strict boolean structured output", 
   globalThis.fetch = (async (_input, init) => {
     requests++;
     const body = JSON.parse(String(init?.body));
-    strictEqual(body.model, "gpt-61-sol");
+    strictEqual(body.model, "test-judge");
     deepStrictEqual(body.reasoning, { effort: "high" });
     strictEqual(body.store, false);
     strictEqual(body.previous_response_id, undefined);
@@ -2838,7 +2866,7 @@ test("periodic trolling delivers to the selected context message or without a re
       }
       return respond("resp_final", textOutput(candidate));
     }
-    strictEqual(body.model, "gpt-61-sol");
+    strictEqual(body.model, "test-judge");
     validations++;
     const input = JSON.parse(body.input[0].content);
     strictEqual(
@@ -2975,7 +3003,7 @@ test("periodic trolling always generates at its interval and sends only approved
       generations++;
       return respond(candidate);
     }
-    strictEqual(body.model, "gpt-61-sol");
+    strictEqual(body.model, "test-judge");
     validations++;
     const input = JSON.parse(body.input[0].content);
     strictEqual(input.candidate, candidate);

@@ -253,6 +253,7 @@ async function createDefaultImageRequest(
         model,
         prompt,
         n: 1,
+        moderation: "low",
       }),
       signal,
     });
@@ -265,6 +266,7 @@ async function createDefaultImageRequest(
   form.append("model", model);
   form.append("prompt", prompt);
   form.append("n", "1");
+  form.append("moderation", "low");
 
   for (const file of files) {
     form.append("image[]", file);
@@ -304,69 +306,6 @@ async function createImage(
   if (!response.ok) {
     const message = getString(payload.error?.message) || text.slice(0, 200);
     throw new Error(`Image API returned HTTP ${response.status}: ${message}`);
-  }
-
-  const image = getFirstImageData(payload);
-  const b64Json = getString(image?.b64_json);
-  const url = getString(image?.url);
-
-  if (!image || (!b64Json && !url)) {
-    throw new Error("Image API response did not include an image.");
-  }
-
-  const revisedPrompt = getString(image.revised_prompt) || undefined;
-
-  return {
-    prompt,
-    revisedPrompt,
-    usage: getImageGenerationUsage(payload),
-    url: url || undefined,
-    dataUrl: b64Json ? `data:image/png;base64,${b64Json}` : undefined,
-    mimeType: b64Json ? "image/png" : undefined,
-  };
-}
-
-async function createAlternateImage(
-  prompt: string,
-  inputImages: string[],
-  signal?: AbortSignal,
-) {
-  const response = await fetch(getImageApiUrl("generations"), {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${APP_ENV.LLM_API_KEY}`,
-      "Content-Type": "application/json",
-      Accept: "application/json",
-    },
-    body: JSON.stringify({
-      model: getConfiguredAlternateDeploymentName(),
-      prompt,
-      width: 1024,
-      height: 1024,
-      n: 1,
-      ...(inputImages.length > 0 ? { images: inputImages } : {}),
-    }),
-    signal,
-  });
-  const text = await response.text();
-  let payload: ImageGenerationResponse;
-
-  try {
-    payload = JSON.parse(text) as ImageGenerationResponse;
-  } catch {
-    throw new Error(
-      `Azure alternate image API returned non-JSON response: ${text.slice(
-        0,
-        200,
-      )}`,
-    );
-  }
-
-  if (!response.ok) {
-    const message = getString(payload.error?.message) || text.slice(0, 200);
-    throw new Error(
-      `Azure alternate image API returned HTTP ${response.status}: ${message}`,
-    );
   }
 
   const image = getFirstImageData(payload);
@@ -452,7 +391,12 @@ export const execute: FunctionToolRunner = async (args, _context, options) => {
       }
 
       await options.chargeCredits?.("image_attempt", "generate_image");
-      image = await createAlternateImage(prompt, inputImages, options.signal);
+      image = await createImage(
+        getConfiguredAlternateDeploymentName(),
+        prompt,
+        inputImages,
+        options.signal,
+      );
     } catch (alternateError) {
       if (options.signal?.aborted) {
         throw alternateError;

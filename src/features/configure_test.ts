@@ -361,6 +361,7 @@ test("rich configure navigation, persistence and authorization", async () => {
       "small",
       "big",
       "openminded",
+      "judge",
       "image",
       "image_small",
       "image_big",

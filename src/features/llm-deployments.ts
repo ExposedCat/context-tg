@@ -2,6 +2,7 @@ export type LlmDeploymentId =
   | "small"
   | "big"
   | "openminded"
+  | "judge"
   | "image"
   | "image_small"
   | "image_big";
@@ -27,6 +28,11 @@ export const LLM_DEPLOYMENTS = {
     deploymentName: "",
     withReasoning: true,
   },
+  judge: {
+    id: "judge",
+    deploymentName: "",
+    withReasoning: true,
+  },
   imageSmall: {
     id: "image_small",
     deploymentName: "",
@@ -48,6 +54,7 @@ export const LLM_DEPLOYMENT_OPTIONS = [
   LLM_DEPLOYMENTS.small,
   LLM_DEPLOYMENTS.big,
   LLM_DEPLOYMENTS.openMinded,
+  LLM_DEPLOYMENTS.judge,
   LLM_DEPLOYMENTS.imageSmall,
   LLM_DEPLOYMENTS.imageBig,
   LLM_DEPLOYMENTS.image,
@@ -57,6 +64,7 @@ const LLM_DEPLOYMENT_BY_ID = {
   small: LLM_DEPLOYMENTS.small,
   big: LLM_DEPLOYMENTS.big,
   openminded: LLM_DEPLOYMENTS.openMinded,
+  judge: LLM_DEPLOYMENTS.judge,
   image_small: LLM_DEPLOYMENTS.imageSmall,
   image_big: LLM_DEPLOYMENTS.imageBig,
   image: LLM_DEPLOYMENTS.image,

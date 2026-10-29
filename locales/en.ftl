@@ -45,6 +45,7 @@ settings-deployment-all = All
 settings-model-small = Small
 settings-model-big = Big
 settings-model-openminded = Open-Minded
+settings-model-judge = Judge
 settings-model-image = Fallback
 settings-model-image_small = Image Small
 settings-model-image_big = Image Big

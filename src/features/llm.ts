@@ -24,6 +24,7 @@ import {
   getLlmResponseMemory,
   saveLlmResponseInputItems,
 } from "./llm-chat-responses.ts";
+import { LLM_DEPLOYMENTS } from "./llm-deployments.ts";
 import { type ConversationMemory, formatMemoryUpdate } from "./llm-memory.ts";
 import {
   getChatReasoningEffort,
@@ -2335,7 +2336,7 @@ export async function requestTrollingValidation(
     response = await createModelResponse(
       getClient(),
       {
-        model: "gpt-61-sol",
+        model: getConfiguredDeploymentName(LLM_DEPLOYMENTS.judge),
         reasoning: { effort: "high" },
         store: false,
         instructions: `You are a discerning editor judging a proposed trolling reply before it is sent to a chat.
