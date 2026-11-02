@@ -1170,19 +1170,23 @@ function recoverUnavailableReadImageInput(
   }
 
   const readImageCallIds = new Set(
-    state.inputItems.flatMap((item) =>
+    [...state.inputItems, ...input].flatMap((item) =>
       item.type === "function_call" && item.name === "read_image"
         ? [item.call_id]
         : [],
     ),
   );
   const recoveredCallIds: string[] = [];
-  const recoveredInput = input.map((item) => {
+  const recoverItem = (item: ResponseInputItem): ResponseInputItem => {
     if (
       item.type !== "function_call_output" ||
       !readImageCallIds.has(item.call_id) ||
       !Array.isArray(item.output) ||
-      !item.output.some((part) => part.type === "input_image")
+      !item.output.some(
+        (part) =>
+          part.type === "input_image" &&
+          /^https?:\/\//i.test(part.image_url ?? ""),
+      )
     ) {
       return item;
     }
@@ -1199,11 +1203,17 @@ function recoverUnavailableReadImageInput(
         }),
       ),
     };
-  });
+  };
+
+  // Old checkpoints can contain remote tool images even when the new input is
+  // text only. Repair both halves of the request so resumes can make progress.
+  const recoveredContext = state.inputItems.map(recoverItem);
+  const recoveredInput = input.map(recoverItem);
 
   if (recoveredCallIds.length === 0) {
     return undefined;
   }
+  state.inputItems = recoveredContext;
 
   logError("Vision service could not download read_image input", {
     callIds: recoveredCallIds,

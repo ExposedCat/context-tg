@@ -412,6 +412,14 @@ Each photo uses its largest available size. Normal and guest requests include
 these images from the current message and reply context, including quoted
 replies and thread continuations, and register persistent references for reuse.
 
+Web images inspected with `read_image(url)` are downloaded once by the bot and
+passed to the model as inline image data. Conversation history stores those
+bytes, so later replies and resumes do not download the image from its original
+host again. Failed downloads return an unavailable-image tool result. For older
+history containing external image URLs, a provider download error replaces the
+remote `read_image` payloads with unavailable-image results and retries; the next
+saved checkpoint retains the repair and preserves inline images.
+
 Agents receive `![](tg://photo?id=IMAGE_ID)` from the image generation tool and
 can place those references anywhere in rich Markdown, including collages and
 slideshows. Before sending, the bot resolves every referenced ID from SQLite

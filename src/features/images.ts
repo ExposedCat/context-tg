@@ -286,6 +286,39 @@ function encodeBase64(bytes: Uint8Array): string {
   return btoa(binary);
 }
 
+export async function downloadWebImageDataUrl(
+  url: string,
+  signal?: AbortSignal,
+): Promise<string> {
+  const response = await fetch(url, { signal, headers: { accept: "image/*" } });
+  if (!response.ok) {
+    throw new Error(`Image download failed: ${response.status}`);
+  }
+
+  const contentType = response.headers
+    .get("content-type")
+    ?.split(";")[0]
+    .trim();
+  if (
+    contentType &&
+    !contentType.startsWith("image/") &&
+    contentType !== "application/octet-stream"
+  ) {
+    throw new Error("Image download did not return image content.");
+  }
+
+  const bytes = new Uint8Array(await response.arrayBuffer());
+  if (bytes.length === 0) {
+    throw new Error("Image download returned an empty file.");
+  }
+  const mimeType = getDownloadedImageMimeType(
+    response,
+    undefined,
+    new URL(response.url || url).pathname,
+  );
+  return `data:${mimeType};base64,${encodeBase64(bytes)}`;
+}
+
 export async function downloadTelegramImageDataUrl(
   api: Api,
   fileId: string,

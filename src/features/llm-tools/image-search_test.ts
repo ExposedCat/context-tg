@@ -1,5 +1,5 @@
 import { test } from "bun:test";
-import { deepStrictEqual, strictEqual } from "node:assert";
+import { deepStrictEqual, rejects, strictEqual } from "node:assert";
 import type { Api } from "grammy";
 
 const TEST_ENV = {
@@ -89,23 +89,93 @@ test("search_images queries all image engines and ignores failed engines", async
   }
 });
 
-test("read_image returns native vision input for an image result", async () => {
-  const result = await executeReadImage({
-    url: "https://images.example.com/cat.jpg",
-  });
+test("read_image downloads web images as inline vision input", async () => {
+  const originalFetch = globalThis.fetch;
+  const controller = new AbortController();
+  let downloads = 0;
+  globalThis.fetch = (async (input, init) => {
+    strictEqual(String(input), "https://images.example.com/cat.jpg");
+    strictEqual(init?.signal, controller.signal);
+    downloads++;
+    return new Response(new Uint8Array([0, 1, 2]), {
+      headers: { "content-type": "image/jpeg; charset=binary" },
+    });
+  }) as typeof fetch;
 
-  deepStrictEqual(result, {
-    output: JSON.stringify({
-      image_url: "https://images.example.com/cat.jpg",
-      loaded: true,
-    }),
-    inputImages: [
+  try {
+    const result = await executeReadImage(
       {
-        image_url: "https://images.example.com/cat.jpg",
-        detail: "auto",
+        url: "https://images.example.com/cat.jpg",
       },
-    ],
-  });
+      undefined,
+      { signal: controller.signal },
+    );
+
+    strictEqual(downloads, 1);
+    deepStrictEqual(result, {
+      output: JSON.stringify({
+        image_url: "https://images.example.com/cat.jpg",
+        loaded: true,
+      }),
+      inputImages: [
+        {
+          image_url: "data:image/jpeg;base64,AAEC",
+          detail: "auto",
+        },
+      ],
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("read_image reports blocked, empty and non-image downloads as unavailable", async () => {
+  const originalFetch = globalThis.fetch;
+  try {
+    for (const response of [
+      new Response("Forbidden", { status: 403 }),
+      new Response("<html>Access denied</html>", {
+        headers: { "content-type": "text/html" },
+      }),
+      new Response(new Uint8Array(), {
+        headers: { "content-type": "image/png" },
+      }),
+    ]) {
+      globalThis.fetch = (async (_input) => response) as typeof fetch;
+      const result = await executeReadImage({
+        url: "https://images.example.com/blocked.png",
+      });
+      strictEqual(typeof result, "string");
+      strictEqual(JSON.parse(result as string).error, "Image unavailable");
+    }
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("read_image propagates cancellation during a web image download", async () => {
+  const originalFetch = globalThis.fetch;
+  const controller = new AbortController();
+  const error = new Error("Canceled download");
+  globalThis.fetch = (async (_input): Promise<Response> => {
+    controller.abort(error);
+    throw error;
+  }) as typeof fetch;
+  try {
+    await rejects(
+      () =>
+        Promise.resolve(
+          executeReadImage(
+            { url: "https://images.example.com/cat.jpg" },
+            undefined,
+            { signal: controller.signal },
+          ),
+        ),
+      error,
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test("read_image rejects non-HTTP URLs", async () => {

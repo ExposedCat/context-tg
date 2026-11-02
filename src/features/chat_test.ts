@@ -1397,6 +1397,11 @@ test("failed model follow-ups retain activity and suppress resume for 401", asyn
     };
   };
   globalThis.fetch = (async (input) => {
+    if (String(input) === "https://images.test/example.png") {
+      return new Response(new Uint8Array([0]), {
+        headers: { "content-type": "image/png" },
+      });
+    }
     strictEqual(String(input), `${TEST_ENV.LLM_BASE_URL}/responses`);
     modelCalls++;
     if (modelCalls > 2) {

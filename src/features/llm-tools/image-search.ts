@@ -1,6 +1,10 @@
 import { createDebug } from "@grammyjs/debug";
 import { APP_ENV } from "../env.ts";
-import { downloadTelegramImageDataUrl, getImageById } from "../images.ts";
+import {
+  downloadTelegramImageDataUrl,
+  downloadWebImageDataUrl,
+  getImageById,
+} from "../images.ts";
 import type { FunctionToolRunner } from "./types.ts";
 import { asRecord, getJsonError, getString } from "./utils.ts";
 
@@ -218,10 +222,18 @@ export const executeReadImage: FunctionToolRunner = async (
   }
 
   if (url) {
-    return {
-      output: JSON.stringify({ image_url: url, loaded: true }),
-      inputImages: [{ image_url: url, detail: "auto" }],
-    };
+    try {
+      const dataUrl = await downloadWebImageDataUrl(url, options?.signal);
+      return {
+        output: JSON.stringify({ image_url: url, loaded: true }),
+        inputImages: [{ image_url: dataUrl, detail: "auto" }],
+      };
+    } catch (error) {
+      if (options?.signal?.aborted) throw error;
+      return getJsonError("Image unavailable", {
+        details: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   if (!imageId) {

@@ -1361,13 +1361,22 @@ test("requestLlm telemetry defaults missing cached usage to zero", async () => {
   }
 });
 
-test("read_image returns an image in the function-call output", async () => {
+test("read_image persists inline data and reuses it on later replies without downloading again", async () => {
   setLlmDeploymentName("small", "test-model");
+  const database = await initDatabase()();
+  const { getLlmResponseInputItems } = await import("./llm-chat-responses.ts");
   const requests: Array<Record<string, unknown>> = [];
   const originalFetch = globalThis.fetch;
+  let downloads = 0;
 
   globalThis.fetch = (async (input, init) => {
     const request = new Request(input, init);
+    if (request.url === "https://images.example.com/cat.jpg") {
+      downloads++;
+      return new Response(new Uint8Array([0, 1, 2]), {
+        headers: { "content-type": "image/jpeg" },
+      });
+    }
     requests.push((await request.json()) as Record<string, unknown>);
 
     const body =
@@ -1409,11 +1418,12 @@ test("read_image returns an image in the function-call output", async () => {
       "Inspect the image",
       ["read_image"],
       undefined,
-      { context: { chatId: 1, messageId: 1 } },
+      { database, context: { chatId: 1, messageId: 1 } },
     );
 
     strictEqual(response.response, "It is an orange cat.");
     strictEqual(requests.length, 2);
+    strictEqual(downloads, 1);
 
     const tools = requests[0].tools as Array<Record<string, unknown>>;
     const readImageTool = tools.find((tool) => tool.name === "read_image");
@@ -1441,12 +1451,35 @@ test("read_image returns an image in the function-call output", async () => {
       },
       {
         type: "input_image",
-        image_url: "https://images.example.com/cat.jpg",
+        image_url: "data:image/jpeg;base64,AAEC",
         detail: "auto",
       },
     ]);
+
+    ok(response.response_id);
+    const saved = await getLlmResponseInputItems(
+      database,
+      response.response_id,
+    );
+    ok(saved);
+    deepStrictEqual(
+      saved.find((item) => item.type === "function_call_output"),
+      functionOutput,
+    );
+    await requestLlm("Was there another character?", [], response.response_id, {
+      database,
+      context: { chatId: 1, messageId: 2 },
+    });
+    strictEqual(downloads, 1);
+    deepStrictEqual(
+      (requests[2].input as Array<Record<string, unknown>>).find(
+        (item) => item.type === "function_call_output",
+      ),
+      functionOutput,
+    );
   } finally {
     globalThis.fetch = originalFetch;
+    await database.destroy();
   }
 });
 
@@ -1457,6 +1490,9 @@ test("read_image download failure is reported to the agent as unavailable", asyn
 
   globalThis.fetch = (async (input, init) => {
     const request = new Request(input, init);
+    if (request.url === "https://images.example.com/blocked.jpg") {
+      return new Response("Forbidden", { status: 403 });
+    }
     requests.push((await request.json()) as Record<string, unknown>);
 
     if (requests.length === 1) {
@@ -1474,19 +1510,6 @@ test("read_image download failure is reported to the agent as unavailable", asyn
           ]),
         ),
         { status: 200, headers: { "content-type": "application/json" } },
-      );
-    }
-
-    if (requests.length === 2) {
-      return new Response(
-        JSON.stringify({
-          error: {
-            code: "invalid_value",
-            type: "invalid_request_error",
-            message: "Error while downloading file. Upstream status code: 403.",
-          },
-        }),
-        { status: 400, headers: { "content-type": "application/json" } },
       );
     }
 
@@ -1524,16 +1547,9 @@ test("read_image download failure is reported to the agent as unavailable", asyn
       response.response,
       "That image is unavailable, so I could not inspect it.",
     );
-    strictEqual(requests.length, 3);
+    strictEqual(requests.length, 2);
 
-    const failedInput = requests[1].input as Array<Record<string, unknown>>;
-    const failedOutput = failedInput.find(
-      (item) => item.type === "function_call_output",
-    );
-    ok(failedOutput);
-    strictEqual(Array.isArray(failedOutput.output), true);
-
-    const recoveredInput = requests[2].input as Array<Record<string, unknown>>;
+    const recoveredInput = requests[1].input as Array<Record<string, unknown>>;
     const recoveredOutput = recoveredInput.find(
       (item) => item.type === "function_call_output",
     );
@@ -1543,12 +1559,164 @@ test("read_image download failure is reported to the agent as unavailable", asyn
       recoveredOutput.output,
       [
         '<tool_response tool="read_image">',
-        '{"error":"Image unavailable","details":"The vision service could not download this image. Try another image result or tell the user it is unavailable."}',
+        '{"error":"Image unavailable","details":"Image download failed: 403"}',
         "</tool_response>",
       ].join("\n"),
     );
   } finally {
     globalThis.fetch = originalFetch;
+  }
+});
+
+test("resuming an old persisted checkpoint repairs remote image outputs and persists the repair", async () => {
+  setLlmDeploymentName("small", "test-model");
+  const database = await initDatabase()();
+  const { getLlmResponseInputItems, saveLlmResponseInputItems } = await import(
+    "./llm-chat-responses.ts"
+  );
+  const sourceId = "resp-local-legacy-broken-image-checkpoint";
+  const inlineOutput = {
+    type: "function_call_output" as const,
+    call_id: "call_saved_photo",
+    output: [
+      { type: "input_text" as const, text: "Saved Telegram photo" },
+      {
+        type: "input_image" as const,
+        image_url: "data:image/png;base64,AA==",
+        detail: "auto" as const,
+      },
+    ],
+  };
+  await saveLlmResponseInputItems(database, {
+    responseId: sourceId,
+    inputItems: [
+      { type: "message", role: "user", content: "Find this character" },
+      {
+        type: "function_call",
+        call_id: "call_legacy_image",
+        name: "read_image",
+        arguments: '{"url":"https://images.example.com/legacy-blocked.jpg"}',
+      },
+      {
+        type: "function_call_output",
+        call_id: "call_legacy_image",
+        output: [
+          { type: "input_text", text: "Image loaded" },
+          {
+            type: "input_image",
+            image_url: "https://images.example.com/legacy-blocked.jpg",
+            detail: "auto",
+          },
+        ],
+      },
+      {
+        type: "function_call",
+        call_id: "call_saved_photo",
+        name: "read_image",
+        arguments: '{"id":"saved_photo"}',
+      },
+      inlineOutput,
+      { type: "message", role: "assistant", content: "Here is the character." },
+      {
+        type: "message",
+        role: "user",
+        content: "Was there another character?",
+      },
+    ],
+  });
+  const requests: Array<Record<string, unknown>> = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (input, init) => {
+    const request = new Request(input, init);
+    strictEqual(request.url, `${TEST_ENV.LLM_BASE_URL}/responses`);
+    requests.push((await request.json()) as Record<string, unknown>);
+    if (requests.length === 1) {
+      return Response.json(
+        {
+          error: {
+            code: "invalid_value",
+            type: "invalid_request_error",
+            param: "url",
+            message: "Error while downloading file. Upstream status code: 403.",
+          },
+        },
+        { status: 400 },
+      );
+    }
+    return Response.json(
+      budgetTestAnswer(`resp_repaired_image_${requests.length}`),
+    );
+  }) as typeof fetch;
+
+  try {
+    const result = await requestLlm("Continue", ["read_image"], sourceId, {
+      database,
+      context: { chatId: 1, messageId: 2 },
+    });
+    strictEqual(result.response, "Done.");
+    strictEqual(requests.length, 2);
+    const originalInput = requests[0].input as Array<Record<string, unknown>>;
+    ok(
+      JSON.stringify(originalInput).includes(
+        '"image_url":"https://images.example.com/legacy-blocked.jpg"',
+      ),
+    );
+    const recoveredInput = requests[1].input as Array<Record<string, unknown>>;
+    const recoveredOutput = recoveredInput.find(
+      (item) =>
+        item.call_id === "call_legacy_image" &&
+        item.type === "function_call_output",
+    );
+    ok(recoveredOutput);
+    strictEqual(
+      recoveredOutput.output,
+      '<tool_response tool="read_image">\n{"error":"Image unavailable","details":"The vision service could not download this image. Try another image result or tell the user it is unavailable."}\n</tool_response>',
+    );
+    deepStrictEqual(
+      recoveredInput.find(
+        (item) =>
+          item.call_id === "call_saved_photo" &&
+          item.type === "function_call_output",
+      ),
+      inlineOutput,
+    );
+    ok(JSON.stringify(recoveredInput).includes("Was there another character?"));
+    ok(result.response_id);
+    const saved = await getLlmResponseInputItems(database, result.response_id);
+    ok(saved);
+    deepStrictEqual(
+      saved.find(
+        (item) =>
+          item.type === "function_call_output" &&
+          item.call_id === "call_legacy_image",
+      ),
+      recoveredOutput,
+    );
+    deepStrictEqual(
+      saved.find(
+        (item) =>
+          item.type === "function_call_output" &&
+          item.call_id === "call_saved_photo",
+      ),
+      inlineOutput,
+    );
+
+    await requestLlm("Continue again", [], result.response_id, {
+      database,
+      context: { chatId: 1, messageId: 3 },
+    });
+    strictEqual(requests.length, 3);
+    deepStrictEqual(
+      (requests[2].input as Array<Record<string, unknown>>).find(
+        (item) =>
+          item.type === "function_call_output" &&
+          item.call_id === "call_legacy_image",
+      ),
+      recoveredOutput,
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+    await database.destroy();
   }
 });
 
