@@ -25,7 +25,12 @@ import {
   setTrollingMode,
 } from "./trolling.ts";
 import { isTrollingMode, TROLLING_MODES } from "./trolling-mode.ts";
-import { getFinanceMcpEnabled, setFinanceMcpEnabled } from "./user-settings.ts";
+import {
+  getCalendarMcpEnabled,
+  getFinanceMcpEnabled,
+  setCalendarMcpEnabled,
+  setFinanceMcpEnabled,
+} from "./user-settings.ts";
 
 export const configureComposer = new Composer<Context>();
 const EFFORTS = ["none", "low", "medium", "high", "xhigh"] as const;
@@ -95,6 +100,13 @@ export async function buildRichConfigureMessage(
       const enabled = await getFinanceMcpEnabled(ctx.database, ctx.from.id);
       rows.push(
         `<p>${t("configure-finance-mcp")} ${toggle(ctx, `finance:${ctx.from.id}:${enabled ? "off" : "on"}`, enabled)}</p>`,
+      );
+      const calendarEnabled = await getCalendarMcpEnabled(
+        ctx.database,
+        ctx.from.id,
+      );
+      rows.push(
+        `<p>${t("configure-calendar-mcp")} ${toggle(ctx, `calendar:${ctx.from.id}:${calendarEnabled ? "off" : "on"}`, calendarEnabled)}</p>`,
       );
     }
     html = rows.join("\n");
@@ -179,7 +191,7 @@ configureComposer.callbackQuery(/^cfg:/, async (ctx) => {
   if (
     !ctx.chat ||
     !ctx.from ||
-    (!["menu", "finance"].includes(action) &&
+    (!["menu", "finance", "calendar"].includes(action) &&
       !(action === "progress" && ctx.chat.type === "private") &&
       !(await canConfigureChat(ctx)))
   ) {
@@ -207,9 +219,15 @@ configureComposer.callbackQuery(/^cfg:/, async (ctx) => {
       show_alert: true,
     });
   };
-  if (extra || (value && action !== "set" && action !== "finance"))
+  if (
+    extra ||
+    (value && action !== "set" && action !== "finance" && action !== "calendar")
+  )
     return await invalid();
-  if (action === "finance" && (value === "on" || value === "off")) {
+  if (
+    (action === "finance" || action === "calendar") &&
+    (value === "on" || value === "off")
+  ) {
     if (target !== String(ctx.from.id)) {
       await ctx.answerCallbackQuery({
         text: ctx.t("configure-user-settings-own"),
@@ -217,7 +235,11 @@ configureComposer.callbackQuery(/^cfg:/, async (ctx) => {
       });
       return;
     }
-    await setFinanceMcpEnabled(ctx.database, ctx.from.id, value === "on");
+    await (action === "finance" ? setFinanceMcpEnabled : setCalendarMcpEnabled)(
+      ctx.database,
+      ctx.from.id,
+      value === "on",
+    );
   } else if (action === "progress" && (target === "on" || target === "off")) {
     await persistChatProgressEnabled(
       ctx.database,

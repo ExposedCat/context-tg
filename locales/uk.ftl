@@ -99,6 +99,15 @@ settings-usage-prices =
 
 configure-button = Налаштувати
 configure-finance-mcp = Finance MCP
+configure-calendar-mcp = Calendar MCP
+command-calendar-description = Підключити Google Календар до цього чату
+calendar-usage = Використайте /calendar ID. ID знаходиться в Google Календарі → Налаштування → виберіть календар → Інтеграція календаря → Ідентифікатор календаря. Спочатку надайте сервісному акаунту бота доступ «Змінювати події». Увімкніть Calendar MCP у /settings.
+calendar-challenge = Створіть нову подію на {$day} в цьому календарі з точною назвою нижче, без гостей і повторень. Потім натисніть «Перевірити» протягом 10 хвилин. Надайте {$email} доступ «Змінювати події». Це підтверджує можливість редагування; календар буде доступний учасникам цього чату, які ввімкнули Calendar MCP у /settings.
+calendar-verify = Перевірити
+calendar-service-account = Адреса сервісного акаунта: {$email}
+calendar-configured = Календар «{$name}» налаштовано для цього чату
+calendar-error = {$error}
+calendar-wrong-verification = Перевірити може лише той, хто почав налаштування. Для нового налаштування використайте /calendar ID.
 configure-user-settings-own = Відкрийте /settings, щоб змінити власні налаштування користувача.
 configure-enabled = Увімкнено
 configure-disabled = Вимкнено

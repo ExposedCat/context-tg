@@ -10,6 +10,7 @@ import { run } from "@grammyjs/runner";
 import { DiagLogLevel } from "@opentelemetry/api";
 import { Bot, type Context as GrammyContext, type Transformer } from "grammy";
 import { safelyMaybeSendAutomaticResponse } from "./features/automatic-responses.ts";
+import { calendarComposer } from "./features/calendar.ts";
 import { chatComposer } from "./features/chat.ts";
 import type { Database } from "./features/database.ts";
 import {
@@ -42,6 +43,11 @@ const BOT_COMMANDS = [
   { command: "packs", descriptionKey: "command-packs-description" },
   { command: "tasks", descriptionKey: "command-tasks-description" },
   { command: "schedule", descriptionKey: "command-schedule-description" },
+  {
+    command: "calendar",
+    descriptionKey: "command-calendar-description",
+    is_ephemeral: true,
+  },
   {
     command: "usage",
     descriptionKey: "command-usage-description",
@@ -129,6 +135,7 @@ export function initBot(token: string, database: Database) {
 
   bot.use(messagesComposer);
   bot.use(emojiPacksComposer);
+  bot.use(calendarComposer);
   bot.use(stateComposer);
   bot.use(chatComposer);
 

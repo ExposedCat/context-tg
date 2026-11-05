@@ -1,4 +1,5 @@
 command-settings-description = Change chat and personal settings
+command-calendar-description = Connect a Google calendar to this chat
 command-debug-description = Turn debug details on or off
 command-packs-description = List emoji packs
 command-tasks-description = Show recent tasks
@@ -97,6 +98,14 @@ settings-usage-prices =
 
 configure-button = Configure
 configure-finance-mcp = Finance MCP
+configure-calendar-mcp = Calendar MCP
+calendar-usage = Use /calendar ID. Find the ID in Google Calendar → Settings → select your calendar → Integrate calendar → Calendar ID. Share the calendar with the bot's service-account email with “Make changes to events” permission first. Enable Calendar MCP in /settings to use it.
+calendar-challenge = Create a new event on {$day} on this calendar with the exact title below, without guests or repetition. Then press Verify within 10 minutes. The calendar must be shared with {$email} with “Make changes to events” permission. This verifies editing access; the calendar will be available to users in this chat who enable Calendar MCP in /settings.
+calendar-verify = Verify
+calendar-service-account = Service-account email: {$email}
+calendar-configured = Calendar '{$name}' was set up for this chat
+calendar-error = {$error}
+calendar-wrong-verification = Only the person who started this setup can verify it. Run /calendar ID for a new setup.
 configure-user-settings-own = Open /settings to change your own user settings.
 configure-enabled = Enabled
 configure-disabled = Disabled

@@ -2,6 +2,11 @@ import { mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 import { Kysely } from "kysely";
 import {
+  type CalendarChallengeTable,
+  type ChatCalendarTable,
+  migrateCalendars,
+} from "./calendar-settings.ts";
+import {
   type EmojiPacksTable,
   type GlobalEmojiPacksTable,
   migrateEmojiPacks,
@@ -48,6 +53,8 @@ import {
 } from "./user-settings.ts";
 
 export type DatabaseSchema = {
+  chat_calendars: ChatCalendarTable;
+  calendar_challenges: CalendarChallengeTable;
   user_settings: UserSettingsTable;
   threads: ThreadsTable;
   guest_response_threads: GuestResponseThreadsTable;
@@ -93,6 +100,7 @@ export function initDatabase() {
     await migrateLlmResponseHistory(database);
     await migrateLlmSettings(database);
     await migrateUserSettings(database);
+    await migrateCalendars(database);
     await migrateTasks(database);
     await migrateSchedules(database);
     await migrateUsage(database);

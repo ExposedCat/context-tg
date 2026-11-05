@@ -97,6 +97,15 @@ settings-usage-prices =
 
 configure-button = Konfigurieren
 configure-finance-mcp = Finance MCP
+configure-calendar-mcp = Calendar MCP
+command-calendar-description = Einen Google-Kalender mit diesem Chat verbinden
+calendar-usage = Verwende /calendar ID. Die ID findest du unter Google Kalender → Einstellungen → Kalender auswählen → Kalender integrieren → Kalender-ID. Teile den Kalender zuerst mit dem Dienstkonto des Bots mit der Berechtigung „Termine ändern“. Aktiviere Calendar MCP unter /settings.
+calendar-challenge = Erstelle für {$day} einen neuen Termin in diesem Kalender mit genau dem folgenden Titel, ohne Gäste oder Wiederholung. Klicke dann innerhalb von 10 Minuten auf „Überprüfen“. Teile den Kalender mit {$email} mit der Berechtigung „Termine ändern“. Dies bestätigt den Bearbeitungszugriff; Nutzer dieses Chats können den Kalender nach Aktivierung von Calendar MCP unter /settings verwenden.
+calendar-verify = Überprüfen
+calendar-service-account = Dienstkonto-Adresse: {$email}
+calendar-configured = Kalender „{$name}“ wurde für diesen Chat eingerichtet
+calendar-error = {$error}
+calendar-wrong-verification = Nur die Person, die diese Einrichtung gestartet hat, kann sie überprüfen. Verwende /calendar ID für eine neue Einrichtung.
 configure-user-settings-own = Öffne /settings, um deine eigenen Benutzereinstellungen zu ändern.
 configure-enabled = Aktiviert
 configure-disabled = Deaktiviert

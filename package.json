@@ -19,6 +19,7 @@
     "@modelcontextprotocol/sdk": "1.32.1",
     "@opentelemetry/api": "^1.9.1",
     "debug": "^4.4.3",
+    "google-auth-library": "^11.3.3",
     "grammy": "1.46.0",
     "js-tiktoken": "1.0.21",
     "kysely": "0.28.17",

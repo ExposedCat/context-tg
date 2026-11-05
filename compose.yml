@@ -15,6 +15,7 @@ services:
     volumes:
       # Source and dependencies are baked into the image; only state persists.
       - ./data:/app/data:Z
+      - ./secrets:/run/secrets/context:ro,Z
     depends_on:
       - qdrant
       - searxng

@@ -14,7 +14,8 @@ bun run check      # biome
 
 SQLite uses `bun:sqlite`; integers read back exactly up to 2^53, so Telegram
 chat and user ids are safe. Schedules use in-process `Bun.cron` in UTC. The
-container image bakes in source and dependencies and mounts only `./data`.
+container image bakes in source and dependencies, with persistent `./data` and
+an optional read-only `./secrets` directory for credentials.
 
 ## Finance MCP
 
@@ -55,6 +56,97 @@ Use these restarts after both updated repositories are available to PM3. The
 Compose network change requires recreating both app containers; merely restarting the
 Bun process does not attach the network. Eyri's host port stays bound to
 loopback; Context accesses MCP directly over the container network.
+
+## Google Calendar MCP
+
+**Calendar MCP** is a personal `/settings` toggle, off by default, like Finance
+MCP. A verified calendar is bound to the whole Telegram chat (including its
+topics). Every participant who enables Calendar MCP can ask the bot to read,
+create, or edit events in that calendar. Group setup requires a group admin or
+the bot admin; anyone can set up their own private chat.
+
+The bot embeds a small MCP server backed by the Google Calendar API. There is
+no additional MCP container, public callback URL, per-user OAuth consent flow,
+or domain-wide delegation. Tools cannot select another calendar or account.
+Deletion, guest invitations, and changes to sharing permissions are not exposed.
+
+### Create the service-account credential
+
+1. In [Google Cloud Console](https://console.cloud.google.com/), select your
+   existing project under your organization.
+2. Enable **Google Calendar API** in **APIs & Services → Library**.
+3. Go to **IAM & Admin → Service Accounts → Create service account** and name
+   it `context-calendar`. Leave project roles empty; it does not need Owner or
+   Editor. Its calendar access comes from explicit calendar shares.
+4. Open that service account → **Keys → Add key → Create new key → JSON**.
+   Download the JSON file. This is a server credential, not a permanent access
+   token: Google's auth library mints and refreshes short-lived tokens.
+5. Create the repository's `secrets/` directory and save the file as
+   `secrets/google-calendar-service-account.json`. Restrict its permissions to
+   the account running the bot (`chmod 600` on the file). `secrets/` is ignored
+   by Git and excluded from the image build context.
+6. Set `GOOGLE_CALENDAR_CREDENTIALS` in `.env`:
+
+   ```dotenv
+   # bun run dev / bun start, run from this repository:
+   GOOGLE_CALENDAR_CREDENTIALS=secrets/google-calendar-service-account.json
+   ```
+
+   For Compose, put the same file on the deployment host in this project's
+   `secrets/` directory and instead set:
+
+   ```dotenv
+   GOOGLE_CALENDAR_CREDENTIALS=/run/secrets/context/google-calendar-service-account.json
+   ```
+
+   Compose mounts `./secrets` read-only at `/run/secrets/context`; the credential
+   is not baked into the image. Restart the bot after installing or rotating it.
+   Keep the JSON out of Telegram messages, source code, and commit history.
+
+If your organization disables service-account key creation, an organization
+administrator must enable an appropriate exception or arrange workload identity
+authentication; this implementation expects the JSON service-account key file.
+
+The requested scopes are `calendar.events`, `calendar.calendars.readonly`, and
+`calendar.acls.readonly` under `https://www.googleapis.com/auth/`. The latter
+two read metadata and confirm the direct calendar share; the application never
+changes sharing permissions. Do not enable domain-wide delegation.
+
+### Connect a calendar to a chat
+
+1. On desktop Google Calendar, open **Settings → Settings for my calendars →
+   choose the calendar → Share with specific people or groups**. Add the JSON
+   file's `client_email` and grant **Make changes to events**. A dedicated calendar
+   is useful because its events become accessible to this Telegram chat.
+2. In the same calendar's settings, open **Integrate calendar → Calendar ID**.
+   Copy the ID, not the public URL or the secret iCal address. It may resemble
+   an email address or end in `@group.calendar.google.com`.
+3. In the destination Telegram chat, send `/calendar ID`. In groups, the setup
+   message is visible only to its initiator. The bot supplies an exact title
+   such as `Telegram Integration #...` and a **Verify** button.
+4. Manually create a new, non-recurring event **today**, in that calendar's time
+   zone, with the exact title, without guests. Press **Verify** within ten minutes.
+5. The bot edits the message to `Calendar '...' was set up for this chat` and
+   removes the button. Enable **Calendar MCP** in `/settings` to use the tools.
+
+Verification checks the title, creation time, date, and `organizer.self === true`
+to reject incoming invitation copies. It proves editing control, not exclusive
+ownership. Challenges persist across restarts, are single-use, and are bound to
+the initiating Telegram user, chat, and setup message. Starting setup again
+replaces the old challenge; an existing calendar remains active until the new
+one is verified. Rebinding invalidates tools from an older in-flight request.
+Successful verification does not delete the challenge event; users may remove it.
+
+The backend checks personal enablement and the chat binding for every tool call.
+Disabling the toggle does not unlink the shared calendar or affect other users.
+Remove the service account from the calendar's sharing settings to revoke Google
+access. Revocation prevents subsequent API access, but does not erase events or
+answers already saved in Telegram conversation history.
+
+Calendar edits use version checks to avoid overwriting concurrent changes, and
+event creation is never automatically retried after an ambiguous failure. Reading
+and editing recurring events is supported; this first version does not expose
+recurrence-rule creation/editing or attendee management.
 
 ## Text credits
 

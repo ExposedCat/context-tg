@@ -64,6 +64,7 @@ export const APP_ENV = {
   LLM_MAX_TOOL_CALLS: getPositiveIntegerEnv("LLM_MAX_TOOL_CALLS", 50),
   FINANCE_MCP_URL:
     getOptionalEnv("FINANCE_MCP_URL") ?? "http://127.0.0.1:8000/mcp",
+  GOOGLE_CALENDAR_CREDENTIALS: getOptionalEnv("GOOGLE_CALENDAR_CREDENTIALS"),
   KEENABLE_API_KEY: getRequiredEnv("KEENABLE_API_KEY"),
   EMBEDDER_BASE_URL: getRequiredEnv("EMBEDDER_BASE_URL"),
   EMBEDDER_API_KEY: getRequiredEnv("EMBEDDER_API_KEY"),

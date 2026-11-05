@@ -57,6 +57,20 @@ const TOOL_PROGRESS_LABELS = {
   ],
   remember: ["saved memory", "saved {count} memories"],
   forget: ["removed memory", "removed {count} memories"],
+  calendar_get_calendar: ["checked calendar", "checked calendar {count} times"],
+  calendar_list_events: [
+    "searched calendar events",
+    "searched calendar events {count} times",
+  ],
+  calendar_get_event: ["read calendar event", "read {count} calendar events"],
+  calendar_create_event: [
+    "created calendar event",
+    "created {count} calendar events",
+  ],
+  calendar_update_event: [
+    "edited calendar event",
+    "edited {count} calendar events",
+  ],
 } satisfies Record<Exclude<ToolName, `finance_${string}`>, [string, string]>;
 
 export function formatProgressToolSummary(tools: readonly ToolName[]): string {
