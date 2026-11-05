@@ -1,4 +1,4 @@
-import { JWT } from "google-auth-library";
+import { JWT, OAuth2Client } from "google-auth-library";
 import { APP_ENV } from "./env.ts";
 
 export type CalendarMetadata = {
@@ -87,22 +87,28 @@ export class CalendarApiError extends Error {
 }
 
 export class GoogleCalendarApi {
-  private readonly auth: JWT;
+  private readonly auth: JWT | OAuth2Client;
+  readonly authKind: "service_account" | "oauth";
 
   constructor(
     readonly email: string,
-    privateKey: string,
+    credential: string | OAuth2Client,
   ) {
-    this.auth = new JWT({
-      email,
-      key: privateKey,
-      scopes: CALENDAR_SCOPES,
-      transporterOptions: {
-        timeout: 15_000,
-        retry: false,
-        fetchImplementation: (...args) => fetch(...args),
-      },
-    });
+    this.authKind =
+      typeof credential === "string" ? "service_account" : "oauth";
+    this.auth =
+      typeof credential === "string"
+        ? new JWT({
+            email,
+            key: credential,
+            scopes: CALENDAR_SCOPES,
+            transporterOptions: {
+              timeout: 15_000,
+              retry: false,
+              fetchImplementation: (...args) => fetch(...args),
+            },
+          })
+        : credential;
   }
 
   async request<T>(
@@ -145,19 +151,7 @@ export class GoogleCalendarApi {
       ...(options.signal ? [options.signal] : []),
     ]);
     signal.throwIfAborted();
-    let token: string | null | undefined;
-    try {
-      ({ token } = await this.auth.getAccessToken());
-    } catch {
-      signal.throwIfAborted();
-      // Google's auth errors may contain request bodies and signed assertions.
-      throw new Error(
-        "Google Calendar authentication failed. Check the service-account credential.",
-      );
-    }
-    signal.throwIfAborted();
-    if (!token)
-      throw new Error("Google Calendar did not return an access token.");
+    const token = await this.accessToken(signal);
     const url = new URL(`https://www.googleapis.com/calendar/v3${resource}`);
     for (const [key, value] of Object.entries(options.query ?? {}))
       for (const item of Array.isArray(value) ? value : [value])
@@ -221,6 +215,21 @@ export class GoogleCalendarApi {
     return (await response.json()) as T;
   }
 
+  private async accessToken(signal?: AbortSignal): Promise<string> {
+    signal?.throwIfAborted();
+    try {
+      const { token } = await this.auth.getAccessToken();
+      signal?.throwIfAborted();
+      if (!token) throw new Error("Missing token");
+      return token;
+    } catch {
+      signal?.throwIfAborted();
+      throw new Error(
+        "Google Calendar authentication failed. The bot administrator must check the credential or reconnect its Google account.",
+      );
+    }
+  }
+
   async metadata(calendarId: string, signal?: AbortSignal) {
     return this.request<CalendarMetadata>(calendarId, "", { signal });
   }
@@ -229,6 +238,31 @@ export class GoogleCalendarApi {
     calendarId: string,
     signal?: AbortSignal,
   ): Promise<void> {
+    if (this.authKind === "oauth") {
+      // CalendarList.accessRole reports the effective role, including ownership
+      // and inherited access. OAuth users need not have an explicit self ACL.
+      const token = await this.accessToken(signal);
+      const response = await fetch(
+        `https://www.googleapis.com/calendar/v3/users/me/calendarList/${encodeURIComponent(calendarId)}`,
+        {
+          headers: { Authorization: `Bearer ${token}` },
+          signal: AbortSignal.any([
+            AbortSignal.timeout(30_000),
+            ...(signal ? [signal] : []),
+          ]),
+          redirect: "error",
+        },
+      );
+      if (response.ok) {
+        const item = (await response.json()) as { accessRole?: string };
+        if (item.accessRole === "writer" || item.accessRole === "owner") return;
+      } else if (response.status !== 404)
+        throw new Error(
+          "Cannot confirm Google Calendar editing access. Check the bot account's sharing permissions.",
+        );
+      // A newly shared calendar may not yet be in CalendarList. Its explicit
+      // direct share can still be checked through ACL, without subscribing it.
+    }
     let pageToken: string | undefined;
     do {
       const page = await this.request<{
@@ -255,33 +289,59 @@ export class GoogleCalendarApi {
   }
 }
 
+export function createGoogleCalendarApi(value: unknown): GoogleCalendarApi {
+  if (!value || typeof value !== "object")
+    throw new Error("Invalid Google Calendar credential JSON.");
+  const credential = value as Record<string, unknown>;
+  const has = (keys: string[]) =>
+    keys.every(
+      (key) => typeof credential[key] === "string" && Boolean(credential[key]),
+    );
+  if (
+    credential.type === "service_account" &&
+    has(["client_email", "private_key"])
+  )
+    return new GoogleCalendarApi(
+      credential.client_email as string,
+      credential.private_key as string,
+    );
+  if (
+    credential.type === "authorized_user" &&
+    has(["client_id", "client_secret", "refresh_token", "account_email"])
+  ) {
+    const auth = new OAuth2Client({
+      clientId: credential.client_id as string,
+      clientSecret: credential.client_secret as string,
+      credentials: { refresh_token: credential.refresh_token as string },
+      transporterOptions: {
+        timeout: 15_000,
+        retry: false,
+        fetchImplementation: (...args) => fetch(...args),
+      },
+    });
+    return new GoogleCalendarApi(credential.account_email as string, auth);
+  }
+  throw new Error(
+    "Invalid Google Calendar credential JSON. Expected a service account or an authorized OAuth account.",
+  );
+}
+
 let configuredApi: Promise<GoogleCalendarApi> | undefined;
 
 export function getGoogleCalendarApi(): Promise<GoogleCalendarApi> {
   const credentialPath = APP_ENV.GOOGLE_CALENDAR_CREDENTIALS;
   if (!credentialPath)
     throw new Error(
-      "Google Calendar is not configured. Ask the bot administrator to install the service-account JSON credential.",
+      "Google Calendar is not configured. Ask the bot administrator to install its credential JSON.",
     );
   configuredApi ??= (async () => {
-    let credentials: Record<string, unknown>;
+    let credentials: unknown;
     try {
       credentials = await Bun.file(credentialPath).json();
-      if (
-        credentials.type !== "service_account" ||
-        typeof credentials.client_email !== "string" ||
-        typeof credentials.private_key !== "string"
-      )
-        throw new Error("Invalid credential");
     } catch {
-      throw new Error(
-        "Cannot read the Google Calendar service-account JSON credential.",
-      );
+      throw new Error("Cannot read the Google Calendar credential JSON.");
     }
-    return new GoogleCalendarApi(
-      credentials.client_email as string,
-      credentials.private_key as string,
-    );
+    return createGoogleCalendarApi(credentials);
   })().catch((error) => {
     configuredApi = undefined;
     throw error;

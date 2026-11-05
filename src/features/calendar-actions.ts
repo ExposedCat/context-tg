@@ -496,7 +496,7 @@ export async function executeCalendarOperation(
         partial: true,
         error:
           "Calendar was created, but linking failed. Do not create it again; use /calendar with this ID to link it.",
-        dataOwner: "service_account",
+        dataOwner: api.authKind === "oauth" ? api.email : "service_account",
       };
     }
     if (args.shareWithEmail) {
@@ -513,7 +513,7 @@ export async function executeCalendarOperation(
         return {
           calendar,
           linked: true,
-          dataOwner: "service_account",
+          dataOwner: api.authKind === "oauth" ? api.email : "service_account",
           sharingError:
             error instanceof Error ? error.message : "Sharing failed",
         };
@@ -522,8 +522,9 @@ export async function executeCalendarOperation(
     return {
       calendar,
       linked: true,
-      dataOwner: "service_account",
-      ownershipTransferable: false,
+      dataOwner: api.authKind === "oauth" ? api.email : "service_account",
+      ownershipTransferable:
+        api.authKind === "oauth" ? "subject_to_google_rules" : false,
     };
   }
   const binding = await action.authorize(args.calendarId as string | undefined);
@@ -534,7 +535,9 @@ export async function executeCalendarOperation(
       capabilities: {
         cancellation: "native_google_status_cancelled",
         deletion: false,
-        guestOperationsRequireDomainDelegation: true,
+        authentication: api.authKind ?? "service_account",
+        accountEmail: api.email,
+        guestOperationsRequireDomainDelegation: api.authKind !== "oauth",
         calendarAdministrationRequiresManagerAccess: true,
       },
     };

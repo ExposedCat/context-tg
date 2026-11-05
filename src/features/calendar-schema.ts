@@ -381,7 +381,7 @@ const specifications: Record<
   },
   get_calendar: {
     description:
-      "Read calendar metadata and the service-account capability limitations.",
+      "Read calendar metadata, the active bot identity and authentication capabilities.",
     inputSchema: schema(selector),
   },
   list_events: {
@@ -542,7 +542,7 @@ const specifications: Record<
   },
   create_calendar: {
     description:
-      "Chat administrators only: explicitly create a new service-account-owned secondary calendar and link it to this chat. Google warns that service-account data ownership cannot be transferred. Only use when the user explicitly wants a bot-owned calendar. Optional shareWithEmail grants a human manager access, not data ownership.",
+      "Chat administrators only: explicitly create a secondary calendar owned by the active bot Google identity and link it to this chat. Only use when the user explicitly wants a bot-owned calendar. With service-account authentication, data ownership cannot be transferred. Optional shareWithEmail grants manager access.",
     inputSchema: schema(
       {
         ...CALENDAR_FIELDS,

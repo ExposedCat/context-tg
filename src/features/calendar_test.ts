@@ -1035,3 +1035,113 @@ test("Calendar tools survive model follow-ups, obey the shared tool budget and s
     await database.destroy();
   }
 });
+
+test("Calendar OAuth refreshes headlessly, uses the verified account identity and sanitizes revoked-token errors", async () => {
+  const originalFetch = globalThis.fetch;
+  let refreshes = 0;
+  let revoked = false;
+  let listed = true;
+  const requests: URL[] = [];
+  const credential = {
+    type: "authorized_user",
+    client_id: "desktop-client",
+    client_secret: "CLIENT_SECRET",
+    refresh_token: "REFRESH_SECRET",
+    account_email: "bot@example.com",
+  };
+  globalThis.fetch = (async (input, init) => {
+    const url = new URL(input instanceof Request ? input.url : String(input));
+    if (url.hostname === "oauth2.googleapis.com") {
+      refreshes++;
+      const params = new URLSearchParams(String(init?.body));
+      strictEqual(params.get("grant_type"), "refresh_token");
+      strictEqual(params.get("refresh_token"), credential.refresh_token);
+      strictEqual(params.get("client_id"), credential.client_id);
+      return revoked
+        ? Response.json(
+            {
+              error: "invalid_grant",
+              error_description: "REFRESH_SECRET CLIENT_SECRET",
+            },
+            { status: 400 },
+          )
+        : Response.json({
+            access_token: "oauth-access",
+            expires_in: 3600,
+            token_type: "Bearer",
+          });
+    }
+    strictEqual(url.hostname, "www.googleapis.com");
+    strictEqual(
+      new Headers(init?.headers).get("Authorization"),
+      "Bearer oauth-access",
+    );
+    requests.push(url);
+    if (url.pathname.includes("/users/me/calendarList/"))
+      return listed
+        ? Response.json({ accessRole: "owner" })
+        : Response.json({ error: "not found" }, { status: 404 });
+    if (url.pathname.endsWith("/acl"))
+      return Response.json({
+        items: [
+          {
+            scope: { type: "user", value: credential.account_email },
+            role: "writer",
+          },
+        ],
+      });
+    return Response.json({
+      id: calendarId,
+      summary: "Shared calendar",
+      timeZone,
+    });
+  }) as typeof fetch;
+  try {
+    const { createGoogleCalendarApi } = await import("./google-calendar.ts");
+    const api = createGoogleCalendarApi(credential);
+    strictEqual(api.email, credential.account_email);
+    strictEqual(api.authKind, "oauth");
+    await api.metadata(calendarId);
+    await api.assertWritable(calendarId);
+    strictEqual(refreshes, 1);
+    ok(
+      !requests.some((url) => url.pathname.endsWith("/acl")),
+      "An OAuth calendar owner does not need an explicit ACL share to itself",
+    );
+    listed = false;
+    await api.assertWritable(calendarId);
+    ok(
+      requests.some((url) => url.pathname.endsWith("/acl")),
+      "Freshly shared calendars not yet subscribed may still be verified by ACL",
+    );
+    revoked = true;
+    await rejects(
+      createGoogleCalendarApi(credential).metadata(calendarId),
+      (error: Error) => {
+        match(error.message, /reconnect/);
+        ok(!error.message.includes("REFRESH_SECRET"));
+        ok(!error.message.includes("CLIENT_SECRET"));
+        return true;
+      },
+    );
+    for (const value of [
+      undefined,
+      {},
+      { ...credential, refresh_token: undefined },
+      { ...credential, account_email: undefined },
+    ])
+      strictEqual(
+        (() => {
+          try {
+            createGoogleCalendarApi(value);
+            return false;
+          } catch {
+            return true;
+          }
+        })(),
+        true,
+      );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});

@@ -39,7 +39,7 @@ export type ChatCalendarSettingsTable = {
 export type CalendarApi = Pick<
   GoogleCalendarApi,
   "email" | "metadata" | "assertWritable" | "request" | "requestGlobal"
->;
+> & { authKind?: "service_account" | "oauth" };
 
 export async function migrateCalendars(database: Database): Promise<void> {
   const existingTables = await database.introspection.getTables();

@@ -68,10 +68,45 @@ Finance MCP remains a personal setting.
 
 The bot embeds an MCP server backed by the Google Calendar API. There is no
 additional MCP container, public callback URL, per-user OAuth consent flow, or
-domain-wide delegation. Tools can select only calendars verified for this chat,
-using the existing service account. No HTTP DELETE or calendar-clear endpoint is
+domain-wide delegation. A dedicated account can authorize the bot once through
+OAuth, or a service-account credential can be used with Google's invitation limits. Tools can select only calendars verified for this chat,
+using the configured bot Google identity. No HTTP DELETE or calendar-clear endpoint is
 exposed. Cancellation uses Google's native `status=cancelled`; Google treats this
 as a cancelled/deleted entry and may hide it ([event status documentation](https://developers.google.com/workspace/calendar/api/v3/reference/events#status)).
+
+### OAuth account (supports invitations)
+
+Use a dedicated Google account as the shared bot identity. In the existing Google
+Cloud project, configure Google Auth Platform branding/audience and create a
+**Desktop app** OAuth client. Set the external app to **In production** before
+login: Calendar refresh tokens issued in Testing expire after seven days.
+Publishing and Google verification are separate; follow the console's applicable
+verification requirements.
+
+Download the client JSON and run the one-time login helper locally:
+
+```sh
+bun src/scripts/calendar-oauth.ts /path/to/client.json secrets/google-calendar-oauth.json
+```
+
+Open the printed Google URL in your browser and approve Calendar access. The
+helper requests offline access, validates the account email, uses PKCE and a
+state-bound loopback callback, and writes the refresh credential with mode 0600.
+It never prints tokens. The server needs no public OAuth callback. The credential
+contains `type: authorized_user`, OAuth client credentials, refresh token, and the
+verified `account_email`. Keep it in ignored `secrets/` and set:
+
+```dotenv
+GOOGLE_CALENDAR_CREDENTIALS=/run/secrets/context/google-calendar-oauth.json
+```
+
+For local runs, use `secrets/google-calendar-oauth.json` instead. Install the file
+on the server with mode 0600 and restart the bot. Access tokens refresh automatically;
+revoked or expired authorization requires running the helper again. Users must
+share calendars with the **OAuth account email**, and existing links remain valid
+once that account has access. `/calendar` displays the active sharing email.
+OAuth users do not need domain-wide delegation to invite guests, but normal
+Google account/calendar permissions still apply.
 
 ### Create the service-account credential
 
@@ -112,7 +147,7 @@ authentication; this implementation expects the JSON service-account key file.
 
 The requested scope is `https://www.googleapis.com/auth/calendar`, enabling
 calendar and sharing administration as well as events. Google still enforces the
-service account's calendar permissions; project IAM roles are unnecessary. The
+authenticated account's calendar permissions; project IAM roles are unnecessary. The
 existing JSON key works without regeneration. Domain-wide delegation is not
 configured.
 
@@ -120,7 +155,7 @@ configured.
 
 1. On desktop Google Calendar, open **Settings → Settings for my calendars →
    choose the calendar → Share with specific people or groups**. Add the JSON
-   file's `client_email` and grant **Make changes to events**. A dedicated calendar
+   file's `client_email` (or the OAuth account email) and grant **Make changes to events**. A dedicated calendar
    is useful because its events become accessible to this Telegram chat.
 2. In the same calendar's settings, open **Integrate calendar → Calendar ID**.
    Copy the ID, not the public URL or the secret iCal address. It may resemble
@@ -147,7 +182,7 @@ Disabling the toggle stops Calendar tools for everyone in that chat without
 unlinking the shared calendar or changing other chats. Legacy personal Calendar
 preferences are migrated once to chats that user had already set up or started
 setting up; arbitrary chats never inherit a user's old preference.
-Remove the service account from the calendar's sharing settings to revoke Google
+Remove the bot Google identity from the calendar's sharing settings to revoke Google
 access. Revocation prevents subsequent API access, but does not erase events or
 answers already saved in Telegram conversation history.
 
