@@ -47,6 +47,24 @@ async function reply(ctx: Context, text: string) {
   );
 }
 
+function calendarHelp(ctx: Context, email?: string) {
+  const t = (key: string) => escapeHtml(ctx.t(key));
+  return {
+    html: [
+      `<h3>${t("calendar-help-title")}</h3>`,
+      `<p><b>${t("calendar-help-share-title")}</b><br>${t("calendar-help-share")}</p>`,
+      email
+        ? `<pre><code>${escapeHtml(email)}</code></pre>`
+        : `<p><i>${t("calendar-help-no-account")}</i></p>`,
+      `<p><b>${t("calendar-help-id-title")}</b><br>${t("calendar-help-id")}</p>`,
+      `<p><b>${t("calendar-help-connect-title")}</b></p>`,
+      "<pre><code>/calendar ID</code></pre>",
+      `<p>${t("calendar-help-enable")} <b>Calendar MCP</b> · <code>/settings</code></p>`,
+    ].join("\n"),
+    skip_entity_detection: true as const,
+  };
+}
+
 calendarComposer.command("calendar", async (ctx) => {
   if (!ctx.chat || !ctx.from) return;
   if (!(await canSetCalendar(ctx))) {
@@ -55,14 +73,14 @@ calendarComposer.command("calendar", async (ctx) => {
   }
   const calendarId = ctx.match.trim();
   if (!calendarId) {
-    let help = ctx.t("calendar-usage");
+    let email: string | undefined;
     try {
       const api = await getGoogleCalendarApi();
-      help += `\n${ctx.t("calendar-service-account", { email: api.email })}`;
+      email = api.email;
     } catch {
       // Usage remains available before the administrator installs credentials.
     }
-    await reply(ctx, help);
+    await ctx.replyWithRichMessage(calendarHelp(ctx, email), replyOptions(ctx));
     return;
   }
   try {
@@ -76,7 +94,14 @@ calendarComposer.command("calendar", async (ctx) => {
     );
     const message = await ctx.replyWithRichMessage(
       {
-        html: `<p>${escapeHtml(ctx.t("calendar-challenge", { email: api.email, day: challenge.day }))}</p><p><code>${escapeHtml(challenge.title)}</code></p><p><tg-button type="callback_data" data="calverify:${challenge.token}">${escapeHtml(ctx.t("calendar-verify"))}</tg-button></p>`,
+        html: [
+          `<h3>${escapeHtml(ctx.t("calendar-challenge-title"))}</h3>`,
+          `<p>${escapeHtml(ctx.t("calendar-challenge", { day: challenge.day }))}</p>`,
+          `<pre><code>${escapeHtml(challenge.title)}</code></pre>`,
+          `<ul><li>${escapeHtml(ctx.t("calendar-challenge-event"))}</li><li>${escapeHtml(ctx.t("calendar-challenge-expiry"))}</li></ul>`,
+          `<p><i>${escapeHtml(ctx.t("calendar-challenge-access"))}</i></p>`,
+          `<p><tg-button type="callback_data" style="primary" data="calverify:${challenge.token}">${escapeHtml(ctx.t("calendar-verify"))}</tg-button></p>`,
+        ].join("\n"),
         skip_entity_detection: true,
       },
       replyOptions(ctx),

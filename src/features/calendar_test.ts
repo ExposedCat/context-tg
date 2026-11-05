@@ -608,10 +608,15 @@ test("Calendar /settings and setup commands enforce actor/admin/message binding 
     strictEqual(await getCalendarChallenge(database, chat.id), undefined);
     await command("/calendar");
     match(html(), /Integrate calendar/);
+    match(html(), /<h3>Connect Google Calendar<\/h3>/);
+    ok(html().includes(`<pre><code>${email}</code></pre>`));
+    ok(html().includes("<pre><code>/calendar ID</code></pre>"));
     await command(`/calendar ${calendarId}`);
     const challenge = await getCalendarChallenge(database, chat.id);
     ok(challenge);
     match(html(), /Telegram Integration #/);
+    match(html(), /<h3>Verify your calendar<\/h3>/);
+    ok(html().includes(`<pre><code>${challenge.title}</code></pre>`));
     match(html(), /calverify:/);
     strictEqual(challenge.message_id, 42);
     deepStrictEqual(
