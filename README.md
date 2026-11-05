@@ -78,7 +78,8 @@ as a cancelled/deleted entry and may hide it ([event status documentation](https
 
 Use a dedicated Google account as the shared bot identity. In the existing Google
 Cloud project, configure Google Auth Platform branding/audience and create a
-**Desktop app** OAuth client. Set the external app to **In production** before
+**Desktop app** OAuth client with **Use this client for an AI-powered agent**
+selected. Set the external app to **In production** before
 login: Calendar refresh tokens issued in Testing expire after seven days.
 Publishing and Google verification are separate; follow the console's applicable
 verification requirements.
