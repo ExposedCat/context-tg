@@ -1,14 +1,19 @@
 import { chmod, mkdir, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { CodeChallengeMethod, OAuth2Client } from "google-auth-library";
-import { CALENDAR_SCOPES } from "../features/google-calendar.ts";
+import { CALENDAR_SCOPES } from "../features/google-calendar-scopes.ts";
 
 // One-time local authorization. The callback is loopback-only, state-bound and
 // protected by PKCE. Never log authorization codes, access or refresh tokens.
-const [clientPath, outputPath] = process.argv.slice(2);
+const [clientPath, outputPath, mode] = process.argv.slice(2);
+const allowTesting = mode === "--allow-testing";
+if (mode && !allowTesting)
+  throw new Error(
+    "Unknown option. Use --allow-testing only for a temporary seven-day authorization.",
+  );
 if (!clientPath || !outputPath) {
   console.error(
-    "Usage: bun src/scripts/calendar-oauth.ts CLIENT_JSON OUTPUT_JSON",
+    "Usage: bun src/scripts/calendar-oauth.ts CLIENT_JSON OUTPUT_JSON [--allow-testing]",
   );
   process.exit(1);
 }
@@ -79,7 +84,8 @@ const server = Bun.serve({
         throw new Error("Calendar permission was not granted");
       if (
         (tokens as typeof tokens & { refresh_token_expires_in?: number })
-          .refresh_token_expires_in
+          .refresh_token_expires_in &&
+        !allowTesting
       )
         throw new Error(
           "Google issued a time-limited refresh token; switch the OAuth app to production and authorize again",
@@ -94,6 +100,12 @@ const server = Bun.serve({
             client_secret: client.client_secret,
             refresh_token: tokens.refresh_token,
             account_email: identity.email,
+            ...(allowTesting
+              ? {
+                  authorization_mode: "testing",
+                  refresh_token_expires_at: Date.now() + 7 * 24 * 60 * 60_000,
+                }
+              : {}),
           },
           null,
           2,
@@ -102,6 +114,10 @@ const server = Bun.serve({
       );
       await chmod(output, 0o600);
       succeeded = true;
+      if (allowTesting)
+        console.log(
+          "Testing authorization expires within seven days. Reauthorize after publishing the OAuth app.",
+        );
       console.log(
         `Calendar OAuth authorized as ${identity.email}. Credential saved to ${output}.`,
       );

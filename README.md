@@ -90,6 +90,11 @@ Download the client JSON and run the one-time login helper locally:
 bun src/scripts/calendar-oauth.ts /path/to/client.json secrets/google-calendar-oauth.json
 ```
 
+For a temporary test before publishing, add the bot Google account under
+**Audience → Test users**, then append `--allow-testing` and use a separate output
+file. This authorization expires within seven days and must be replaced after
+publishing; it is not the long-term server credential.
+
 Open the printed Google URL in your browser and approve Calendar access. The
 helper requests offline access, validates the account email, uses PKCE and a
 state-bound loopback callback, and writes the refresh credential with mode 0600.

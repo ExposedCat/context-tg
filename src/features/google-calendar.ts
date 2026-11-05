@@ -1,5 +1,8 @@
 import { JWT, OAuth2Client } from "google-auth-library";
 import { APP_ENV } from "./env.ts";
+import { CALENDAR_SCOPES } from "./google-calendar-scopes.ts";
+
+export { CALENDAR_SCOPES } from "./google-calendar-scopes.ts";
 
 export type CalendarMetadata = {
   id: string;
@@ -66,7 +69,6 @@ export type CalendarEventsPage = {
 
 // No impersonation or Cloud-wide scopes. The calendar owner must explicitly
 // share the calendar with this identity. The full Calendar scope enables calendar administration, subject to Google ACLs.
-export const CALENDAR_SCOPES = ["https://www.googleapis.com/auth/calendar"];
 
 export type CalendarRequestOptions = {
   method?: "GET" | "POST" | "PATCH";

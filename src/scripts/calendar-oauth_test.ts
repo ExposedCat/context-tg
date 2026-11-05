@@ -18,13 +18,11 @@ test("OAuth login binds a loopback callback to unpredictable state and PKCE befo
     [
       process.execPath,
       "--no-env-file",
-      "--preload",
-      "./src/test-setup.ts",
       "src/scripts/calendar-oauth.ts",
       clientPath,
       outputPath,
     ],
-    { stdout: "pipe", stderr: "pipe" },
+    { stdout: "pipe", stderr: "pipe", env: { PATH: process.env.PATH ?? "" } },
   );
   try {
     const reader = child.stdout.getReader();
