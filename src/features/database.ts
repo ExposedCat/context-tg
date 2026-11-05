@@ -3,6 +3,7 @@ import { dirname } from "node:path";
 import { Kysely } from "kysely";
 import {
   type CalendarChallengeTable,
+  type ChatCalendarSettingsTable,
   type ChatCalendarTable,
   migrateCalendars,
 } from "./calendar-settings.ts";
@@ -54,6 +55,7 @@ import {
 
 export type DatabaseSchema = {
   chat_calendars: ChatCalendarTable;
+  chat_calendar_settings: ChatCalendarSettingsTable;
   calendar_challenges: CalendarChallengeTable;
   user_settings: UserSettingsTable;
   threads: ThreadsTable;

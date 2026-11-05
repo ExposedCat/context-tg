@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { I18n } from "@grammyjs/i18n";
 import { Bot } from "grammy";
+import { sql } from "kysely";
 import type { Context } from "../bot.ts";
 import type { CalendarToolName } from "./calendar-mcp.ts";
 import type { CalendarChallengeTable } from "./calendar-settings.ts";
@@ -38,6 +39,8 @@ const {
   getChatCalendar,
   verifyCalendarSetup,
   migrateCalendars,
+  getCalendarMcpEnabled,
+  setCalendarMcpEnabled,
 } = await import("./calendar-settings.ts");
 const {
   calendarDate,
@@ -45,13 +48,8 @@ const {
   GoogleCalendarApi,
   getGoogleCalendarApi,
 } = await import("./google-calendar.ts");
-const {
-  getCalendarMcpEnabled,
-  setCalendarMcpEnabled,
-  setFinanceMcpEnabled,
-  getFinanceMcpEnabled,
-  migrateUserSettings,
-} = await import("./user-settings.ts");
+const { setFinanceMcpEnabled, getFinanceMcpEnabled, migrateUserSettings } =
+  await import("./user-settings.ts");
 const { connectCalendarMcp } = await import("./calendar-mcp.ts");
 const { calendarComposer } = await import("./calendar.ts");
 const { configureComposer } = await import("./configure.ts");
@@ -364,7 +362,37 @@ test("Calendar verification rejects invitation spoofing, stale/replayed events, 
   }
 });
 
-test("Calendar MCP binds tools to the verified chat and opted-in user, preserves edits and invalidates stale sessions", async () => {
+test("Calendar verification accepts an event saved while the request is in flight", async () => {
+  const mock = fixture();
+  const database = await initDatabase()();
+  try {
+    const api = await getGoogleCalendarApi();
+    const startedAt = Date.now() - 2000;
+    const challenge = await beginCalendarSetup(
+      database,
+      -100,
+      2,
+      calendarId,
+      api,
+      startedAt,
+    );
+    mock.state.events = [verificationEvent(challenge)];
+    const binding = await verifyCalendarSetup(
+      database,
+      -100,
+      2,
+      challenge.token,
+      api,
+      startedAt + 1000,
+    );
+    strictEqual(binding.calendar_id, calendarId);
+  } finally {
+    mock.restore();
+    await database.destroy();
+  }
+});
+
+test("Calendar MCP binds tools to the enabled chat for every member, preserves edits and invalidates stale sessions", async () => {
   const mock = fixture();
   const database = await initDatabase()();
   let mcp: Awaited<ReturnType<typeof connectCalendarMcp>>;
@@ -372,7 +400,7 @@ test("Calendar MCP binds tools to the verified chat and opted-in user, preserves
     const api = await getGoogleCalendarApi();
     const context = { chatId: -100, userId: 2, messageId: 1 };
     strictEqual(await connectCalendarMcp(database, context), undefined);
-    await setCalendarMcpEnabled(database, 2, true);
+    await setCalendarMcpEnabled(database, -100, true);
     strictEqual(await connectCalendarMcp(database, context), undefined);
     const challenge = await beginCalendarSetup(
       database,
@@ -383,18 +411,22 @@ test("Calendar MCP binds tools to the verified chat and opted-in user, preserves
     );
     mock.state.events = [verificationEvent(challenge)];
     await verifyCalendarSetup(database, -100, 2, challenge.token, api);
-    strictEqual(
-      await connectCalendarMcp(database, { ...context, userId: 3 }),
-      undefined,
-    );
+    const otherMember = await connectCalendarMcp(database, {
+      ...context,
+      userId: 3,
+    });
+    ok(otherMember, "chat enablement applies to other members");
+    await otherMember.close();
     strictEqual(
       await connectCalendarMcp(database, { ...context, chatId: -200 }),
       undefined,
     );
-    strictEqual(
-      await connectCalendarMcp(database, { ...context, userId: undefined }),
-      undefined,
-    );
+    const chatOnly = await connectCalendarMcp(database, {
+      ...context,
+      userId: undefined,
+    });
+    ok(chatOnly, "chat authorization does not depend on a personal user ID");
+    await chatOnly.close();
     mcp = await connectCalendarMcp(database, context);
     ok(mcp);
     deepStrictEqual(
@@ -476,12 +508,12 @@ test("Calendar MCP binds tools to the verified chat and opted-in user, preserves
     strictEqual(edit?.headers.get("If-Match"), '"v1"');
     deepStrictEqual(edit?.body, { summary: "Changed" });
     ok(mock.calls.every((call) => call.calendarId === calendarId));
-    await setCalendarMcpEnabled(database, 2, false);
+    await setCalendarMcpEnabled(database, -100, false);
     await rejects(
       run("calendar_get_event", { eventId: "event123" }),
       /disabled/,
     );
-    await setCalendarMcpEnabled(database, 2, true);
+    await setCalendarMcpEnabled(database, -100, true);
     await database
       .updateTable("chat_calendars")
       .set({ verification_id: "different" })
@@ -616,11 +648,18 @@ test("Calendar /settings and setup commands enforce actor/admin/message binding 
         )?.html ?? ""
       ).replace(/[\u2068\u2069]/g, "");
     await command("/settings", 3);
-    match(html(), /Calendar MCP.*cfg:calendar:3:on/);
-    await click("cfg:calendar:2:on", 3);
-    strictEqual(await getCalendarMcpEnabled(database, 2), false);
-    await click("cfg:calendar:3:on", 3);
-    strictEqual(await getCalendarMcpEnabled(database, 3), true);
+    ok(
+      !html().includes("Calendar MCP"),
+      "ordinary members cannot change the chat toggle",
+    );
+    await click("cfg:calendar:-100:on", 3);
+    strictEqual(await getCalendarMcpEnabled(database, -100), false);
+    await click("cfg:calendar:-200:on");
+    strictEqual(await getCalendarMcpEnabled(database, -200), false);
+    await click("cfg:calendar:-100:on");
+    strictEqual(await getCalendarMcpEnabled(database, -100), true);
+    match(html(), /Calendar MCP.*cfg:calendar:-100:off/);
+    await click("cfg:calendar:-100:off");
     await command(`/calendar ${calendarId}`, 3);
     strictEqual(await getCalendarChallenge(database, chat.id), undefined);
     await command("/calendar");
@@ -687,12 +726,12 @@ test("Calendar /settings and setup commands enforce actor/admin/message binding 
       calendarId,
     );
     strictEqual(
-      await getCalendarMcpEnabled(database, 2),
+      await getCalendarMcpEnabled(database, -100),
       false,
-      "verification must not silently opt the user in",
+      "verification must not silently enable the chat",
     );
-    await click("cfg:calendar:2:on");
-    strictEqual(await getCalendarMcpEnabled(database, 2), true);
+    await click("cfg:calendar:-100:on");
+    strictEqual(await getCalendarMcpEnabled(database, -100), true);
   } finally {
     mock.restore();
     await database.destroy();
@@ -717,19 +756,71 @@ test("Calendar settings migration preserves legacy finance preferences and toggl
     await migrateUserSettings(database);
     await migrateUserSettings(database);
     strictEqual(await getFinanceMcpEnabled(database, 2), true);
-    strictEqual(await getCalendarMcpEnabled(database, 2), false);
-    await setCalendarMcpEnabled(database, 2, true);
+    strictEqual(await getCalendarMcpEnabled(database, -100), false);
+    await setCalendarMcpEnabled(database, -100, true);
     await setFinanceMcpEnabled(database, 2, false);
-    strictEqual(await getCalendarMcpEnabled(database, 2), true);
+    strictEqual(await getCalendarMcpEnabled(database, -100), true);
     await setFinanceMcpEnabled(database, 2, true);
-    await setCalendarMcpEnabled(database, 2, false);
+    await setCalendarMcpEnabled(database, -100, false);
     strictEqual(await getFinanceMcpEnabled(database, 2), true);
   } finally {
     await database.destroy();
   }
 });
 
-test("Calendar tools survive model follow-ups, obey the shared tool budget and cannot replay after opt-out", async () => {
+test("Legacy Calendar enablement migrates once to known chats and preserves pending verification", async () => {
+  const mock = fixture();
+  const database = await initDatabase()();
+  try {
+    const challenge = await beginCalendarSetup(
+      database,
+      -100,
+      2,
+      calendarId,
+      await getGoogleCalendarApi(),
+    );
+    await setFinanceMcpEnabled(database, 2, true);
+    await database.schema
+      .alterTable("user_settings")
+      .addColumn("calendar_mcp_enabled", "integer", (column) =>
+        column.notNull().defaultTo(0),
+      )
+      .execute();
+    await sql`UPDATE user_settings SET calendar_mcp_enabled = 1 WHERE user_id = 2`.execute(
+      database,
+    );
+    await database.schema.dropTable("chat_calendar_settings").execute();
+    await database.schema
+      .alterTable("calendar_challenges")
+      .dropColumn("calendar_name")
+      .execute();
+    await migrateCalendars(database);
+    strictEqual(await getCalendarMcpEnabled(database, -100), true);
+    strictEqual(await getCalendarMcpEnabled(database, -200), false);
+    strictEqual(await getCalendarMcpEnabled(database, 2), false);
+    strictEqual(
+      (await getCalendarChallenge(database, -100))?.token,
+      challenge.token,
+    );
+    strictEqual(
+      (await getCalendarChallenge(database, -100))?.calendar_name,
+      "",
+    );
+    await setCalendarMcpEnabled(database, -100, false);
+    await migrateCalendars(database);
+    strictEqual(
+      await getCalendarMcpEnabled(database, -100),
+      false,
+      "migration cannot reenable a chat after opt-out",
+    );
+    strictEqual(await getFinanceMcpEnabled(database, 2), true);
+  } finally {
+    mock.restore();
+    await database.destroy();
+  }
+});
+
+test("Calendar tools survive model follow-ups, obey the shared tool budget and stop when the chat disables them", async () => {
   const mock = fixture();
   const database = await initDatabase()();
   const { requestLlm } = await import("./llm.ts");
@@ -746,7 +837,7 @@ test("Calendar tools survive model follow-ups, obey the shared tool budget and c
     );
     mock.state.events = [verificationEvent(challenge)];
     await verifyCalendarSetup(database, -100, 2, challenge.token, api);
-    await setCalendarMcpEnabled(database, 2, true);
+    await setCalendarMcpEnabled(database, -100, true);
     setLlmDeploymentName("small", "test");
     const requests: Record<string, unknown>[] = [];
     let callCalendar = true;
@@ -777,7 +868,7 @@ test("Calendar tools survive model follow-ups, obey the shared tool budget and c
           ];
       callCalendar = false;
       if (disableDuringCall) {
-        await setCalendarMcpEnabled(database, 2, false);
+        await setCalendarMcpEnabled(database, -100, false);
         disableDuringCall = false;
       }
       return Response.json({
@@ -817,7 +908,7 @@ test("Calendar tools survive model follow-ups, obey the shared tool budget and c
     strictEqual(mock.calls.length, before);
     ok(disabled.errors.some((error) => error.details.includes("unavailable")));
     strictEqual(requests.at(-1)?.tools, undefined);
-    await setCalendarMcpEnabled(database, 2, true);
+    await setCalendarMcpEnabled(database, -100, true);
     callCalendar = true;
     await requestLlm("Read calendar", [], undefined, {
       ...options,
@@ -833,7 +924,11 @@ test("Calendar tools survive model follow-ups, obey the shared tool budget and c
       context: { ...options.context, userId: undefined },
     };
     await requestLlm("Read calendar", [], undefined, withoutUser);
-    strictEqual(requests.at(-1)?.tools, undefined);
+    ok(
+      (requests.at(-1)?.tools as { name: string }[])?.some(
+        (tool) => tool.name === "calendar_get_calendar",
+      ),
+    );
   } finally {
     mock.restore();
     await database.destroy();

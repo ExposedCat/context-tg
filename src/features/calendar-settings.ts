@@ -1,3 +1,4 @@
+import { sql } from "kysely";
 import type { Database } from "./database.ts";
 import {
   type CalendarEvent,
@@ -20,6 +21,7 @@ export type CalendarChallengeTable = {
   chat_id: number;
   user_id: number;
   calendar_id: string;
+  calendar_name: string;
   token: string;
   title: string;
   day: string;
@@ -29,12 +31,18 @@ export type CalendarChallengeTable = {
   message_id: number | null;
 };
 
+export type ChatCalendarSettingsTable = {
+  chat_id: number;
+  enabled: number;
+};
+
 export type CalendarApi = Pick<
   GoogleCalendarApi,
   "email" | "metadata" | "assertWritable" | "request"
 >;
 
 export async function migrateCalendars(database: Database): Promise<void> {
+  const existingTables = await database.introspection.getTables();
   await database.schema
     .createTable("chat_calendars")
     .ifNotExists()
@@ -52,6 +60,7 @@ export async function migrateCalendars(database: Database): Promise<void> {
     .addColumn("chat_id", "integer", (c) => c.primaryKey())
     .addColumn("user_id", "integer", (c) => c.notNull())
     .addColumn("calendar_id", "text", (c) => c.notNull())
+    .addColumn("calendar_name", "text", (c) => c.notNull().defaultTo(""))
     .addColumn("token", "text", (c) => c.notNull().unique())
     .addColumn("title", "text", (c) => c.notNull())
     .addColumn("day", "text", (c) => c.notNull())
@@ -59,6 +68,66 @@ export async function migrateCalendars(database: Database): Promise<void> {
     .addColumn("expires_at", "integer", (c) => c.notNull())
     .addColumn("verified_at", "integer")
     .addColumn("message_id", "integer")
+    .execute();
+  const oldChallenges = existingTables.find(
+    (table) => table.name === "calendar_challenges",
+  );
+  if (
+    oldChallenges &&
+    !oldChallenges.columns.some((column) => column.name === "calendar_name")
+  )
+    await database.schema
+      .alterTable("calendar_challenges")
+      .addColumn("calendar_name", "text", (c) => c.notNull().defaultTo(""))
+      .execute();
+  await database.schema
+    .createTable("chat_calendar_settings")
+    .ifNotExists()
+    .addColumn("chat_id", "integer", (c) => c.primaryKey())
+    .addColumn("enabled", "integer", (c) => c.notNull().defaultTo(0))
+    .execute();
+  // Carry the setup administrator's legacy preference to known chats once.
+  // Never infer access for arbitrary chats from a personal toggle.
+  if (
+    !existingTables.some((table) => table.name === "chat_calendar_settings") &&
+    existingTables
+      .find((table) => table.name === "user_settings")
+      ?.columns.some((column) => column.name === "calendar_mcp_enabled")
+  ) {
+    await sql`INSERT INTO chat_calendar_settings (chat_id, enabled)
+      SELECT known.chat_id, MAX(users.calendar_mcp_enabled)
+      FROM (
+        SELECT chat_id, linked_by AS user_id FROM chat_calendars
+        UNION ALL
+        SELECT chat_id, user_id FROM calendar_challenges
+      ) AS known JOIN user_settings AS users ON users.user_id = known.user_id
+      GROUP BY known.chat_id`.execute(database);
+  }
+}
+
+export async function getCalendarMcpEnabled(
+  database: Database,
+  chatId: number,
+): Promise<boolean> {
+  const row = await database
+    .selectFrom("chat_calendar_settings")
+    .select("enabled")
+    .where("chat_id", "=", chatId)
+    .executeTakeFirst();
+  return row?.enabled === 1;
+}
+
+export async function setCalendarMcpEnabled(
+  database: Database,
+  chatId: number,
+  enabled: boolean,
+): Promise<void> {
+  await database
+    .insertInto("chat_calendar_settings")
+    .values({ chat_id: chatId, enabled: enabled ? 1 : 0 })
+    .onConflict((c) =>
+      c.column("chat_id").doUpdateSet({ enabled: enabled ? 1 : 0 }),
+    )
     .execute();
 }
 
@@ -97,6 +166,7 @@ export async function beginCalendarSetup(
     chat_id: chatId,
     user_id: userId,
     calendar_id: calendarId,
+    calendar_name: metadata.summary,
     token,
     title: `Telegram Integration #${token}`,
     day: calendarDate(new Date(now), metadata.timeZone),
@@ -189,7 +259,7 @@ export async function verifyCalendarSetup(
           challenge,
           metadata.timeZone,
           api.email,
-          now,
+          Math.max(now, Date.now()),
         ),
       ) ?? false;
     pageToken = page.nextPageToken;

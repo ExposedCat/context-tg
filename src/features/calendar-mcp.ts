@@ -12,6 +12,7 @@ import type OpenAI from "openai";
 import {
   type CalendarApi,
   type ChatCalendarTable,
+  getCalendarMcpEnabled,
   getChatCalendar,
 } from "./calendar-settings.ts";
 import type { Database } from "./database.ts";
@@ -22,7 +23,6 @@ import {
   getGoogleCalendarApi,
 } from "./google-calendar.ts";
 import type { FunctionToolRunner, LlmToolContext } from "./llm-tools/types.ts";
-import { getCalendarMcpEnabled } from "./user-settings.ts";
 
 const logError = createDebug("app:calendar-mcp:error");
 const TOOL_NAMES = [
@@ -306,16 +306,13 @@ export async function connectCalendarMcp(
 ): Promise<CalendarMcpTools | undefined> {
   if (
     !database ||
-    !context?.userId ||
-    !Number.isSafeInteger(context.userId) ||
-    context.userId <= 0 ||
+    !context ||
     !APP_ENV.GOOGLE_CALENDAR_CREDENTIALS ||
-    !(await getCalendarMcpEnabled(database, context.userId))
+    !(await getCalendarMcpEnabled(database, context.chatId))
   )
     return;
   const binding = await getChatCalendar(database, context.chatId);
   if (!binding) return;
-  const userId = context.userId;
   const client = new Client({ name: "context-tg-calendar", version: "1.0.0" });
   const server = new Server(
     { name: "Calendar MCP", version: "1.0.0" },
@@ -332,7 +329,7 @@ export async function connectCalendarMcp(
       // Bind authorization to this request, never to model-selected IDs. Recheck
       // so a setting change or relink takes effect even during a tool loop.
       if (
-        !(await getCalendarMcpEnabled(database, userId)) ||
+        !(await getCalendarMcpEnabled(database, context.chatId)) ||
         (await getChatCalendar(database, context.chatId))?.verification_id !==
           binding.verification_id
       )

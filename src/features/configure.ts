@@ -2,6 +2,10 @@ import { Composer, GrammyError } from "grammy";
 import type { Context } from "../bot.ts";
 import { escapeHtml, escapeHtmlAttribute } from "../utils/text.ts";
 import { canConfigureChat, isBotAdmin } from "./authorization.ts";
+import {
+  getCalendarMcpEnabled,
+  setCalendarMcpEnabled,
+} from "./calendar-settings.ts";
 import { listEmojiPacks, removeEmojiPack } from "./emoji-packs.ts";
 import { LLM_DEPLOYMENT_OPTIONS } from "./llm-deployments.ts";
 import {
@@ -25,12 +29,7 @@ import {
   setTrollingMode,
 } from "./trolling.ts";
 import { isTrollingMode, TROLLING_MODES } from "./trolling-mode.ts";
-import {
-  getCalendarMcpEnabled,
-  getFinanceMcpEnabled,
-  setCalendarMcpEnabled,
-  setFinanceMcpEnabled,
-} from "./user-settings.ts";
+import { getFinanceMcpEnabled, setFinanceMcpEnabled } from "./user-settings.ts";
 
 export const configureComposer = new Composer<Context>();
 const EFFORTS = ["none", "low", "medium", "high", "xhigh"] as const;
@@ -89,6 +88,10 @@ export async function buildRichConfigureMessage(
       rows.push(
         `<p>${t("configure-progress")} ${toggle(ctx, `progress:${progressEnabled ? "off" : "on"}`, progressEnabled)}</p>`,
       );
+      const calendarEnabled = await getCalendarMcpEnabled(ctx.database, chatId);
+      rows.push(
+        `<p>${t("configure-calendar-mcp")} ${toggle(ctx, `calendar:${chatId}:${calendarEnabled ? "off" : "on"}`, calendarEnabled)}</p>`,
+      );
     }
     if (canConfigure) {
       rows.push(`<p>${t("configure-trolling")} ${configure("trolling")}</p>`);
@@ -100,13 +103,6 @@ export async function buildRichConfigureMessage(
       const enabled = await getFinanceMcpEnabled(ctx.database, ctx.from.id);
       rows.push(
         `<p>${t("configure-finance-mcp")} ${toggle(ctx, `finance:${ctx.from.id}:${enabled ? "off" : "on"}`, enabled)}</p>`,
-      );
-      const calendarEnabled = await getCalendarMcpEnabled(
-        ctx.database,
-        ctx.from.id,
-      );
-      rows.push(
-        `<p>${t("configure-calendar-mcp")} ${toggle(ctx, `calendar:${ctx.from.id}:${calendarEnabled ? "off" : "on"}`, calendarEnabled)}</p>`,
       );
     }
     html = rows.join("\n");
@@ -191,8 +187,10 @@ configureComposer.callbackQuery(/^cfg:/, async (ctx) => {
   if (
     !ctx.chat ||
     !ctx.from ||
-    (!["menu", "finance", "calendar"].includes(action) &&
-      !(action === "progress" && ctx.chat.type === "private") &&
+    (!["menu", "finance"].includes(action) &&
+      !(
+        ["progress", "calendar"].includes(action) && ctx.chat.type === "private"
+      ) &&
       !(await canConfigureChat(ctx)))
   ) {
     await ctx.answerCallbackQuery({
@@ -224,10 +222,7 @@ configureComposer.callbackQuery(/^cfg:/, async (ctx) => {
     (value && action !== "set" && action !== "finance" && action !== "calendar")
   )
     return await invalid();
-  if (
-    (action === "finance" || action === "calendar") &&
-    (value === "on" || value === "off")
-  ) {
+  if (action === "finance" && (value === "on" || value === "off")) {
     if (target !== String(ctx.from.id)) {
       await ctx.answerCallbackQuery({
         text: ctx.t("configure-user-settings-own"),
@@ -235,11 +230,10 @@ configureComposer.callbackQuery(/^cfg:/, async (ctx) => {
       });
       return;
     }
-    await (action === "finance" ? setFinanceMcpEnabled : setCalendarMcpEnabled)(
-      ctx.database,
-      ctx.from.id,
-      value === "on",
-    );
+    await setFinanceMcpEnabled(ctx.database, ctx.from.id, value === "on");
+  } else if (action === "calendar" && (value === "on" || value === "off")) {
+    if (target !== String(ctx.chat.id)) return await invalid();
+    await setCalendarMcpEnabled(ctx.database, ctx.chat.id, value === "on");
   } else if (action === "progress" && (target === "on" || target === "off")) {
     await persistChatProgressEnabled(
       ctx.database,

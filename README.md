@@ -59,11 +59,12 @@ loopback; Context accesses MCP directly over the container network.
 
 ## Google Calendar MCP
 
-**Calendar MCP** is a personal `/settings` toggle, off by default, like Finance
-MCP. A verified calendar is bound to the whole Telegram chat (including its
-topics). Every participant who enables Calendar MCP can ask the bot to read,
-create, or edit events in that calendar. Group setup requires a group admin or
-the bot admin; anyone can set up their own private chat.
+**Calendar MCP** is a chat-wide `/settings` toggle, off by default. A verified
+calendar is bound to the whole Telegram chat (including its topics). Once a
+chat admin enables Calendar MCP, every participant can ask the bot to read,
+create, or edit events in that calendar. Group setup and the toggle require a
+group admin or the bot admin; anyone can configure their own private chat.
+Finance MCP remains a personal setting.
 
 The bot embeds a small MCP server backed by the Google Calendar API. There is
 no additional MCP container, public callback URL, per-user OAuth consent flow,
@@ -137,8 +138,11 @@ replaces the old challenge; an existing calendar remains active until the new
 one is verified. Rebinding invalidates tools from an older in-flight request.
 Successful verification does not delete the challenge event; users may remove it.
 
-The backend checks personal enablement and the chat binding for every tool call.
-Disabling the toggle does not unlink the shared calendar or affect other users.
+The backend checks chat enablement and the chat binding for every tool call.
+Disabling the toggle stops Calendar tools for everyone in that chat without
+unlinking the shared calendar or changing other chats. Legacy personal Calendar
+preferences are migrated once to chats that user had already set up or started
+setting up; arbitrary chats never inherit a user's old preference.
 Remove the service account from the calendar's sharing settings to revoke Google
 access. Revocation prevents subsequent API access, but does not erase events or
 answers already saved in Telegram conversation history.

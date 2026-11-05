@@ -74,6 +74,7 @@ function calendarChallengeMessage(
   return {
     html: [
       `<h3>${escapeHtml(ctx.t("calendar-challenge-title"))}</h3>`,
+      `<p><b>${escapeHtml(ctx.t("calendar-challenge-calendar"))}${challenge.calendar_name ? `: ${escapeHtml(challenge.calendar_name)}` : ""}</b><br><code>${escapeHtml(challenge.calendar_id)}</code></p>`,
       `<p>${escapeHtml(ctx.t("calendar-challenge", { day: challenge.day }))}</p>`,
       `<pre><code>${escapeHtml(challenge.title)}</code></pre>`,
       `<ul><li>${escapeHtml(ctx.t("calendar-challenge-event"))}</li><li>${escapeHtml(ctx.t("calendar-challenge-expiry"))}</li></ul>`,

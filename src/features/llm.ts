@@ -1398,7 +1398,7 @@ async function runFunctionToolCall(
     if (!runner)
       throw new Error(
         isCalendarToolName(call.name)
-          ? "Calendar MCP tool is unavailable for this user and chat."
+          ? "Calendar MCP tool is unavailable for this chat."
           : "Finance MCP tool is unavailable for this user.",
       );
     await chargeCredits?.("tool", call.name);
