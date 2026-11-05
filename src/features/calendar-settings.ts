@@ -266,7 +266,7 @@ export async function verifyCalendarSetup(
   } while (!matched && pageToken);
   if (!matched)
     throw new Error(
-      "Verification event not found. Create a new event today with the exact title, on this calendar, without guests or repetition, then press Verify.",
+      `Verification event not found yet. Google may take a little time to sync a saved event. Wait a few seconds and press Verify again, keeping the same event and title. Check that it is saved in calendar '${metadata.summary}'.`,
     );
 
   // Recheck after network I/O: expired, superseded and concurrent callbacks

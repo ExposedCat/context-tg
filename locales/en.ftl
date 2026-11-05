@@ -112,6 +112,7 @@ calendar-challenge-calendar = Calendar
 calendar-challenge = Create a new event for today ({$day}) in this calendar with this exact title:
 calendar-challenge-event = No guests or repetition.
 calendar-challenge-expiry = Press Verify within 10 minutes.
+calendar-challenge-sync = After saving, give Google a few seconds to sync. If the event isn't found yet, wait briefly and press Verify again. Keep the same event and title.
 calendar-challenge-access = This confirms editing access. When Calendar MCP is enabled for this chat, all chat members can use this calendar.
 calendar-verify = Verify
 calendar-verifying = Checking calendar…

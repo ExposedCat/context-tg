@@ -112,6 +112,7 @@ calendar-challenge-calendar = Kalender
 calendar-challenge = Erstelle in diesem Kalender einen neuen Termin für heute ({$day}) mit genau diesem Titel:
 calendar-challenge-event = Ohne Gäste oder Wiederholung.
 calendar-challenge-expiry = Klicke innerhalb von 10 Minuten auf „Überprüfen“.
+calendar-challenge-sync = Gib Google nach dem Speichern ein paar Sekunden zum Synchronisieren. Falls der Termin noch nicht gefunden wird, warte kurz und klicke erneut auf „Überprüfen“. Behalte denselben Termin und Titel.
 calendar-challenge-access = Dies bestätigt den Bearbeitungszugriff. Wenn Calendar MCP für diesen Chat aktiviert ist, können alle Chatmitglieder den Kalender verwenden.
 calendar-verify = Überprüfen
 calendar-verifying = Kalender wird überprüft…

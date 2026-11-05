@@ -78,6 +78,7 @@ function calendarChallengeMessage(
       `<p>${escapeHtml(ctx.t("calendar-challenge", { day: challenge.day }))}</p>`,
       `<pre><code>${escapeHtml(challenge.title)}</code></pre>`,
       `<ul><li>${escapeHtml(ctx.t("calendar-challenge-event"))}</li><li>${escapeHtml(ctx.t("calendar-challenge-expiry"))}</li></ul>`,
+      `<p>${escapeHtml(ctx.t("calendar-challenge-sync"))}</p>`,
       ...(error
         ? [
             `<p><b>${escapeHtml(ctx.t("calendar-verification-failed"))}</b><br>${escapeHtml(error)}</p>`,
