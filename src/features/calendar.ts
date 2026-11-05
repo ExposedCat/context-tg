@@ -4,6 +4,7 @@ import { escapeHtml } from "../utils/text.ts";
 import { canConfigureChat } from "./authorization.ts";
 import {
   beginCalendarSetup,
+  type CalendarChallengeTable,
   getCalendarChallenge,
   verifyCalendarSetup,
 } from "./calendar-settings.ts";
@@ -24,10 +25,10 @@ function replyOptions(ctx: Context) {
     ...(ctx.msg?.message_thread_id
       ? { message_thread_id: ctx.msg.message_thread_id }
       : {}),
-    ...(ctx.msg?.ephemeral_message_id !== undefined
+    ...(ctx.message?.ephemeral_message_id !== undefined
       ? {
           reply_parameters: {
-            ephemeral_message_id: ctx.msg.ephemeral_message_id,
+            ephemeral_message_id: ctx.message.ephemeral_message_id,
           },
         }
       : {}),
@@ -65,6 +66,46 @@ function calendarHelp(ctx: Context, email?: string) {
   };
 }
 
+function calendarChallengeMessage(
+  ctx: Context,
+  challenge: CalendarChallengeTable,
+  error?: string,
+) {
+  return {
+    html: [
+      `<h3>${escapeHtml(ctx.t("calendar-challenge-title"))}</h3>`,
+      `<p>${escapeHtml(ctx.t("calendar-challenge", { day: challenge.day }))}</p>`,
+      `<pre><code>${escapeHtml(challenge.title)}</code></pre>`,
+      `<ul><li>${escapeHtml(ctx.t("calendar-challenge-event"))}</li><li>${escapeHtml(ctx.t("calendar-challenge-expiry"))}</li></ul>`,
+      ...(error
+        ? [
+            `<p><b>${escapeHtml(ctx.t("calendar-verification-failed"))}</b><br>${escapeHtml(error)}</p>`,
+          ]
+        : []),
+      `<p><i>${escapeHtml(ctx.t("calendar-challenge-access"))}</i></p>`,
+      `<p><tg-button type="callback_data" style="primary" data="calverify:${challenge.token}">${escapeHtml(ctx.t("calendar-verify"))}</tg-button></p>`,
+    ].join("\n"),
+    skip_entity_detection: true as const,
+  };
+}
+
+async function editCalendarMessage(
+  ctx: Context,
+  message: { html: string; skip_entity_detection: true },
+) {
+  try {
+    if (ctx.msg?.ephemeral_message_id !== undefined)
+      await ctx.editEphemeralMessageText(message);
+    else await ctx.editMessageText(message);
+  } catch (error) {
+    if (
+      !(error instanceof GrammyError) ||
+      !error.description.includes("message is not modified")
+    )
+      throw error;
+  }
+}
+
 calendarComposer.command("calendar", async (ctx) => {
   if (!ctx.chat || !ctx.from) return;
   if (!(await canSetCalendar(ctx))) {
@@ -93,17 +134,7 @@ calendarComposer.command("calendar", async (ctx) => {
       api,
     );
     const message = await ctx.replyWithRichMessage(
-      {
-        html: [
-          `<h3>${escapeHtml(ctx.t("calendar-challenge-title"))}</h3>`,
-          `<p>${escapeHtml(ctx.t("calendar-challenge", { day: challenge.day }))}</p>`,
-          `<pre><code>${escapeHtml(challenge.title)}</code></pre>`,
-          `<ul><li>${escapeHtml(ctx.t("calendar-challenge-event"))}</li><li>${escapeHtml(ctx.t("calendar-challenge-expiry"))}</li></ul>`,
-          `<p><i>${escapeHtml(ctx.t("calendar-challenge-access"))}</i></p>`,
-          `<p><tg-button type="callback_data" style="primary" data="calverify:${challenge.token}">${escapeHtml(ctx.t("calendar-verify"))}</tg-button></p>`,
-        ].join("\n"),
-        skip_entity_detection: true,
-      },
+      calendarChallengeMessage(ctx, challenge),
       replyOptions(ctx),
     );
     await ctx.database
@@ -148,7 +179,7 @@ calendarComposer.callbackQuery(/^calverify:([a-f0-9]{32})$/, async (ctx) => {
     });
     return;
   }
-  await ctx.answerCallbackQuery();
+  await ctx.answerCallbackQuery({ text: ctx.t("calendar-verifying") });
   try {
     const binding = await verifyCalendarSetup(
       ctx.database,
@@ -162,23 +193,19 @@ calendarComposer.callbackQuery(/^calverify:([a-f0-9]{32})$/, async (ctx) => {
       skip_entity_detection: true as const,
     };
     // Replacing the complete message also removes its Verify button.
-    if (ctx.msg?.ephemeral_message_id !== undefined)
-      await ctx.editEphemeralMessageText(message);
-    else await ctx.editMessageText(message);
+    await editCalendarMessage(ctx, message);
   } catch (error) {
-    if (
-      error instanceof GrammyError &&
-      error.description.includes("message is not modified")
-    )
-      return;
-    await reply(
-      ctx,
-      ctx.t("calendar-error", {
-        error:
-          error instanceof Error
-            ? error.message
-            : "Calendar verification failed.",
-      }),
-    );
+    const detail =
+      error instanceof Error ? error.message : "Calendar verification failed.";
+    try {
+      await editCalendarMessage(
+        ctx,
+        calendarChallengeMessage(ctx, challenge, detail),
+      );
+    } catch {
+      // A missing/uneditable setup message must not hide the verification error.
+      // Callback messages are bot messages, not valid ephemeral reply targets.
+      await reply(ctx, ctx.t("calendar-error", { error: detail }));
+    }
   }
 });

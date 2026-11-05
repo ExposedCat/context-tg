@@ -523,8 +523,25 @@ test("Calendar /settings and setup commands enforce actor/admin/message binding 
     const chat = { id: -100, type: "supergroup" as const, title: "test" };
     const from = (id: number) => ({ id, is_bot: false, first_name: "user" });
     let isAdmin = true;
+    let rejectEdits = false;
     bot.api.config.use((_prev, method, payload) => {
       calls.push({ method, payload: payload as Record<string, unknown> });
+      if (
+        method === "sendRichMessage" &&
+        (payload as { reply_parameters?: { ephemeral_message_id?: number } })
+          .reply_parameters?.ephemeral_message_id === 42
+      )
+        return Promise.resolve({
+          ok: false,
+          error_code: 400,
+          description: "Bad Request: REPLY_TO_INVALID",
+        }) as ReturnType<typeof _prev>;
+      if (rejectEdits && method === "editEphemeralMessageText")
+        return Promise.resolve({
+          ok: false,
+          error_code: 400,
+          description: "Bad Request: message to edit not found",
+        }) as ReturnType<typeof _prev>;
       return Promise.resolve({
         ok: true,
         result:
@@ -639,6 +656,27 @@ test("Calendar /settings and setup commands enforce actor/admin/message binding 
     isAdmin = true;
     await click(`calverify:${challenge.token}`);
     match(html(), /not found/);
+    match(html(), /Not verified yet/);
+    ok(html().includes(`<pre><code>${challenge.title}</code></pre>`));
+    ok(html().includes(`data="calverify:${challenge.token}"`));
+    ok(calls.some((call) => call.method === "editEphemeralMessageText"));
+    ok(!calls.some((call) => call.method === "sendRichMessage"));
+    strictEqual(
+      calls.find((call) => call.method === "answerCallbackQuery")?.payload.text,
+      "Checking calendar…",
+    );
+    rejectEdits = true;
+    await click(`calverify:${challenge.token}`);
+    const fallback = calls.find((call) => call.method === "sendRichMessage");
+    ok(
+      fallback,
+      "an uneditable setup message must still deliver the verification error",
+    );
+    strictEqual(fallback.payload.reply_parameters, undefined);
+    deepStrictEqual(fallback.payload.ephemeral_message_parameters, {
+      receiver_user_id: 2,
+    });
+    rejectEdits = false;
     mock.state.events = [verificationEvent(challenge)];
     await click(`calverify:${challenge.token}`);
     match(html(), /Calendar 'Team &lt;Calendar&gt;' was set up for this chat/);
