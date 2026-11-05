@@ -5,6 +5,23 @@ export type CalendarMetadata = {
   id: string;
   summary: string;
   timeZone: string;
+  etag?: string;
+  description?: string;
+  location?: string;
+  conferenceProperties?: { allowedConferenceSolutionTypes?: string[] };
+};
+
+export type CalendarTime = {
+  date?: string;
+  dateTime?: string;
+  timeZone?: string;
+};
+export type CalendarAttendee = {
+  email?: string;
+  self?: boolean;
+  responseStatus?: string;
+  comment?: string;
+  [key: string]: unknown;
 };
 
 export type CalendarEvent = {
@@ -17,26 +34,57 @@ export type CalendarEvent = {
   etag?: string;
   organizer?: { self?: boolean; email?: string };
   creator?: { email?: string };
-  attendees?: unknown[];
+  attendees?: CalendarAttendee[];
   recurrence?: string[];
   recurringEventId?: string;
-  start?: { date?: string; dateTime?: string; timeZone?: string };
-  end?: { date?: string; dateTime?: string; timeZone?: string };
+  start?: CalendarTime;
+  end?: CalendarTime;
+  originalStartTime?: CalendarTime;
+  updated?: string;
+  iCalUID?: string;
+  transparency?: string;
+  visibility?: string;
+  eventType?: string;
+  reminders?: {
+    useDefault?: boolean;
+    overrides?: { method: string; minutes: number }[];
+  };
+  extendedProperties?: {
+    private?: Record<string, string>;
+    shared?: Record<string, string>;
+  };
+  conferenceData?: Record<string, unknown>;
+  [key: string]: unknown;
   htmlLink?: string;
 };
 
 export type CalendarEventsPage = {
   items?: CalendarEvent[];
   nextPageToken?: string;
+  nextSyncToken?: string;
 };
 
 // No impersonation or Cloud-wide scopes. The calendar owner must explicitly
-// share the calendar with this identity. ACL access is read-only for setup.
-export const CALENDAR_SCOPES = [
-  "https://www.googleapis.com/auth/calendar.events",
-  "https://www.googleapis.com/auth/calendar.calendars.readonly",
-  "https://www.googleapis.com/auth/calendar.acls.readonly",
-];
+// share the calendar with this identity. The full Calendar scope enables calendar administration, subject to Google ACLs.
+export const CALENDAR_SCOPES = ["https://www.googleapis.com/auth/calendar"];
+
+export type CalendarRequestOptions = {
+  method?: "GET" | "POST" | "PATCH";
+  query?: Record<string, string | string[]>;
+  body?: Record<string, unknown>;
+  etag?: string;
+  signal?: AbortSignal;
+};
+
+export class CalendarApiError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+    readonly reason?: string,
+  ) {
+    super(message);
+  }
+}
 
 export class GoogleCalendarApi {
   private readonly auth: JWT;
@@ -60,14 +108,38 @@ export class GoogleCalendarApi {
   async request<T>(
     calendarId: string,
     resource = "",
-    options: {
-      method?: "GET" | "POST" | "PATCH";
-      query?: Record<string, string>;
-      body?: Record<string, unknown>;
-      etag?: string;
-      signal?: AbortSignal;
-    } = {},
+    options: CalendarRequestOptions = {},
   ): Promise<T> {
+    if (
+      [".", ".."].includes(calendarId) ||
+      resource
+        .split("/")
+        .some((part) => [".", ".."].includes(decodeURIComponent(part)))
+    )
+      throw new Error("Unsupported Calendar resource.");
+    if (resource && !/^\/(?:events|acl)(?:\/[^/?#]+){0,2}$/.test(resource))
+      throw new Error("Unsupported Calendar resource.");
+    return this.send<T>(
+      `/calendars/${encodeURIComponent(calendarId)}${resource}`,
+      options,
+    );
+  }
+
+  async requestGlobal<T>(
+    resource: "/freeBusy" | "/colors" | "/calendars",
+    options: CalendarRequestOptions = {},
+  ): Promise<T> {
+    if (!["/freeBusy", "/colors", "/calendars"].includes(resource))
+      throw new Error("Unsupported Calendar resource.");
+    return this.send<T>(resource, options);
+  }
+
+  private async send<T>(
+    resource: string,
+    options: CalendarRequestOptions,
+  ): Promise<T> {
+    if (!["GET", "POST", "PATCH"].includes(options.method ?? "GET"))
+      throw new Error("Deletion is not supported.");
     const signal = AbortSignal.any([
       AbortSignal.timeout(30_000),
       ...(options.signal ? [options.signal] : []),
@@ -86,11 +158,10 @@ export class GoogleCalendarApi {
     signal.throwIfAborted();
     if (!token)
       throw new Error("Google Calendar did not return an access token.");
-    const url = new URL(
-      `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}${resource}`,
-    );
+    const url = new URL(`https://www.googleapis.com/calendar/v3${resource}`);
     for (const [key, value] of Object.entries(options.query ?? {}))
-      url.searchParams.set(key, value);
+      for (const item of Array.isArray(value) ? value : [value])
+        url.searchParams.append(key, item);
     const response = await fetch(url, {
       method: options.method ?? "GET",
       headers: {
@@ -103,17 +174,48 @@ export class GoogleCalendarApi {
       redirect: "error",
     });
     if (!response.ok) {
-      await response.body?.cancel();
+      const detail = (await response.json().catch(() => ({}))) as {
+        error?: { message?: string; errors?: { reason?: string }[] };
+      };
+      const reason = detail.error?.errors?.[0]?.reason;
+      if (reason === "forbiddenForServiceAccounts")
+        throw new CalendarApiError(
+          "Google does not allow this attendee operation for a service account without domain-wide delegation.",
+          response.status,
+          reason,
+        );
+      if (reason === "forbiddenForNonOrganizer")
+        throw new CalendarApiError(
+          "Only the event organizer can change these fields.",
+          response.status,
+          reason,
+        );
+      if (
+        [400, 403, 409, 422, 429].includes(response.status) &&
+        reason &&
+        detail.error?.message
+      )
+        throw new CalendarApiError(
+          `Google Calendar could not complete this action (${reason}): ${detail.error.message.slice(0, 500)}`,
+          response.status,
+          reason,
+        );
       if (response.status === 403 || response.status === 404)
-        throw new Error(
+        throw new CalendarApiError(
           `Calendar unavailable. Share it with ${this.email} with Make changes to events permission, and check the Calendar ID.`,
+          response.status,
+          reason,
         );
       if (response.status === 412)
-        throw new Error(
+        throw new CalendarApiError(
           "The event changed. Read it again before retrying the edit.",
+          response.status,
+          reason,
         );
-      throw new Error(
+      throw new CalendarApiError(
         `Google Calendar request failed (HTTP ${response.status}). Do not automatically retry event creation; check whether it succeeded first.`,
+        response.status,
+        reason,
       );
     }
     return (await response.json()) as T;

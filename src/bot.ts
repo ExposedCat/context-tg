@@ -11,6 +11,7 @@ import { DiagLogLevel } from "@opentelemetry/api";
 import { Bot, type Context as GrammyContext, type Transformer } from "grammy";
 import { safelyMaybeSendAutomaticResponse } from "./features/automatic-responses.ts";
 import { calendarComposer } from "./features/calendar.ts";
+import { startCalendarWatchDispatcher } from "./features/calendar-watch.ts";
 import { chatComposer } from "./features/chat.ts";
 import type { Database } from "./features/database.ts";
 import {
@@ -159,6 +160,7 @@ export function initBot(token: string, database: Database) {
     }
 
     await startScheduleDispatcher(database, bot.api);
+    startCalendarWatchDispatcher(database, bot.api);
     await bot.api.deleteWebhook({ drop_pending_updates: true });
 
     run(bot, {

@@ -62,14 +62,16 @@ loopback; Context accesses MCP directly over the container network.
 **Calendar MCP** is a chat-wide `/settings` toggle, off by default. A verified
 calendar is bound to the whole Telegram chat (including its topics). Once a
 chat admin enables Calendar MCP, every participant can ask the bot to read,
-create, or edit events in that calendar. Group setup and the toggle require a
-group admin or the bot admin; anyone can configure their own private chat.
+create, edit, cancel, or restore events in its linked calendars. Group setup and
+the toggle require a group admin or the bot admin; anyone can configure their own private chat.
 Finance MCP remains a personal setting.
 
-The bot embeds a small MCP server backed by the Google Calendar API. There is
-no additional MCP container, public callback URL, per-user OAuth consent flow,
-or domain-wide delegation. Tools cannot select another calendar or account.
-Deletion, guest invitations, and changes to sharing permissions are not exposed.
+The bot embeds an MCP server backed by the Google Calendar API. There is no
+additional MCP container, public callback URL, per-user OAuth consent flow, or
+domain-wide delegation. Tools can select only calendars verified for this chat,
+using the existing service account. No HTTP DELETE or calendar-clear endpoint is
+exposed. Cancellation uses Google's native `status=cancelled`; Google treats this
+as a cancelled/deleted entry and may hide it ([event status documentation](https://developers.google.com/workspace/calendar/api/v3/reference/events#status)).
 
 ### Create the service-account credential
 
@@ -108,10 +110,11 @@ If your organization disables service-account key creation, an organization
 administrator must enable an appropriate exception or arrange workload identity
 authentication; this implementation expects the JSON service-account key file.
 
-The requested scopes are `calendar.events`, `calendar.calendars.readonly`, and
-`calendar.acls.readonly` under `https://www.googleapis.com/auth/`. The latter
-two read metadata and confirm the direct calendar share; the application never
-changes sharing permissions. Do not enable domain-wide delegation.
+The requested scope is `https://www.googleapis.com/auth/calendar`, enabling
+calendar and sharing administration as well as events. Google still enforces the
+service account's calendar permissions; project IAM roles are unnecessary. The
+existing JSON key works without regeneration. Domain-wide delegation is not
+configured.
 
 ### Connect a calendar to a chat
 
@@ -134,8 +137,9 @@ Verification checks the title, creation time, date, and `organizer.self === true
 to reject incoming invitation copies. It proves editing control, not exclusive
 ownership. Challenges persist across restarts, are single-use, and are bound to
 the initiating Telegram user, chat, and setup message. Starting setup again
-replaces the old challenge; an existing calendar remains active until the new
-one is verified. Rebinding invalidates tools from an older in-flight request.
+replaces the old challenge; existing calendars remain active. Verifying another
+calendar adds it to the chat. Re-verifying the same calendar invalidates its tools
+from older in-flight requests. Legacy single-calendar bindings migrate on startup.
 Successful verification does not delete the challenge event; users may remove it.
 
 The backend checks chat enablement and the chat binding for every tool call.
@@ -147,10 +151,49 @@ Remove the service account from the calendar's sharing settings to revoke Google
 access. Revocation prevents subsequent API access, but does not erase events or
 answers already saved in Telegram conversation history.
 
-Calendar edits use version checks to avoid overwriting concurrent changes, and
-event creation is never automatically retried after an ambiguous failure. Reading
-and editing recurring events is supported; this first version does not expose
-recurrence-rule creation/editing or attendee management.
+Calendar edits use version checks to avoid overwriting concurrent changes. Event
+creation is never automatically retried after an ambiguous failure; errors include
+a recovery event ID (or imported iCalUID) to check before retrying.
+
+### Available operations
+
+- List linked calendars; read full events, metadata, occurrences and sharing rules;
+  search/filter with pagination; query free/busy across verified calendars; read colors.
+- Create/edit timed, all-day and recurring events using RRULE/RDATE/EXDATE/EXRULE,
+  reminders, attachments, custom properties, visibility, availability, guest settings,
+  event labels/source links, and supported Google Meet/special event-type settings.
+  Arrays replace prior values.
+- Edit/cancel an occurrence or whole series. Split/cancel this and following
+  occurrences of an ordinary single-RRULE series, preserving COUNT/UNTIL. Complex
+  recurrence sets or modified future exceptions must be edited as a whole or by
+  individual occurrence. A split reports partial success if the new series exists
+  but trimming the original conflicts, so the agent does not create duplicates.
+  Splits do not automatically copy conference data; request a new Meet or supply
+  existing conference data explicitly.
+- Native cancellation saves a local snapshot. Restoration patches the original event
+  when Google still retains it; it cannot recover purged events or promise to restore
+  guests Google discarded. Snapshots remain in the bot's SQLite database.
+- Import a private event copy using iCalUID; export paginated Google event JSON
+  (not ICS); move default events between this chat's verified calendars; batch-patch
+  up to 20 events with individual success/failure results.
+- Chat administrators can edit calendar settings, grant/change/revoke sharing rules,
+  disconnect a calendar without deleting Google data, or explicitly create and link
+  a new bot-owned secondary calendar. Calendar settings/sharing generally require
+  **Make changes and manage sharing**, beyond event-write permission. Calendar
+  labels and supported Workspace working hours can also be edited. A bot-owned
+  calendar's service-account data ownership cannot be transferred; an optional human
+  manager can receive access.
+- On an administrator's explicit request, watch calendar changes and send summaries
+  to the originating chat/topic, polling about once per minute. Existing events
+  establish a baseline and are not replayed. Disable Calendar MCP or stop the watch
+  to stop summaries. Google sync-token expiry establishes a fresh baseline.
+
+Google restricts service-account attendee operations without domain-wide delegation.
+The tools expose guest fields and an RSVP operation but return Google's permission
+errors when unsupported; they never impersonate other attendees. Meet creation and
+focus time, out-of-office, working-location or birthday events also depend on the
+calendar/account's Google capabilities. The bot reports these limits rather than
+claiming an unsupported operation succeeded.
 
 ## Text credits
 

@@ -38,7 +38,7 @@ export type ChatCalendarSettingsTable = {
 
 export type CalendarApi = Pick<
   GoogleCalendarApi,
-  "email" | "metadata" | "assertWritable" | "request"
+  "email" | "metadata" | "assertWritable" | "request" | "requestGlobal"
 >;
 
 export async function migrateCalendars(database: Database): Promise<void> {
@@ -54,6 +54,25 @@ export async function migrateCalendars(database: Database): Promise<void> {
     .addColumn("verified_at", "integer", (c) => c.notNull())
     .addColumn("verification_id", "text", (c) => c.notNull())
     .execute();
+  await database.schema
+    .createTable("chat_calendar_links")
+    .ifNotExists()
+    .addColumn("chat_id", "integer", (c) => c.notNull())
+    .addColumn("calendar_id", "text", (c) => c.notNull())
+    .addColumn("name", "text", (c) => c.notNull())
+    .addColumn("time_zone", "text", (c) => c.notNull())
+    .addColumn("linked_by", "integer", (c) => c.notNull())
+    .addColumn("verified_at", "integer", (c) => c.notNull())
+    .addColumn("verification_id", "text", (c) => c.notNull())
+    .addPrimaryKeyConstraint("chat_calendar_links_pk", [
+      "chat_id",
+      "calendar_id",
+    ])
+    .execute();
+  await sql`INSERT OR IGNORE INTO chat_calendar_links
+    SELECT chat_id, calendar_id, name, time_zone, linked_by, verified_at, verification_id FROM chat_calendars`.execute(
+    database,
+  );
   await database.schema
     .createTable("calendar_challenges")
     .ifNotExists()
@@ -137,6 +156,64 @@ export function getChatCalendar(database: Database, chatId: number) {
     .selectAll()
     .where("chat_id", "=", chatId)
     .executeTakeFirst();
+}
+
+export function getChatCalendars(database: Database, chatId: number) {
+  return database
+    .selectFrom("chat_calendar_links")
+    .selectAll()
+    .where("chat_id", "=", chatId)
+    .orderBy("verified_at", "desc")
+    .execute();
+}
+
+export async function linkChatCalendar(
+  database: Database,
+  binding: ChatCalendarTable,
+): Promise<void> {
+  await database.transaction().execute(async (tx) => {
+    await tx
+      .insertInto("chat_calendar_links")
+      .values(binding)
+      .onConflict((c) =>
+        c.columns(["chat_id", "calendar_id"]).doUpdateSet(binding),
+      )
+      .execute();
+    await tx
+      .insertInto("chat_calendars")
+      .values(binding)
+      .onConflict((c) => c.column("chat_id").doUpdateSet(binding))
+      .execute();
+  });
+}
+
+export async function unlinkChatCalendar(
+  database: Database,
+  chatId: number,
+  calendarId: string,
+): Promise<void> {
+  await database.transaction().execute(async (tx) => {
+    await tx
+      .deleteFrom("chat_calendar_links")
+      .where("chat_id", "=", chatId)
+      .where("calendar_id", "=", calendarId)
+      .execute();
+    const current = await getChatCalendar(tx, chatId);
+    if (current?.calendar_id === calendarId) {
+      const [next] = await getChatCalendars(tx, chatId);
+      if (next)
+        await tx
+          .updateTable("chat_calendars")
+          .set(next)
+          .where("chat_id", "=", chatId)
+          .execute();
+      else
+        await tx
+          .deleteFrom("chat_calendars")
+          .where("chat_id", "=", chatId)
+          .execute();
+    }
+  });
 }
 
 export function getCalendarChallenge(database: Database, chatId: number) {
@@ -303,6 +380,13 @@ export async function verifyCalendarSetup(
       .insertInto("chat_calendars")
       .values(binding)
       .onConflict((c) => c.column("chat_id").doUpdateSet(binding))
+      .execute();
+    await tx
+      .insertInto("chat_calendar_links")
+      .values(binding)
+      .onConflict((c) =>
+        c.columns(["chat_id", "calendar_id"]).doUpdateSet(binding),
+      )
       .execute();
     return binding;
   });

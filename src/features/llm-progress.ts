@@ -71,6 +71,79 @@ const TOOL_PROGRESS_LABELS = {
     "edited calendar event",
     "edited {count} calendar events",
   ],
+  calendar_list_calendars: [
+    "listed calendars",
+    "listed calendars {count} times",
+  ],
+  calendar_list_instances: [
+    "read recurring events",
+    "read recurring events {count} times",
+  ],
+  calendar_cancel_event: [
+    "cancelled calendar event",
+    "cancelled {count} calendar events",
+  ],
+  calendar_restore_event: [
+    "restored calendar event",
+    "restored {count} calendar events",
+  ],
+  calendar_split_series: [
+    "changed following events",
+    "changed following events {count} times",
+  ],
+  calendar_respond_to_event: [
+    "responded to invitation",
+    "responded to {count} invitations",
+  ],
+  calendar_free_busy: [
+    "checked availability",
+    "checked availability {count} times",
+  ],
+  calendar_get_colors: [
+    "checked calendar colors",
+    "checked calendar colors {count} times",
+  ],
+  calendar_import_event: [
+    "imported calendar event",
+    "imported {count} calendar events",
+  ],
+  calendar_export_events: [
+    "exported calendar events",
+    "exported calendar events {count} times",
+  ],
+  calendar_move_event: [
+    "moved calendar event",
+    "moved {count} calendar events",
+  ],
+  calendar_update_calendar: [
+    "edited calendar settings",
+    "edited calendar settings {count} times",
+  ],
+  calendar_create_calendar: ["created calendar", "created {count} calendars"],
+  calendar_list_sharing: [
+    "checked calendar sharing",
+    "checked calendar sharing {count} times",
+  ],
+  calendar_set_sharing: [
+    "changed calendar sharing",
+    "changed calendar sharing {count} times",
+  ],
+  calendar_unlink_calendar: [
+    "disconnected calendar",
+    "disconnected {count} calendars",
+  ],
+  calendar_watch_calendar: [
+    "enabled calendar updates",
+    "enabled calendar updates {count} times",
+  ],
+  calendar_unwatch_calendar: [
+    "stopped calendar updates",
+    "stopped calendar updates {count} times",
+  ],
+  calendar_batch_update_events: [
+    "edited calendar events",
+    "edited calendar events {count} times",
+  ],
 } satisfies Record<Exclude<ToolName, `finance_${string}`>, [string, string]>;
 
 export function formatProgressToolSummary(tools: readonly ToolName[]): string {

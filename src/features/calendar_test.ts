@@ -73,6 +73,9 @@ function fixture() {
     pages: false,
     writable: true,
     apiStatus: 200,
+    apiError: undefined as
+      | { error: { message: string; errors: { reason: string }[] } }
+      | undefined,
     tokenStatus: 200,
     current: {
       id: "event123",
@@ -138,10 +141,9 @@ function fixture() {
     };
     calls.push(call);
     if (state.apiStatus !== 200)
-      return Response.json(
-        { error: "PRIVATE_API_DETAILS" },
-        { status: state.apiStatus },
-      );
+      return Response.json(state.apiError ?? { error: "PRIVATE_API_DETAILS" }, {
+        status: state.apiStatus,
+      });
     if (!call.resource)
       return Response.json({
         id: call.calendarId,
@@ -198,7 +200,7 @@ function verificationEvent(challenge: CalendarChallengeTable): CalendarEvent {
   };
 }
 
-test("Calendar service-account auth uses narrow scopes, refreshes tokens, encodes IDs and sanitizes failures", async () => {
+test("Calendar service-account auth uses Calendar-only scope without impersonation, refreshes tokens, encodes IDs and sanitizes failures", async () => {
   const mock = fixture();
   try {
     const api = new GoogleCalendarApi(email, privateKey);
@@ -215,11 +217,46 @@ test("Calendar service-account auth uses narrow scopes, refreshes tokens, encode
       mock.calls[0].calendarId,
       "calendar+name@group.calendar.google.com",
     );
+    await api.request(calendarId, "/events", {
+      query: {
+        eventTypes: ["default", "focusTime"],
+        privateExtendedProperty: ["a=1", "b=2"],
+      },
+    });
+    deepStrictEqual(mock.calls.at(-1)?.query.getAll("eventTypes"), [
+      "default",
+      "focusTime",
+    ]);
+    deepStrictEqual(
+      mock.calls.at(-1)?.query.getAll("privateExtendedProperty"),
+      ["a=1", "b=2"],
+    );
+    const safeCount = mock.calls.length;
+    await rejects(
+      api.request(calendarId, "/events/event123", {
+        method: "DELETE" as "PATCH",
+      }),
+      /Deletion/,
+    );
+    await rejects(api.request(calendarId, "/events/../.."), /Unsupported/);
+    await rejects(api.requestGlobal("/users" as "/colors"), /Unsupported/);
+    strictEqual(mock.calls.length, safeCount);
     await api.assertWritable(calendarId);
     mock.state.writable = false;
     await rejects(api.assertWritable(calendarId), /Make changes to events/);
     mock.state.apiStatus = 403;
     await rejects(api.metadata(calendarId), /Calendar unavailable/);
+    mock.state.apiError = {
+      error: {
+        message: "Cannot invite attendees",
+        errors: [{ reason: "forbiddenForServiceAccounts" }],
+      },
+    };
+    await rejects(
+      api.request(calendarId, "/events", { method: "POST", body: {} }),
+      /domain-wide delegation/,
+    );
+    mock.state.apiError = undefined;
     mock.state.apiStatus = 412;
     await rejects(api.metadata(calendarId), /event changed/);
     mock.state.tokenStatus = 400;
@@ -431,16 +468,10 @@ test("Calendar MCP binds tools to the enabled chat for every member, preserves e
     ok(mcp);
     deepStrictEqual(
       mcp.definitions.map((tool) => tool.name),
-      [
-        "calendar_get_calendar",
-        "calendar_list_events",
-        "calendar_get_event",
-        "calendar_create_event",
-        "calendar_update_event",
-      ],
+      (await import("./calendar-schema.ts")).CALENDAR_TOOL_NAMES.map(
+        (name) => `calendar_${name}`,
+      ),
     );
-    for (const definition of mcp.definitions)
-      ok(!JSON.stringify(definition.parameters).includes("calendarId"));
     const run = async (
       name: CalendarToolName,
       args: Record<string, unknown>,
@@ -452,7 +483,7 @@ test("Calendar MCP binds tools to the enabled chat for every member, preserves e
     const count = mock.calls.length;
     await rejects(
       run("calendar_get_calendar", { calendarId: "victim@example.com" }),
-      /Invalid Calendar MCP arguments/,
+      /not verified/,
     );
     strictEqual(mock.calls.length, count);
     await run("calendar_get_calendar", {});
@@ -508,6 +539,76 @@ test("Calendar MCP binds tools to the enabled chat for every member, preserves e
     strictEqual(edit?.headers.get("If-Match"), '"v1"');
     deepStrictEqual(edit?.body, { summary: "Changed" });
     ok(mock.calls.every((call) => call.calendarId === calendarId));
+    const noAdminNetwork = mock.calls.length;
+    await rejects(
+      run("calendar_update_calendar", { summary: "Changed" }),
+      /administrator/,
+    );
+    await rejects(
+      run("calendar_set_sharing", {
+        scope: { type: "default" },
+        role: "reader",
+      }),
+      /administrator/,
+    );
+    await rejects(run("calendar_watch_calendar", {}), /administrator/);
+    await rejects(
+      run("calendar_cancel_event", { eventId: "event123" }),
+      /Invalid Calendar MCP/,
+    );
+    await rejects(
+      run("calendar_update_event", {
+        eventId: "event123",
+        status: "cancelled",
+      }),
+      /Invalid Calendar MCP/,
+    );
+    await rejects(
+      run("calendar_create_event", {
+        summary: "Spoofed",
+        start: { date: "2026-11-05" },
+        end: { date: "2026-11-06" },
+        organizer: { self: true },
+      }),
+      /Invalid Calendar MCP/,
+    );
+    strictEqual(mock.calls.length, noAdminNetwork);
+    let memberStatus: "member" | "administrator" = "member";
+    const lookups: number[][] = [];
+    const adminTools = await connectCalendarMcp(database, context, undefined, {
+      getChatMember: async (chatId, userId) => {
+        lookups.push([Number(chatId), userId]);
+        return {
+          status: memberStatus,
+          user: { id: userId, is_bot: false, first_name: "User" },
+        } as Awaited<ReturnType<Bot["api"]["getChatMember"]>>;
+      },
+    });
+    ok(adminTools);
+    try {
+      const unlink = adminTools.runners.get("calendar_unlink_calendar");
+      ok(unlink);
+      await rejects(
+        Promise.resolve(
+          unlink({ calendarId }, { chatId: 1, userId: 1, messageId: 1 }),
+        ),
+        /administrator/,
+      );
+      memberStatus = "administrator";
+      // An absent rule requires no Google mutation, but still proves the actor check.
+      const sharing = adminTools.runners.get("calendar_set_sharing");
+      ok(sharing);
+      await sharing({
+        scope: { type: "user", value: "absent@example.com" },
+        role: "none",
+      });
+      deepStrictEqual(lookups, [
+        [-100, 2],
+        [-100, 2],
+      ]);
+    } finally {
+      await adminTools.close();
+    }
     await setCalendarMcpEnabled(database, -100, false);
     await rejects(
       run("calendar_get_event", { eventId: "event123" }),
@@ -515,7 +616,7 @@ test("Calendar MCP binds tools to the enabled chat for every member, preserves e
     );
     await setCalendarMcpEnabled(database, -100, true);
     await database
-      .updateTable("chat_calendars")
+      .updateTable("chat_calendar_links")
       .set({ verification_id: "different" })
       .where("chat_id", "=", -100)
       .execute();

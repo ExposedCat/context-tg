@@ -8,6 +8,11 @@ import {
   migrateCalendars,
 } from "./calendar-settings.ts";
 import {
+  type CalendarEventArchiveTable,
+  type CalendarWatchTable,
+  migrateCalendarOperations,
+} from "./calendar-storage.ts";
+import {
   type EmojiPacksTable,
   type GlobalEmojiPacksTable,
   migrateEmojiPacks,
@@ -55,6 +60,9 @@ import {
 
 export type DatabaseSchema = {
   chat_calendars: ChatCalendarTable;
+  chat_calendar_links: ChatCalendarTable;
+  calendar_event_archives: CalendarEventArchiveTable;
+  calendar_watches: CalendarWatchTable;
   chat_calendar_settings: ChatCalendarSettingsTable;
   calendar_challenges: CalendarChallengeTable;
   user_settings: UserSettingsTable;
@@ -103,6 +111,7 @@ export function initDatabase() {
     await migrateLlmSettings(database);
     await migrateUserSettings(database);
     await migrateCalendars(database);
+    await migrateCalendarOperations(database);
     await migrateTasks(database);
     await migrateSchedules(database);
     await migrateUsage(database);
