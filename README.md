@@ -472,6 +472,14 @@ matching. Ranked lists are fused, then each of the six best message anchors is
 expanded with three messages before and after it. Overlapping windows are
 merged, and a matched message's reply parent is included when it is available.
 
+Qdrant reads retry transient transport failures (connection resets, refused
+connections, timeouts, broken pipes, and temporary DNS failures) up to three
+times after the initial attempt, waiting 100, 200, and 400 ms. This includes
+semantic search, lexical search, context reads, and collection metadata reads.
+Writes, HTTP errors, invalid JSON, and cancellation are not retried. Recovered
+reads return normally; an exhausted retry still reaches the agent as a tool
+error and appears in the reply's warning footer.
+
 The bot creates the required full-text `text` payload index automatically.
 Qdrant is pinned in `compose.yml` because phrase matching requires Qdrant 1.15
 or newer. Before deploying over an older persistent Qdrant volume, take a

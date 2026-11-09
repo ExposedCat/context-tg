@@ -2,6 +2,7 @@ import { createDebug } from "@grammyjs/debug";
 import { Composer } from "grammy";
 import OpenAI from "openai";
 import type { Context } from "../bot.ts";
+import { delay, throwIfAborted } from "../utils/async.ts";
 import { parseDanbooruOptions } from "./danbooru-options.ts";
 import type { Database } from "./database.ts";
 import { APP_ENV } from "./env.ts";
@@ -166,6 +167,14 @@ const logError = createDebug("app:messages:error");
 
 const DEFAULT_SEARCH_LIMIT = 20;
 const RRF_RANK_CONSTANT = 60;
+const QDRANT_READ_RETRY_DELAYS_MS = [100, 200, 400] as const;
+const QDRANT_TRANSIENT_ERROR_CODES = new Set([
+  "ECONNRESET",
+  "ECONNREFUSED",
+  "ETIMEDOUT",
+  "EPIPE",
+  "EAI_AGAIN",
+]);
 const MESSAGE_PAYLOAD_INDEXES = [
   { fieldName: "chat_id", fieldSchema: "integer" },
   { fieldName: "thread_id", fieldSchema: "integer" },
@@ -224,63 +233,110 @@ function getQdrantHeaders(): HeadersInit {
   };
 }
 
+function isTransientQdrantError(error: unknown): boolean {
+  const seen = new Set<unknown>();
+  while (typeof error === "object" && error !== null && !seen.has(error)) {
+    seen.add(error);
+    const { code, cause } = error as { code?: unknown; cause?: unknown };
+    if (typeof code === "string" && QDRANT_TRANSIENT_ERROR_CODES.has(code)) {
+      return true;
+    }
+    error = cause;
+  }
+  return false;
+}
+
+async function requestQdrant<T>(
+  path: string,
+  init: RequestInit,
+  readResponse: (response: Response) => Promise<T>,
+): Promise<T> {
+  const method = (init.method ?? "GET").toUpperCase();
+  // Qdrant search and scroll use POST but have no write side effects.
+  const canRetry =
+    method === "GET" ||
+    (method === "POST" && /\/points\/(search|scroll)$/.test(path));
+  const signal = init.signal ?? undefined;
+  for (let attempt = 0; ; attempt++) {
+    throwIfAborted(signal);
+    try {
+      const response = await fetch(getQdrantUrl(path), {
+        ...init,
+        headers: {
+          ...getQdrantHeaders(),
+          ...init.headers,
+        },
+      });
+      return await readResponse(response);
+    } catch (error) {
+      throwIfAborted(signal);
+      const delayMs = QDRANT_READ_RETRY_DELAYS_MS[attempt];
+      if (
+        !canRetry ||
+        delayMs === undefined ||
+        !isTransientQdrantError(error)
+      ) {
+        throw error;
+      }
+      logDebug("Retrying Qdrant read after transport error", {
+        path,
+        retry: attempt + 1,
+        delayMs,
+        error,
+      });
+      await delay(delayMs, signal);
+    }
+  }
+}
+
 export async function qdrantRequest<T>(
   path: string,
   init: RequestInit = {},
 ): Promise<QdrantResponse<T>> {
-  const response = await fetch(getQdrantUrl(path), {
-    ...init,
-    headers: {
-      ...getQdrantHeaders(),
-      ...init.headers,
-    },
+  return requestQdrant(path, init, async (response) => {
+    if (!response.ok) {
+      const body = await response.text();
+      throw new Error(`Qdrant request failed: ${response.status} ${body}`);
+    }
+
+    return await response.json();
   });
-
-  if (!response.ok) {
-    const body = await response.text();
-    throw new Error(`Qdrant request failed: ${response.status} ${body}`);
-  }
-
-  return await response.json();
 }
 
 async function collectionExists(): Promise<boolean> {
-  const response = await fetch(getQdrantUrl(getCollectionPath()), {
-    headers: getQdrantHeaders(),
+  return requestQdrant(getCollectionPath(), {}, async (response) => {
+    if (response.status === 404) {
+      return false;
+    }
+
+    if (!response.ok) {
+      const body = await response.text();
+      throw new Error(
+        `Qdrant collection check failed: ${response.status} ${body}`,
+      );
+    }
+
+    return true;
   });
-
-  if (response.status === 404) {
-    return false;
-  }
-
-  if (!response.ok) {
-    const body = await response.text();
-    throw new Error(
-      `Qdrant collection check failed: ${response.status} ${body}`,
-    );
-  }
-
-  return true;
 }
 
 async function getCollectionInfo(): Promise<QdrantCollectionInfo | undefined> {
-  const response = await fetch(getQdrantUrl(getCollectionPath()), {
-    headers: getQdrantHeaders(),
+  return requestQdrant(getCollectionPath(), {}, async (response) => {
+    if (response.status === 404) {
+      return undefined;
+    }
+
+    if (!response.ok) {
+      const body = await response.text();
+      throw new Error(
+        `Qdrant collection info failed: ${response.status} ${body}`,
+      );
+    }
+
+    const data =
+      (await response.json()) as QdrantResponse<QdrantCollectionInfo>;
+    return data.result;
   });
-
-  if (response.status === 404) {
-    return undefined;
-  }
-
-  if (!response.ok) {
-    const body = await response.text();
-    throw new Error(
-      `Qdrant collection info failed: ${response.status} ${body}`,
-    );
-  }
-
-  const data = (await response.json()) as QdrantResponse<QdrantCollectionInfo>;
-  return data.result;
 }
 
 function getPayloadSchemaType(

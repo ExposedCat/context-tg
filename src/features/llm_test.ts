@@ -1234,6 +1234,92 @@ test("tool rounds continue past four and credit exhaustion is a normal tool fail
   }
 });
 
+test("search retries expose only the final result or exhausted error to the agent", async () => {
+  setLlmDeploymentName("small", "test-model");
+  const originalFetch = globalThis.fetch;
+  try {
+    for (const recover of [true, false]) {
+      let searchAttempts = 0;
+      const requests: Array<Record<string, unknown>> = [];
+      const error = Object.assign(new TypeError("Socket closed unexpectedly"), {
+        code: "ECONNRESET",
+      });
+      globalThis.fetch = (async (input, init) => {
+        const url = String(input);
+        if (url.startsWith(TEST_ENV.QDRANT_URL)) {
+          if (url.endsWith("/points/search")) {
+            searchAttempts++;
+            if (!recover || searchAttempts < 4) throw error;
+            return Response.json({ result: [] });
+          }
+          return Response.json({ result: { payload_schema: {}, points: [] } });
+        }
+        if (url.startsWith(TEST_ENV.EMBEDDER_BASE_URL)) {
+          return Response.json({ data: [{ index: 0, embedding: [1, 0] }] });
+        }
+        ok(url.startsWith(TEST_ENV.LLM_BASE_URL), `Unexpected request: ${url}`);
+        requests.push(JSON.parse(String(init?.body)));
+        return Response.json(
+          requests.length === 1
+            ? createApiResponse("resp_search", [
+                {
+                  id: "fc_search",
+                  type: "function_call",
+                  call_id: "call_search",
+                  name: "search_chat",
+                  arguments: JSON.stringify({
+                    queries: ["example"],
+                    target: "group",
+                  }),
+                  status: "completed",
+                },
+              ])
+            : budgetTestAnswer("resp_search_final"),
+        );
+      }) as typeof fetch;
+
+      const response = await requestLlm(
+        "Find an example",
+        ["search_chat"],
+        undefined,
+        {
+          context: { chatId: 1, messageId: 1 },
+        },
+      );
+      strictEqual(searchAttempts, 4);
+      strictEqual(requests.length, 2);
+      strictEqual(response.tool_call_count, 1);
+      const details = "ECONNRESET: Socket closed unexpectedly";
+      deepStrictEqual(
+        response.errors,
+        recover ? [] : [{ tool: "search_chat", details }],
+      );
+      const outputs = (
+        requests[1].input as Array<Record<string, unknown>>
+      ).filter((item) => item.type === "function_call_output");
+      deepStrictEqual(outputs, [
+        {
+          type: "function_call_output",
+          call_id: "call_search",
+          output: [
+            '<tool_response tool="search_chat">',
+            recover
+              ? "[]"
+              : JSON.stringify({
+                  error: "Tool call failed",
+                  tool: "search_chat",
+                  details,
+                }),
+            "</tool_response>",
+          ].join("\n"),
+        },
+      ]);
+    }
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("requestLlm telemetry repeats tool names and reports tool errors", async () => {
   setLlmDeploymentName("small", "test-model");
   const telemetryEvents: LlmCallTelemetryPayload[] = [];
