@@ -460,6 +460,21 @@ async function createModelResponse(
     throwIfAborted(signal);
     if (receivedEvent) {
       logError("Model stream ended early", { cause: error });
+      // The SDK throws APIError for provider errors sent over SSE, even
+      // though the HTTP request succeeded. Preserve that diagnosis while
+      // still stopping without replaying an already-started stream.
+      if (
+        error instanceof OpenAI.APIError &&
+        !(error instanceof OpenAI.APIConnectionError)
+      ) {
+        throw new LlmRequestError(
+          "Model stream failed",
+          getErrorDetail(error),
+          "stream_failed",
+          undefined,
+          getLlmErrorCode(error),
+        );
+      }
       throw new LlmRequestError(
         "Response stream interrupted",
         "The model connection ended before the response completed. The request was stopped without retrying.",
@@ -993,6 +1008,7 @@ export class LlmRequestError extends Error {
       | "content_filter"
       | "error"
       | "token_limit"
+      | "stream_failed"
       | "stream_interrupted" = "error",
     readonly lastResponseId?: string,
     readonly code: string = kind === "error" ? "unknown" : kind,
@@ -1842,7 +1858,7 @@ async function createLlmResponseWithRetries(
       throwIfAborted(options.signal);
       if (
         error instanceof LlmRequestError &&
-        error.kind === "stream_interrupted"
+        (error.kind === "stream_interrupted" || error.kind === "stream_failed")
       ) {
         const checkpoint = await saveFailedResponseInputCheckpoint(
           currentInput,

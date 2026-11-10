@@ -989,6 +989,112 @@ test("a dropped stream after partial tool arguments is never retried or executed
   }
 });
 
+test("a streamed provider error preserves its diagnosis and resumes without replaying tools", async () => {
+  setLlmDeploymentName("small", "stream-test");
+  const originalFetch = globalThis.fetch;
+  let requests = 0;
+  let executions = 0;
+  let checkpoint: string | undefined;
+  globalThis.fetch = (async (_url, init) => {
+    requests++;
+    const body = JSON.parse(String(init?.body));
+    if (requests === 1) {
+      return sse([
+        created,
+        {
+          type: "response.completed",
+          response: response("resp_before_quota", [
+            {
+              type: "function_call",
+              id: "fc_before_quota",
+              call_id: "call_before_quota",
+              name: "set_reply_message_id",
+              arguments: '{"message_id":7}',
+            },
+          ]),
+        },
+      ]);
+    }
+    ok(
+      body.input.some(
+        (item: { type: string; call_id?: string }) =>
+          item.type === "function_call_output" &&
+          item.call_id === "call_before_quota",
+      ),
+    );
+    if (requests === 2) {
+      return sse([
+        created,
+        {
+          type: "response.function_call_arguments.delta",
+          delta: '{"message_id":',
+          item_id: "fc_incomplete",
+          output_index: 0,
+        },
+        {
+          error: {
+            type: "insufficient_quota",
+            code: "credit_balance_exhausted",
+            message: "You have no credits remaining.",
+            param: null,
+          },
+        },
+      ]);
+    }
+    ok(
+      body.input.every((item: { id?: string }) => item.id !== "fc_incomplete"),
+    );
+    return sse([
+      created,
+      { type: "response.completed", response: response("resp_after_quota") },
+    ]);
+  }) as typeof fetch;
+  try {
+    await rejects(
+      () =>
+        requestLlm(
+          "Work",
+          ["set_reply_message_id"],
+          undefined,
+          {
+            chargeCredits: async () => {
+              executions++;
+            },
+          },
+          "Be brief.",
+        ),
+      (error) => {
+        ok(error instanceof LlmRequestError);
+        strictEqual(error.kind, "stream_failed");
+        strictEqual(error.code, "credit_balance_exhausted");
+        ok(error.details.includes("You have no credits remaining."));
+        ok(error.details.includes("insufficient_quota"));
+        ok(error.lastResponseId);
+        checkpoint = error.lastResponseId;
+        return true;
+      },
+    );
+    strictEqual(requests, 2);
+    strictEqual(executions, 1);
+    const resumed = await requestLlm(
+      "Continue",
+      ["set_reply_message_id"],
+      checkpoint,
+      {
+        chargeCredits: async () => {
+          executions++;
+        },
+      },
+      "Be brief.",
+    );
+    strictEqual(resumed.response, "Hello!");
+    strictEqual(requests, 3);
+    strictEqual(executions, 1);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("a streamed provider output limit preserves partial text without retrying", async () => {
   setLlmDeploymentName("small", "stream-test");
   const originalFetch = globalThis.fetch;

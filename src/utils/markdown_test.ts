@@ -48,3 +48,38 @@ test("normalizeRichMarkdown does not double-escape dollar signs", () => {
     "Already \\$escaped and \\$not.",
   );
 });
+
+test("normalizeRichMarkdown leaves dollars in HTML tables unescaped", () => {
+  const table =
+    '<table bordered striped>\n<tr><th>Price $</th></tr>\n<tr><td align="right"><b>$13</b> / 3$ / $$x$$</td></tr>\n</table>';
+  strictEqual(
+    normalizeRichMarkdown(`Before $16.\n\n${table}\n\nAfter 3$.`),
+    `Before \\$16.\n\n${table}\n\nAfter 3\\$.`,
+  );
+});
+
+test("normalizeRichMarkdown handles multiple HTML tables and tag casing", () => {
+  const first = "<TABLE><TR><TD>$13</TD></TR></TABLE>";
+  const second = "<table\nstriped><tr><td>3$</td></tr></table >";
+  strictEqual(
+    normalizeRichMarkdown(`${first}\n$16\n${second}\n$20`),
+    `${first}\n\\$16\n${second}\n\\$20`,
+  );
+});
+
+test("normalizeRichMarkdown leaves dollars in streaming HTML tables unescaped", () => {
+  const partial = '<table bordered striped>\n<tr><td align="right">$13';
+  strictEqual(
+    normalizeRichMarkdown(`Before $16.\n\n${partial}`),
+    `Before \\$16.\n\n${partial}`,
+  );
+});
+
+test("normalizeRichMarkdown still escapes dollars in Markdown tables and other tags", () => {
+  strictEqual(
+    normalizeRichMarkdown(
+      "| Price |\n| --- |\n| $13 |\n<table-note>$3</table-note>",
+    ),
+    "| Price |\n| --- |\n| \\$13 |\n<table-note>\\$3</table-note>",
+  );
+});

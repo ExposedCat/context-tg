@@ -581,8 +581,9 @@ inside HTML tables.
 
 These rules are part of the shared agent instructions. Delivery preserves source
 whitespace and markup; it does not infer missing line breaks or repair lists and
-tables. Ordinary dollar signs are escaped so Telegram does not parse currency as
-LaTeX.
+tables. Ordinary dollar signs outside HTML tables are escaped so Telegram does
+not parse currency as LaTeX. Dollar signs inside HTML tables remain unescaped
+because Telegram displays Markdown escape backslashes literally in table cells.
 
 ## Saved images
 
