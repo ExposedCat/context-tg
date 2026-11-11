@@ -236,3 +236,33 @@ export async function readMessagesByIds(
 
   return getMessagesFromScrollResult(response);
 }
+
+export async function readMediaGroupMessages(
+  mediaGroupId: string,
+  context: Pick<LastMessagesContext, "chatId" | "threadId">,
+): Promise<MessageMetadata[]> {
+  if (!(await ensureMessagePayloadIndexes())) {
+    return [];
+  }
+
+  const response = await qdrantRequest<QdrantScrollResult>(
+    getCollectionPath("/points/scroll"),
+    {
+      method: "POST",
+      body: JSON.stringify({
+        // Telegram media groups contain at most ten messages.
+        limit: 10,
+        with_payload: true,
+        with_vector: false,
+        filter: {
+          must: [
+            ...getMessageScopeMust(context),
+            { key: "media_group_id", match: { value: mediaGroupId } },
+          ],
+        },
+      }),
+    },
+  );
+
+  return getMessagesFromScrollResult(response);
+}

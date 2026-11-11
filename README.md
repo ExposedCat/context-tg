@@ -622,6 +622,10 @@ Photos and image documents received from Telegram are registered directly from
 their existing `file_id` and use persistent `tg://photo` or `tg://document`
 references in live context and newly indexed message-search results. Telegram
 album membership is retained as `media_group_id` in prompt and search metadata.
+Replies to an album photo also load the other remembered album messages from
+the same chat and pass their saved images to the model in message order. This
+applies to normal and guest requests, including thread continuations. If album
+history is unavailable, the directly replied-to photo is still included.
 
 Incoming rich messages also pass every photo and image document to the model,
 including images nested in slideshows, collages, lists, quotations, and details.

@@ -31,12 +31,14 @@ import {
 import {
   downloadTelegramImageDataUrl,
   formatImageMarkdown,
+  getImageById,
+  getRichMessageImageIds,
   resolveRichMessageImageMedia,
   type SavedImageMediaType,
   saveImageFileId,
   stripRichMessageImages,
 } from "./images.ts";
-import { readLastMessages } from "./last-messages.ts";
+import { readLastMessages, readMediaGroupMessages } from "./last-messages.ts";
 import {
   getLlmErrorCode,
   type LlmCitation,
@@ -246,6 +248,8 @@ type LlmRequestSourceMessage = {
   text: string;
   message: LlmContextMessage | undefined;
   imageMessages?: LlmContextMessage[];
+  imageAttachments?: TelegramImageAttachment[];
+  expandReplyAlbum?: boolean;
 };
 
 type SentRichMarkdownMessage = {
@@ -930,7 +934,11 @@ async function buildRootRequestMessages(
 
   if (replyMessageText) {
     return [
-      { text: replyMessageText, message: replyContext },
+      {
+        text: replyMessageText,
+        message: replyContext,
+        expandReplyAlbum: replyContext === getActualReply(message),
+      },
       { text: currentMessageText, message, imageMessages },
     ];
   }
@@ -958,7 +966,13 @@ async function buildThreadRequestMessages(
 
   return [
     ...(replyMessageText
-      ? [{ text: replyMessageText, message: replyContext }]
+      ? [
+          {
+            text: replyMessageText,
+            message: replyContext,
+            expandReplyAlbum: replyContext === getActualReply(message),
+          },
+        ]
       : []),
     { text: currentMessageText, message, imageMessages },
   ];
@@ -1006,9 +1020,8 @@ async function buildLlmRequestInput(
   message: LlmContextMessage | undefined,
   signal?: AbortSignal,
   imageMessages: LlmContextMessage[] = message ? [message] : [],
+  attachments = getMessagesImageAttachments(imageMessages),
 ): Promise<LlmRequestMessageInput> {
-  const attachments = getMessagesImageAttachments(imageMessages);
-
   if (attachments.length === 0) {
     return text;
   }
@@ -1023,14 +1036,80 @@ async function buildLlmRequestInput(
   };
 }
 
+async function expandReplyAlbum(
+  ctx: Context,
+  source: LlmRequestSourceMessage,
+  includedMessageIds: ReadonlySet<number | undefined>,
+): Promise<LlmRequestSourceMessage[]> {
+  const albumId = source.message?.media_group_id;
+  if (!source.expandReplyAlbum || !albumId || !ctx.chat) {
+    return [source];
+  }
+
+  try {
+    const album = await readMediaGroupMessages(albumId, {
+      chatId: ctx.chat.id,
+    });
+    const siblings = await Promise.all(
+      album
+        .filter((message) => !includedMessageIds.has(message.message_id))
+        .map(async (message): Promise<LlmRequestSourceMessage> => {
+          const images = await Promise.all(
+            getRichMessageImageIds(message.text).map((id) =>
+              getImageById(ctx.database, id),
+            ),
+          );
+          return {
+            text: formatStoredMessageXml(message),
+            message: { message_id: message.message_id },
+            imageAttachments: images.flatMap((image) =>
+              image
+                ? [{ fileId: image.file_id, mediaType: image.media_type }]
+                : [],
+            ),
+          };
+        }),
+    );
+    return [...siblings, source].sort(
+      (left, right) =>
+        (left.message?.message_id ?? 0) - (right.message?.message_id ?? 0),
+    );
+  } catch (error) {
+    logError("Reply album history unavailable; using the replied message", {
+      error,
+    });
+    return [source];
+  }
+}
+
 async function buildLlmRequestInputs(
   ctx: Context,
   messages: LlmRequestSourceMessage[],
   signal?: AbortSignal,
 ): Promise<LlmRequestInput> {
+  const includedMessageIds = new Set(
+    messages.flatMap((source) => [
+      source.message?.message_id,
+      ...(source.imageMessages?.map((message) => message.message_id) ?? []),
+    ]),
+  );
+  const expandedMessages = (
+    await Promise.all(
+      messages.map((source) =>
+        expandReplyAlbum(ctx, source, includedMessageIds),
+      ),
+    )
+  ).flat();
   const inputs = await Promise.all(
-    messages.map(({ text, message, imageMessages }) =>
-      buildLlmRequestInput(ctx, text, message, signal, imageMessages),
+    expandedMessages.map(({ text, message, imageMessages, imageAttachments }) =>
+      buildLlmRequestInput(
+        ctx,
+        text,
+        message,
+        signal,
+        imageMessages,
+        imageAttachments,
+      ),
     ),
   );
 

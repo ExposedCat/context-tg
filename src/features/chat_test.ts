@@ -1923,6 +1923,249 @@ test("normal and guest requests send every rich-message image to the model", asy
   }
 });
 
+test("normal and guest replies expand remembered albums in roots and continuations", async () => {
+  const { setLlmDeploymentName } = await import("./llm-deployments.ts");
+  const { saveThread } = await import("./threads.ts");
+  const originalFetch = globalThis.fetch;
+  const chat = { id: -1, type: "supergroup" as const, title: "Test" };
+  const bot = {
+    id: 42,
+    is_bot: true,
+    first_name: "Test",
+    username: "test_bot",
+  } as Context["me"];
+
+  try {
+    setLlmDeploymentName("small", "album-reply-test");
+    for (const guest of [false, true]) {
+      for (const scenario of [
+        "root",
+        "thread",
+        "quote",
+        "unavailable",
+        "missing-image",
+        "external",
+        "single",
+      ]) {
+        const database = await initDatabase()();
+        try {
+          const first = await saveImageFileId(database, "album-first");
+          const third = await saveImageFileId(
+            database,
+            "album-third",
+            "document",
+          );
+          const api = new Api("test");
+          api.config.use((_previous, method) =>
+            Promise.reject(
+              new Error(`Unexpected Telegram API call: ${method}`),
+            ),
+          );
+          api.sendChatAction = async () => true;
+          api.sendRichMessage = async () => ({
+            message_id: 100,
+            date: 0,
+            chat,
+            from: bot,
+            rich_message: { blocks: [] },
+          });
+          const downloads: string[] = [];
+          api.getFile = async (id) => {
+            downloads.push(id);
+            return { file_id: id, file_unique_id: id, file_path: id };
+          };
+          let lookups = 0;
+          const inputs: Array<
+            Array<{
+              content:
+                | string
+                | Array<{ type: string; text?: string; image_url?: string }>;
+            }>
+          > = [];
+          globalThis.fetch = (async (input, init) => {
+            const url = new URL(String(input));
+            if (url.hostname === "qdrant.test") {
+              if (!url.pathname.endsWith("/points/scroll")) {
+                return Response.json({ result: { payload_schema: {} } });
+              }
+              lookups++;
+              const body = JSON.parse(String(init?.body));
+              deepStrictEqual(body.filter.must, [
+                { key: "chat_id", match: { value: chat.id } },
+                { key: "media_group_id", match: { value: "tickets" } },
+              ]);
+              strictEqual(body.limit, 10);
+              if (scenario === "unavailable")
+                return new Response("unavailable", { status: 503 });
+              // Deliberately unordered, with a stale copy of the live reply.
+              return Response.json({
+                result: {
+                  points: [
+                    [3, `![](tg://document?id=${third.id})\nThird caption`],
+                    [2, "Stale reply caption"],
+                    [
+                      1,
+                      `![](tg://photo?id=${scenario === "missing-image" ? "image_missing" : first.id})\nFirst caption`,
+                    ],
+                  ].map(([message_id, text]) => ({
+                    id: message_id,
+                    payload: {
+                      message_id,
+                      text,
+                      chat_id: chat.id,
+                      media_group_id: "tickets",
+                      date: new Date(0).toISOString(),
+                      date_timestamp: 0,
+                      sender_id: 7,
+                      sender_name: "Inessa",
+                    },
+                  })),
+                },
+              });
+            }
+            if (url.hostname === "api.telegram.org") {
+              return new Response(url.pathname.split("/").at(-1), {
+                headers: {
+                  "content-type": url.pathname.endsWith("album-third")
+                    ? "image/png"
+                    : "image/jpeg",
+                },
+              });
+            }
+            strictEqual(url.href, `${TEST_ENV.LLM_BASE_URL}/responses`);
+            inputs.push(JSON.parse(String(init?.body)).input);
+            return Response.json({
+              id: `resp_album_${guest}_${scenario}`,
+              object: "response",
+              status: "completed",
+              usage: {
+                input_tokens: 100,
+                output_tokens: 20,
+                total_tokens: 120,
+              },
+              output: [
+                {
+                  type: "message",
+                  role: "assistant",
+                  status: "completed",
+                  content: [
+                    { type: "output_text", text: "Checked.", annotations: [] },
+                  ],
+                },
+              ],
+            });
+          }) as typeof fetch;
+          if (scenario === "thread") {
+            await saveThread(database, {
+              chat_id: chat.id,
+              message_id: 2,
+              thread_id: 2,
+              response_id: "resp_album_previous",
+              agent_id: guest ? "guest" : "normal",
+            });
+          }
+          const photo = (id: string) => [
+            { file_id: id, file_unique_id: id, width: 1000, height: 1000 },
+          ];
+          const reply = {
+            message_id: 2,
+            date: 0,
+            chat,
+            from: { id: 7, is_bot: false, first_name: "Inessa" },
+            ...(scenario === "single" ? {} : { media_group_id: "tickets" }),
+            photo: photo("album-reply"),
+            caption: "Live reply caption",
+            reply_to_message: undefined,
+          };
+          const message = {
+            message_id: 10,
+            date: 10,
+            chat,
+            from: { id: 1, is_bot: false, first_name: "User" },
+            caption: "laylo fact check tickets",
+            photo: photo("current"),
+            ...(scenario === "external"
+              ? {
+                  external_reply: {
+                    ...reply,
+                    origin: {
+                      type: "hidden_user" as const,
+                      sender_user_name: "Other chat",
+                      date: 0,
+                    },
+                  },
+                }
+              : { reply_to_message: reply }),
+            ...(scenario === "quote"
+              ? { quote: { text: "Live", entities: [], position: 0 } }
+              : {}),
+          };
+          const ctx = new GrammyContext(
+            {
+              update_id: 1,
+              ...(guest ? { guest_message: message } : { message }),
+            },
+            api,
+            bot,
+          ) as Context;
+          ctx.database = database;
+          ctx.telemetry = { event: () => {} } as Context["telemetry"];
+          ctx.answerGuestQuery = async () => ({ inline_message_id: "test" });
+          await chatComposer.middleware()(ctx, () => {
+            throw new Error("Reply should be handled");
+          });
+          strictEqual(inputs.length, 1, `${guest}/${scenario}`);
+          strictEqual(
+            lookups,
+            ["external", "single"].includes(scenario) ? 0 : 1,
+          );
+          const expanded = !["unavailable", "external", "single"].includes(
+            scenario,
+          );
+          const expected = [
+            ...(expanded && scenario !== "missing-image"
+              ? ["album-first"]
+              : []),
+            "album-reply",
+            ...(expanded ? ["album-third"] : []),
+            "current",
+          ];
+          deepStrictEqual(downloads, expected, `${guest}/${scenario}`);
+          const content = inputs[0].flatMap(({ content }) =>
+            typeof content === "string"
+              ? [{ type: "input_text", text: content }]
+              : content,
+          );
+          deepStrictEqual(
+            content
+              .filter((item) => item.type === "input_image")
+              .map((item) => item.image_url),
+            expected.map(
+              (id) =>
+                `data:image/${id === "album-third" ? "png" : "jpeg"};base64,${btoa(id)}`,
+            ),
+          );
+          const text = content.map((item) => item.text ?? "").join("\n");
+          ok(!text.includes("Stale reply caption"));
+          if (expanded) {
+            ok(
+              text.includes(
+                'sender="Inessa" sender_id="7" media_group_id="tickets"',
+              ),
+            );
+            ok(text.indexOf("First caption") < text.indexOf("Third caption"));
+          }
+        } finally {
+          await database.destroy();
+        }
+      }
+    }
+  } finally {
+    globalThis.fetch = originalFetch;
+    setLlmDeploymentName("small", "");
+  }
+});
+
 test("unavailable rich-message photos are retried without user diagnostics", () => {
   const error = new Error("400 Bad Request: RICH_MESSAGE_PHOTO_NO_MEDIA_FOUND");
   const prompt = getErrorRecoveryPrompt("Show me the result", error);
