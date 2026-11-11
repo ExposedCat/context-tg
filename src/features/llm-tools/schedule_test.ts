@@ -13,6 +13,7 @@ import {
 import { createSqliteDialect, openSqlite } from "../sqlite.ts";
 import {
   executeCancelScheduledMessage,
+  executeCronMessage,
   executeGetScheduledMessages,
 } from "./schedule.ts";
 
@@ -98,9 +99,9 @@ async function seedSchedules(database: Database): Promise<void> {
       thread_id: null,
       message: "Drink some water",
       short_elaboration: "Hydrate",
-      interval_unit: "hour",
-      interval_value: 2,
-      schedule_key: "hour:2",
+      rrule: "FREQ=HOURLY;INTERVAL=2",
+      starts_at: "2099-01-01 00:00",
+      timezone: "UTC",
       created_at: "2099-01-01T00:00:00.000Z",
     })
     .execute();
@@ -125,7 +126,7 @@ test("get_scheduled_messages returns the current chat's /schedule list", async (
         "",
         "⏰ Repeating",
         "1. Hydrate",
-        "Every 2h /cancel_c1",
+        "Every 2 hours at minute 00 (UTC) /cancel_c1",
       ].join("\n"),
     );
   } finally {
@@ -153,7 +154,7 @@ test("cancel_scheduled_message cancels by /schedule id and returns the updated s
         "",
         "⏰ Repeating",
         "1. Hydrate",
-        "Every 2h /cancel_c1",
+        "Every 2 hours at minute 00 (UTC) /cancel_c1",
       ].join("\n"),
     );
     deepStrictEqual(await listActiveScheduledMessages(database, CHAT_ID), []);
@@ -190,6 +191,53 @@ test("cancel_scheduled_message rejects an invalid cancellation id", async () => 
         error: "Cannot cancel scheduled message: id must look like s1 or c1.",
       }),
     );
+  } finally {
+    await database.destroy();
+  }
+});
+
+test("cron_message creates an RRULE reminder scoped to the calling chat and topic", async () => {
+  const database = await createTestDatabase();
+  try {
+    const rawOutput = await executeCronMessage(
+      {
+        message: "Time for your morning walk",
+        short_elaboration: "Morning walk",
+        rrule: "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR",
+        starts_at: "2099-01-01 09:00",
+        timezone: "Europe/Prague",
+        chat_id: 99,
+        thread_id: 99,
+      },
+      { ...TOOL_CONTEXT, threadId: 7 },
+      { database },
+    );
+    if (typeof rawOutput !== "string") throw new Error("Expected JSON text");
+    const output = JSON.parse(rawOutput);
+    strictEqual(
+      output.cron_message.recurrence,
+      "Every weekday at 09:00 (Europe/Prague)",
+    );
+    strictEqual(typeof output.cron_message.next_run_at, "string");
+    const [row] = await listActiveCronMessages(database, CHAT_ID);
+    strictEqual(row.thread_id, 7);
+    strictEqual((await listActiveCronMessages(database, 99)).length, 0);
+    const invalidOutput = await executeCronMessage(
+      {
+        message: "Time for a walk",
+        short_elaboration: "Walking",
+        rrule: "FREQ=MINUTELY;INTERVAL=1",
+        starts_at: "2099-01-01 09:00",
+        timezone: "UTC",
+      },
+      TOOL_CONTEXT,
+      { database },
+    );
+    if (typeof invalidOutput !== "string")
+      throw new Error("Expected JSON text");
+    const invalid = JSON.parse(invalidOutput);
+    strictEqual(typeof invalid.error, "string");
+    strictEqual((await listActiveCronMessages(database, CHAT_ID)).length, 1);
   } finally {
     await database.destroy();
   }

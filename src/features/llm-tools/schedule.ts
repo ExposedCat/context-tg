@@ -1,6 +1,5 @@
 import type { Database } from "../database.ts";
 import {
-  type CronIntervalUnit,
   cancelCronMessageByNumber,
   cancelScheduledMessageByNumber,
   createCronMessage,
@@ -12,7 +11,6 @@ import {
 } from "../schedules.ts";
 import type { FunctionToolRunner } from "./types.ts";
 import {
-  getFiniteNumber,
   getJsonError,
   getMissingContextResponse,
   getMissingDatabaseResponse,
@@ -52,59 +50,44 @@ export const cronMessageToolDefinition = {
   type: "function",
   name: "cron_message",
   description:
-    "Schedule a repeating message in the current Telegram chat. Set exactly one every_* parameter to a positive integer interval and leave the others null or omitted. The current chat and forum topic are used automatically. There can be up to 10 active cron messages per chat, and only 1 active cron message for the same interval per chat.",
+    "Create a recurring Telegram reminder using one RFC5545 RRULE, a local start date/time, and an IANA timezone. Use this tool for daily, weekly, monthly, weekday, or every-N-hours reminders. Occurrences must be at least 5 minutes apart per reminder; SECONDLY and nonzero BYSECOND are forbidden. Use UTC for exact elapsed-hour/minute intervals; named timezones keep calendar reminders at local wall-clock times across DST. Missing DST times are skipped and repeated times fire once. Current chat/topic is automatic; up to 10 active reminders per chat. Separate reminders may share a schedule. Never claim creation succeeded until the tool succeeds.",
   parameters: {
     type: "object",
     properties: {
       message: {
         type: "string",
-        description: "The exact Telegram message text to send repeatedly.",
+        description: "The exact Telegram message to send repeatedly.",
       },
       short_elaboration: {
         type: "string",
-        description:
-          "Provide a 1-3 word concise elaboration of what this message is. Do not write the message itself here.",
+        description: "A 1-3 word label, different from the message text.",
       },
-      every_dayOfWeek: {
-        type: ["number", "null"],
+      rrule: {
+        type: "string",
         description:
-          "Repeat every N weeks. Use null unless this is the single chosen interval.",
-        minimum: 1,
-        maximum: 6,
+          "One RRULE, without DTSTART or other lines. Examples: FREQ=DAILY; FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR; FREQ=HOURLY;INTERVAL=5; FREQ=MINUTELY;INTERVAL=5; FREQ=MONTHLY;BYDAY=1MO. Time defaults to starts_at; BYHOUR/BYMINUTE may select multiple spaced times. Optional COUNT or UTC UNTIL. Unsafe or unprovably spaced combinations are rejected.",
       },
-      every_month: {
-        type: ["number", "null"],
+      starts_at: {
+        type: "string",
         description:
-          "Repeat every N months. Use null unless this is the single chosen interval.",
-        minimum: 1,
-        maximum: 12,
+          "Local recurrence anchor in YYYY-MM-DD HH:mm format, without an offset. For daily at 09:00, use a date at 09:00. For an elapsed interval, express the start in UTC and set timezone=UTC.",
       },
-      every_dayOfMonth: {
-        type: ["number", "null"],
+      timezone: {
+        type: "string",
         description:
-          "Repeat every N days. Use null unless this is the single chosen interval.",
-        minimum: 1,
-        maximum: 31,
-      },
-      every_hour: {
-        type: ["number", "null"],
-        description:
-          "Repeat every N hours at minute 0. Use null unless this is the single chosen interval.",
-        minimum: 1,
-        maximum: 23,
-      },
-      every_minute: {
-        type: ["number", "null"],
-        description:
-          "Repeat every N minutes. Use null unless this is the single chosen interval.",
-        minimum: 1,
-        maximum: 59,
+          "Explicit IANA timezone, e.g. Europe/Prague, Europe/Kyiv, or UTC. Infer from user/context; clarify if unknown.",
       },
     },
-    required: ["message", "short_elaboration"],
+    required: [
+      "message",
+      "short_elaboration",
+      "rrule",
+      "starts_at",
+      "timezone",
+    ],
     additionalProperties: false,
   },
-  strict: false,
+  strict: true,
 } as const;
 
 export const getScheduledMessagesToolDefinition = {
@@ -141,59 +124,6 @@ export const cancelScheduledMessageToolDefinition = {
   },
   strict: true,
 } as const;
-
-function getCronInterval(
-  args: Record<string, unknown> | null,
-): { intervalUnit: CronIntervalUnit; intervalValue: number } | string {
-  const intervals = [
-    {
-      key: "every_dayOfWeek",
-      intervalUnit: "dayOfWeek",
-      intervalValue: getFiniteNumber(args?.every_dayOfWeek),
-    },
-    {
-      key: "every_month",
-      intervalUnit: "month",
-      intervalValue: getFiniteNumber(args?.every_month),
-    },
-    {
-      key: "every_dayOfMonth",
-      intervalUnit: "dayOfMonth",
-      intervalValue: getFiniteNumber(args?.every_dayOfMonth),
-    },
-    {
-      key: "every_hour",
-      intervalUnit: "hour",
-      intervalValue: getFiniteNumber(args?.every_hour),
-    },
-    {
-      key: "every_minute",
-      intervalUnit: "minute",
-      intervalValue: getFiniteNumber(args?.every_minute),
-    },
-  ] as const;
-  const selected = intervals.filter(
-    (interval) => interval.intervalValue !== undefined,
-  );
-
-  if (selected.length !== 1) {
-    return getJsonError(
-      "Cannot schedule cron message: set exactly one every_* interval.",
-    );
-  }
-
-  const interval = selected[0];
-  if (interval.intervalValue === undefined) {
-    return getJsonError(
-      "Cannot schedule cron message: set exactly one every_* interval.",
-    );
-  }
-
-  return {
-    intervalUnit: interval.intervalUnit,
-    intervalValue: interval.intervalValue,
-  };
-}
 
 function formatScheduleError(error: unknown, action: string): string {
   if (error instanceof ScheduleValidationError) {
@@ -377,25 +307,25 @@ export const executeCronMessage: FunctionToolRunner = async (
     return missingDatabase ?? "";
   }
 
-  const interval = getCronInterval(args);
-  if (typeof interval === "string") {
-    return interval;
-  }
-
   try {
     const cronMessage = await createCronMessage(options.database, {
       chatId: context.chatId,
       threadId: context.threadId,
       message: getString(args?.message),
       shortElaboration: getShortElaboration(args),
-      intervalUnit: interval.intervalUnit,
-      intervalValue: interval.intervalValue,
+      rrule: getString(args?.rrule),
+      startsAt: getString(args?.starts_at),
+      timezone: getString(args?.timezone),
     });
 
     return JSON.stringify({
       cron_message: {
         id: cronMessage.id,
-        interval: formatCronInterval(cronMessage),
+        recurrence: formatCronInterval(cronMessage),
+        rrule: cronMessage.rrule,
+        starts_at: cronMessage.starts_at,
+        timezone: cronMessage.timezone,
+        next_run_at: cronMessage.next_run_at,
       },
     });
   } catch (error) {

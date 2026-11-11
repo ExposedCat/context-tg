@@ -148,3 +148,4 @@ trolling-mode-clean = Без обзивань
 configure-progress = Оновлення перебігу роботи
 configure-router = Розумні відповіді (автовибір доречності та моделі)
 settings-model-router = Маршрутизатор
+banish-confirmation = Автоматичні відповіді вигнано з цієї теми або чату. Прямі звернення й надалі працюють.

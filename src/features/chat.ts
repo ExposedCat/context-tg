@@ -19,6 +19,7 @@ import {
   stripMessageAgentName,
 } from "./agents/index.ts";
 import { isBotAdmin } from "./authorization.ts";
+import { areAutomaticResponsesBanished } from "./banish.ts";
 import { parseDanbooruOptions } from "./danbooru-options.ts";
 import type { Database } from "./database.ts";
 import { APP_ENV } from "./env.ts";
@@ -154,6 +155,7 @@ type TextMessage = LlmContextMessage & {
 
 type ProactiveTriggerMessage = {
   message_id: number;
+  chat?: TelegramChat;
   message_thread_id?: number;
   media_group_id?: string;
   is_topic_message?: boolean;
@@ -189,6 +191,7 @@ type TelegramUser = {
 type TelegramChat = {
   id?: number;
   type?: string;
+  is_forum?: boolean;
   first_name?: string;
   last_name?: string;
   title?: string;
@@ -3073,6 +3076,8 @@ export async function prepareProactiveAgentResponse(
   message: ProactiveTriggerMessage,
   chatId: number,
 ): Promise<(() => Promise<void>) | undefined> {
+  if (await areAutomaticResponsesBanished(ctx.database, chatId, message))
+    return;
   if (!(await hasUsageRemaining(ctx.database, chatId, ctx.from?.id))) return;
   const textMessage = message as TextMessage;
 
@@ -3097,6 +3102,8 @@ async function sendProactiveAgentResponse(
   message: ProactiveTriggerMessage,
   chatId: number,
 ): Promise<void> {
+  if (await areAutomaticResponsesBanished(ctx.database, chatId, message))
+    return;
   const textMessage = message as TextMessage;
   const reply = getActualReply(textMessage);
   const threadId = getMessageTopicId(textMessage, reply);
@@ -3241,7 +3248,12 @@ chatComposer.on("message", async (ctx, next) => {
   const routerEnabled =
     Boolean(LLM_DEPLOYMENTS.router.deploymentName) &&
     ctx.from?.is_bot !== true &&
-    (await getChatRouterEnabled(ctx.database, ctx.chat.id));
+    (await getChatRouterEnabled(ctx.database, ctx.chat.id)) &&
+    !(await areAutomaticResponsesBanished(
+      ctx.database,
+      ctx.chat.id,
+      incomingMessage,
+    ));
   // Zero identifies the default DM conversation in storage, never delivery.
   const conversationTopicId = privateChat ? (topicId ?? 0) : topicId;
   // Count every incoming message before mention filtering or album selection.

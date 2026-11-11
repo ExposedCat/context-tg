@@ -6,6 +6,14 @@ import { normalizeRichMarkdown } from "../utils/markdown.ts";
 import { escapeHtml, normalizeWhitespace } from "../utils/text.ts";
 import type { Database } from "./database.ts";
 import { resolveRichMessageImageMedia } from "./images.ts";
+import {
+  describeRecurrence,
+  formatRecurrenceDate,
+  MIN_RECURRENCE_MS,
+  nextOccurrences,
+  normalizeRecurrence,
+  type Recurrence,
+} from "./recurrence.ts";
 import { disabledLinkPreviewOptions as linkPreviewOptions } from "./telegram.ts";
 
 export type ScheduledMessageStatus =
@@ -14,7 +22,12 @@ export type ScheduledMessageStatus =
   | "sent"
   | "failed"
   | "canceled";
-export type CronMessageStatus = "active" | "canceled";
+export type CronMessageStatus =
+  | "active"
+  | "sending"
+  | "failed"
+  | "completed"
+  | "canceled";
 export type CronIntervalUnit =
   | "dayOfMonth"
   | "dayOfWeek"
@@ -70,9 +83,19 @@ export type CronMessagesTable = {
     string | null | undefined,
     string | null
   >;
-  interval_unit: CronIntervalUnit;
-  interval_value: number;
-  schedule_key: string;
+  rrule: string;
+  starts_at: string;
+  timezone: string;
+  next_run_at: ColumnType<
+    string | null,
+    string | null | undefined,
+    string | null
+  >;
+  next_allowed_at: ColumnType<
+    string | null,
+    string | null | undefined,
+    string | null
+  >;
   created_at: ColumnType<string, string | undefined, string>;
   status: ColumnType<
     CronMessageStatus,
@@ -117,8 +140,9 @@ type CreateCronMessageInput = {
   threadId?: number;
   message: string;
   shortElaboration: string;
-  intervalUnit: CronIntervalUnit;
-  intervalValue: number;
+  rrule: string;
+  startsAt: string;
+  timezone: string;
 };
 
 type CancelScheduleResult = "canceled" | "not_active" | "not_found";
@@ -135,7 +159,8 @@ const SCHEDULE_EMOJI_FALLBACK = "\u23f0";
 const LOCAL_DATE_TIME_PATTERN =
   /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})(?::(\d{2})(?:\.\d{1,3})?)?$/;
 const scheduledMessageControllers = new Map<string, Bun.CronJob>();
-const cronMessageControllers = new Map<string, Bun.CronJob>();
+const cronMessageControllers = new Map<string, ReturnType<typeof setTimeout>>();
+let dispatcherGeneration = 0;
 
 const scheduledMessageSelect = [
   "id",
@@ -156,9 +181,11 @@ const cronMessageSelect = [
   "thread_id",
   "message",
   "short_elaboration",
-  "interval_unit",
-  "interval_value",
-  "schedule_key",
+  "rrule",
+  "starts_at",
+  "timezone",
+  "next_run_at",
+  "next_allowed_at",
   "created_at",
   "status",
   "last_sent_at",
@@ -199,42 +226,29 @@ export async function migrateSchedules(database: Database): Promise<void> {
     .addColumn("last_error", "text")
     .execute();
 
-  await database.schema
-    .createTable("cron_messages")
-    .ifNotExists()
-    .addColumn("id", "text", (column) => column.primaryKey().notNull())
-    .addColumn("chat_id", "text", (column) => column.notNull())
-    .addColumn("thread_id", "integer")
-    .addColumn("message", "text", (column) => column.notNull())
-    .addColumn("short_elaboration", "text")
-    .addColumn("interval_unit", "text", (column) => column.notNull())
-    .addColumn("interval_value", "integer", (column) => column.notNull())
-    .addColumn("schedule_key", "text", (column) => column.notNull())
-    .addColumn("created_at", "text", (column) => column.notNull())
-    .addColumn("status", "text", (column) =>
-      column.notNull().defaultTo("active"),
-    )
-    .addColumn("last_sent_at", "text")
-    .addColumn("canceled_at", "text")
-    .addColumn("last_error", "text")
-    .execute();
+  const columns = await sql<{
+    name: string;
+  }>`PRAGMA table_info(cron_messages)`.execute(database);
+  if (
+    columns.rows.length &&
+    !columns.rows.some((column) => column.name === "rrule")
+  ) {
+    await migrateLegacyCronMessages(database);
+  } else {
+    await createCronMessagesTable(database, "cron_messages");
+  }
 
-  try {
+  // Older one-time schedules may predate the label column.
+  const scheduledColumns = await sql<{
+    name: string;
+  }>`PRAGMA table_info(scheduled_messages)`.execute(database);
+  if (
+    !scheduledColumns.rows.some((column) => column.name === "short_elaboration")
+  ) {
     await database.schema
       .alterTable("scheduled_messages")
       .addColumn("short_elaboration", "text")
       .execute();
-  } catch {
-    // Column already exists on fresh or previously migrated databases.
-  }
-
-  try {
-    await database.schema
-      .alterTable("cron_messages")
-      .addColumn("short_elaboration", "text")
-      .execute();
-  } catch {
-    // Column already exists on fresh or previously migrated databases.
   }
 
   await sql`
@@ -249,15 +263,119 @@ export async function migrateSchedules(database: Database): Promise<void> {
   `.execute(database);
 
   await sql`
-    CREATE UNIQUE INDEX IF NOT EXISTS cron_messages_active_chat_schedule_index
-    ON cron_messages(chat_id, schedule_key)
-    WHERE status = 'active'
-  `.execute(database);
-
-  await sql`
     CREATE INDEX IF NOT EXISTS cron_messages_chat_status_created_index
     ON cron_messages(chat_id, status, created_at)
   `.execute(database);
+}
+
+async function createCronMessagesTable(
+  database: Database,
+  table: string,
+): Promise<void> {
+  await database.schema
+    .createTable(table)
+    .ifNotExists()
+    .addColumn("id", "text", (c) => c.primaryKey().notNull())
+    .addColumn("chat_id", "text", (c) => c.notNull())
+    .addColumn("thread_id", "integer")
+    .addColumn("message", "text", (c) => c.notNull())
+    .addColumn("short_elaboration", "text")
+    .addColumn("rrule", "text", (c) => c.notNull())
+    .addColumn("starts_at", "text", (c) => c.notNull())
+    .addColumn("timezone", "text", (c) => c.notNull())
+    .addColumn("next_run_at", "text")
+    .addColumn("next_allowed_at", "text")
+    .addColumn("created_at", "text", (c) => c.notNull())
+    .addColumn("status", "text", (c) => c.notNull().defaultTo("active"))
+    .addColumn("last_sent_at", "text")
+    .addColumn("canceled_at", "text")
+    .addColumn("last_error", "text")
+    .execute();
+}
+
+type LegacyCronMessage = {
+  id: string;
+  chat_id: string;
+  thread_id?: number | null;
+  message: string;
+  short_elaboration?: string | null;
+  interval_unit: CronIntervalUnit;
+  interval_value: number;
+  created_at: string;
+  status: "active" | "canceled";
+  last_sent_at: string | null;
+  canceled_at: string | null;
+  last_error: string | null;
+};
+
+async function migrateLegacyCronMessages(database: Database): Promise<void> {
+  await database.transaction().execute(async (transaction) => {
+    const { rows } =
+      await sql<LegacyCronMessage>`SELECT * FROM cron_messages`.execute(
+        transaction,
+      );
+    await createCronMessagesTable(transaction, "cron_messages_rrule_migration");
+    for (const row of rows) {
+      const step = row.interval_value;
+      const sequence = (start: number, end: number) =>
+        Array.from(
+          { length: Math.floor((end - start) / step) + 1 },
+          (_, i) => start + i * step,
+        );
+      let rrule: string;
+      let adjusted = false;
+      switch (row.interval_unit) {
+        case "minute": {
+          const minutes =
+            step < 5
+              ? [0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55]
+              : sequence(0, 59);
+          if (minutes.length > 1 && 60 - minutes[minutes.length - 1] < 5) {
+            minutes.pop();
+            adjusted = true;
+          }
+          adjusted ||= step < 5;
+          rrule = `FREQ=HOURLY;BYMINUTE=${minutes.join(",")}`;
+          break;
+        }
+        case "hour":
+          rrule = `FREQ=DAILY;BYHOUR=${sequence(0, 23).join(",")};BYMINUTE=0`;
+          break;
+        case "dayOfWeek":
+          rrule = `FREQ=WEEKLY;BYDAY=${sequence(0, 6)
+            .map((day) => ["SU", "MO", "TU", "WE", "TH", "FR", "SA"][day])
+            .join(",")};BYHOUR=0;BYMINUTE=0`;
+          break;
+        case "dayOfMonth":
+          rrule = `FREQ=MONTHLY;BYMONTHDAY=${sequence(1, 31).join(",")};BYHOUR=0;BYMINUTE=0`;
+          break;
+        case "month":
+          rrule = `FREQ=YEARLY;BYMONTH=${sequence(1, 12).join(",")};BYMONTHDAY=1;BYHOUR=0;BYMINUTE=0`;
+          break;
+      }
+      const recurrence = normalizeRecurrence({
+        rrule,
+        startsAt: new Date(row.created_at)
+          .toISOString()
+          .slice(0, 16)
+          .replace("T", " "),
+        timezone: "UTC",
+      });
+      const note = adjusted
+        ? "Legacy schedule adjusted to enforce the five-minute minimum."
+        : row.last_error;
+      await sql`INSERT INTO cron_messages_rrule_migration
+        (id, chat_id, thread_id, message, short_elaboration, rrule, starts_at, timezone, created_at, status, last_sent_at, canceled_at, last_error, next_allowed_at)
+        VALUES (${row.id}, ${String(row.chat_id)}, ${row.thread_id ?? null}, ${row.message}, ${row.short_elaboration ?? null}, ${recurrence.rrule}, ${recurrence.startsAt}, ${recurrence.timezone}, ${row.created_at}, ${row.status}, ${row.last_sent_at}, ${row.canceled_at}, ${note}, ${row.last_sent_at ? new Date(new Date(row.last_sent_at).getTime() + MIN_RECURRENCE_MS).toISOString() : null})`.execute(
+        transaction,
+      );
+    }
+    await transaction.schema.dropTable("cron_messages").execute();
+    await transaction.schema
+      .alterTable("cron_messages_rrule_migration")
+      .renameTo("cron_messages")
+      .execute();
+  });
 }
 
 function createId(): string {
@@ -381,58 +499,6 @@ function createOneTimeCronSchedule(date: Date): CronSchedule {
   return `${date.getUTCMinutes()} ${date.getUTCHours()} ${date.getUTCDate()} ${date.getUTCMonth() + 1} *`;
 }
 
-function createCronSchedule(
-  intervalUnit: CronIntervalUnit,
-  intervalValue: number,
-): CronSchedule {
-  switch (intervalUnit) {
-    // Same expressions Deno.cron derived from its `{ every: n }` objects.
-    case "minute":
-      return `*/${intervalValue} * * * *`;
-    case "hour":
-      return `0 */${intervalValue} * * *`;
-    case "dayOfWeek":
-      return `0 0 * * */${intervalValue}`;
-    case "dayOfMonth":
-      return `0 0 */${intervalValue} * *`;
-    case "month":
-      return `0 0 1 */${intervalValue} *`;
-  }
-}
-
-function validateCronInterval(
-  intervalUnit: CronIntervalUnit,
-  intervalValue: number,
-): void {
-  const value = Math.trunc(intervalValue);
-
-  if (value !== intervalValue || !Number.isFinite(value)) {
-    throw new ScheduleValidationError("Cron interval must be an integer.");
-  }
-
-  const ranges = {
-    minute: [1, 59],
-    hour: [1, 23],
-    dayOfWeek: [1, 6],
-    dayOfMonth: [1, 31],
-    month: [1, 12],
-  } as const satisfies Record<CronIntervalUnit, readonly [number, number]>;
-  const [minimum, maximum] = ranges[intervalUnit];
-
-  if (value < minimum || value > maximum) {
-    throw new ScheduleValidationError(
-      `${intervalUnit} interval must be between ${minimum} and ${maximum}.`,
-    );
-  }
-}
-
-function getScheduleKey(
-  intervalUnit: CronIntervalUnit,
-  intervalValue: number,
-): string {
-  return `${intervalUnit}:${intervalValue}`;
-}
-
 function countRows(row: { count: number | string | bigint } | undefined) {
   return Number(row?.count ?? 0);
 }
@@ -459,7 +525,7 @@ async function countActiveCronMessages(
     .selectFrom("cron_messages")
     .select(({ fn }) => fn.countAll<number>().as("count"))
     .where("chat_id", "=", normalizeChatId(chatId))
-    .where("status", "=", "active")
+    .where("status", "in", ["active", "sending", "failed"])
     .executeTakeFirst();
 
   return countRows(row);
@@ -476,20 +542,6 @@ async function getScheduledMessageAt(
     .where("chat_id", "=", normalizeChatId(chatId))
     .where("scheduled_at", "=", scheduledAt)
     .where("status", "in", ["scheduled", "sending"])
-    .executeTakeFirst();
-}
-
-async function getCronMessageAt(
-  database: Database,
-  chatId: number,
-  scheduleKey: string,
-): Promise<CronMessage | undefined> {
-  return await database
-    .selectFrom("cron_messages")
-    .select(cronMessageSelect)
-    .where("chat_id", "=", normalizeChatId(chatId))
-    .where("schedule_key", "=", scheduleKey)
-    .where("status", "=", "active")
     .executeTakeFirst();
 }
 
@@ -537,7 +589,8 @@ function stopScheduledMessageCron(id: string): void {
 }
 
 function stopCronMessageCron(id: string): void {
-  cronMessageControllers.get(id)?.stop();
+  const timer = cronMessageControllers.get(id);
+  if (timer) clearTimeout(timer);
   cronMessageControllers.delete(id);
 }
 
@@ -635,38 +688,86 @@ async function sendScheduledMessage(
   }
 }
 
-async function sendCronMessage(
+function recurrenceFromRow(row: CronMessage): Recurrence {
+  return { rrule: row.rrule, startsAt: row.starts_at, timezone: row.timezone };
+}
+
+/** Atomic reservation is persisted before Telegram I/O. Failures consume the
+ * same cooldown as successful sends; a retry cannot bypass the minimum. */
+export async function sendCronMessage(
   database: Database,
   api: TelegramApi,
   id: string,
 ): Promise<void> {
-  const row = await getCronMessage(database, id);
-
-  if (!row || row.status !== "active") {
-    stopCronMessageCron(id);
+  const now = nowIso();
+  const row = await database
+    .updateTable("cron_messages")
+    .set({
+      status: "sending",
+      next_allowed_at: new Date(Date.now() + MIN_RECURRENCE_MS).toISOString(),
+    })
+    .where("id", "=", id)
+    .where("status", "=", "active")
+    .where("next_run_at", "<=", now)
+    .where((eb) =>
+      eb.or([
+        eb("next_allowed_at", "is", null),
+        eb("next_allowed_at", "<=", now),
+      ]),
+    )
+    .returning(cronMessageSelect)
+    .executeTakeFirst();
+  if (!row) {
+    const current = await getCronMessage(database, id);
+    if (current?.status === "active")
+      await registerCronMessage(database, api, current);
     return;
   }
-
+  let error: string | null = null;
   try {
     await sendScheduledRichMessage(database, api, row);
-    await database
-      .updateTable("cron_messages")
-      .set({ last_sent_at: nowIso(), last_error: null })
-      .where("id", "=", id)
-      .where("status", "=", "active")
-      .execute();
-    logDebug("Cron message sent", { id, chatId: row.chat_id });
-  } catch (error) {
-    await database
+  } catch (cause) {
+    error = cause instanceof Error ? cause.message : String(cause);
+    logError("Failed to send recurring message", { id, error: cause });
+  }
+  const finished = Date.now();
+  const nextAllowed = finished + MIN_RECURRENCE_MS;
+  try {
+    const [next] = await nextOccurrences(recurrenceFromRow(row), finished, 1);
+    const updated = await database
       .updateTable("cron_messages")
       .set({
-        last_error: error instanceof Error ? error.message : String(error),
+        status: next === undefined ? "completed" : "active",
+        next_run_at: next === undefined ? null : new Date(next).toISOString(),
+        next_allowed_at: new Date(nextAllowed).toISOString(),
+        ...(!error ? { last_sent_at: new Date(finished).toISOString() } : {}),
+        last_error: error,
       })
       .where("id", "=", id)
-      .where("status", "=", "active")
-      .execute();
-    logError("Failed to send cron message", { id, error });
+      .where("status", "=", "sending")
+      .returning(cronMessageSelect)
+      .executeTakeFirst();
+    if (updated?.status === "active")
+      await registerCronMessage(database, api, updated);
+  } catch (cause) {
+    await failCronMessage(database, id, cause);
   }
+}
+
+async function failCronMessage(
+  database: Database,
+  id: string,
+  cause: unknown,
+): Promise<void> {
+  stopCronMessageCron(id);
+  const error = cause instanceof Error ? cause.message : String(cause);
+  await database
+    .updateTable("cron_messages")
+    .set({ status: "failed", last_error: error })
+    .where("id", "=", id)
+    .where("status", "in", ["active", "sending"])
+    .execute();
+  logError("Recurring reminder paused", { id, error });
 }
 
 function registerScheduledMessage(
@@ -699,29 +800,91 @@ function registerScheduledMessage(
   }
 }
 
-function registerCronMessage(
+async function registerCronMessage(
   database: Database,
   api: TelegramApi,
   row: CronMessage,
-): void {
+): Promise<void> {
   stopCronMessageCron(row.id);
-
-  const controller = startCron(
-    getCronName("cron_message", row.id),
-    createCronSchedule(row.interval_unit, row.interval_value),
-    () => sendCronMessage(database, api, row.id),
-  );
-
-  if (controller) {
-    cronMessageControllers.set(row.id, controller);
+  if (row.status !== "active" || dispatcher?.database !== database) return;
+  const generation = dispatcherGeneration;
+  try {
+    let next = row.next_run_at
+      ? new Date(row.next_run_at).getTime()
+      : undefined;
+    const allowed = row.next_allowed_at
+      ? new Date(row.next_allowed_at).getTime()
+      : 0;
+    if (next === undefined || next <= Date.now()) {
+      [next] = await nextOccurrences(
+        recurrenceFromRow(row),
+        Math.max(Date.now(), allowed - 1),
+        1,
+      );
+      const updated = await database
+        .updateTable("cron_messages")
+        .set({
+          next_run_at: next === undefined ? null : new Date(next).toISOString(),
+          status: next === undefined ? "completed" : "active",
+        })
+        .where("id", "=", row.id)
+        .where("status", "=", "active")
+        .executeTakeFirst();
+      if (!updated.numUpdatedRows || next === undefined) return;
+    }
+    const target = next === undefined ? undefined : Math.max(next, allowed);
+    if (target === undefined) return;
+    if (generation !== dispatcherGeneration) return;
+    const timer = setTimeout(
+      async () => {
+        if (generation !== dispatcherGeneration) return;
+        cronMessageControllers.delete(row.id);
+        try {
+          if (Date.now() < target) {
+            const current = await getCronMessage(database, row.id);
+            if (current) await registerCronMessage(database, api, current);
+          } else {
+            await sendCronMessage(database, api, row.id);
+          }
+        } catch (error) {
+          await failCronMessage(database, row.id, error);
+        }
+      },
+      Math.min(2_147_483_647, Math.max(1, target - Date.now())),
+    );
+    timer.unref();
+    cronMessageControllers.set(row.id, timer);
+  } catch (error) {
+    await failCronMessage(database, row.id, error);
   }
+}
+
+/** Also used by tests and shutdown paths; timers never outlive their dispatcher. */
+export function stopScheduleDispatcher(): void {
+  dispatcherGeneration++;
+  for (const id of scheduledMessageControllers.keys())
+    stopScheduledMessageCron(id);
+  for (const id of cronMessageControllers.keys()) stopCronMessageCron(id);
+  dispatcher = undefined;
 }
 
 export async function startScheduleDispatcher(
   database: Database,
   api: TelegramApi,
 ): Promise<void> {
+  stopScheduleDispatcher();
   dispatcher = { database, api };
+  // An interrupted delivery may have reached Telegram. Wait five minutes from
+  // recovery before another attempt, and skip the old occurrence.
+  await database
+    .updateTable("cron_messages")
+    .set({
+      status: "active",
+      next_run_at: null,
+      next_allowed_at: new Date(Date.now() + MIN_RECURRENCE_MS).toISOString(),
+    })
+    .where("status", "=", "sending")
+    .execute();
 
   await database
     .updateTable("scheduled_messages")
@@ -739,7 +902,7 @@ export async function startScheduleDispatcher(
   }
 
   for (const row of cronMessages) {
-    registerCronMessage(database, api, row);
+    await registerCronMessage(database, api, row);
   }
 
   logDebug("Schedule dispatcher started", {
@@ -824,31 +987,34 @@ export async function createCronMessage(
   database: Database,
   input: CreateCronMessageInput,
 ): Promise<CronMessage> {
-  const intervalValue = Math.trunc(input.intervalValue);
-  validateCronInterval(input.intervalUnit, input.intervalValue);
-
+  const recurrence = normalizeRecurrence(input);
   const message = normalizeMessage(input.message);
   const shortElaboration = normalizeShortElaboration(
     input.shortElaboration,
     message,
   );
-  const scheduleKey = getScheduleKey(input.intervalUnit, intervalValue);
+  const [next] = await nextOccurrences(recurrence, Date.now(), 1);
+  if (next === undefined)
+    throw new ScheduleValidationError(
+      "This recurrence has no future occurrences.",
+    );
   const row: CreateCronMessage = {
     id: createId(),
     chat_id: normalizeChatId(input.chatId),
     thread_id: normalizeThreadId(input.threadId),
     message,
     short_elaboration: shortElaboration,
-    interval_unit: input.intervalUnit,
-    interval_value: intervalValue,
-    schedule_key: scheduleKey,
+    rrule: recurrence.rrule,
+    starts_at: recurrence.startsAt,
+    timezone: recurrence.timezone,
+    next_run_at: new Date(next).toISOString(),
+    next_allowed_at: null,
     created_at: nowIso(),
     status: "active",
     last_sent_at: null,
     canceled_at: null,
     last_error: null,
   };
-
   const cronMessage = await database
     .transaction()
     .execute(async (transaction) => {
@@ -857,40 +1023,22 @@ export async function createCronMessage(
         MAX_ACTIVE_CRON_MESSAGES_PER_CHAT
       ) {
         throw new ScheduleValidationError(
-          `This chat already has ${MAX_ACTIVE_CRON_MESSAGES_PER_CHAT} cron messages.`,
+          `This chat already has ${MAX_ACTIVE_CRON_MESSAGES_PER_CHAT} recurring reminders.`,
         );
       }
-
-      if (await getCronMessageAt(transaction, input.chatId, scheduleKey)) {
-        throw new ScheduleValidationError(
-          "This chat already has a cron message for that interval.",
-        );
-      }
-
-      try {
-        await transaction.insertInto("cron_messages").values(row).execute();
-      } catch (error) {
-        if (isDuplicateScheduleError(error)) {
-          throw new ScheduleValidationError(
-            "This chat already has a cron message for that interval.",
-          );
-        }
-
-        throw error;
-      }
-
-      return row as CronMessage;
+      return await transaction
+        .insertInto("cron_messages")
+        .values(row)
+        .returning(cronMessageSelect)
+        .executeTakeFirstOrThrow();
     });
-
   const activeDispatcher = ensureDispatcher();
-  if (activeDispatcher) {
-    registerCronMessage(
+  if (activeDispatcher)
+    await registerCronMessage(
       activeDispatcher.database,
       activeDispatcher.api,
       cronMessage,
     );
-  }
-
   return cronMessage;
 }
 
@@ -960,7 +1108,7 @@ export async function cancelCronMessage(
     return "not_found";
   }
 
-  if (row.status !== "active") {
+  if (!["active", "sending", "failed"].includes(row.status)) {
     return "not_active";
   }
 
@@ -969,7 +1117,7 @@ export async function cancelCronMessage(
     .set({ status: "canceled", canceled_at: nowIso() })
     .where("id", "=", id)
     .where("chat_id", "=", normalizeChatId(chatId))
-    .where("status", "=", "active")
+    .where("status", "in", ["active", "sending", "failed"])
     .execute();
 
   stopCronMessageCron(id);
@@ -1020,7 +1168,7 @@ export async function listActiveCronMessages(
   let query = database
     .selectFrom("cron_messages")
     .select(cronMessageSelect)
-    .where("status", "=", "active");
+    .where("status", "in", ["active", "sending", "failed"]);
 
   if (chatId !== undefined) {
     query = query.where("chat_id", "=", normalizeChatId(chatId));
@@ -1046,17 +1194,13 @@ export function formatScheduledAt(value: string): string {
 }
 
 export function formatCronInterval(
-  row: Pick<CronMessage, "interval_unit" | "interval_value">,
+  row: Pick<CronMessage, "rrule" | "starts_at" | "timezone">,
 ): string {
-  const unitLabels = {
-    minute: "min",
-    hour: "h",
-    dayOfWeek: "w",
-    dayOfMonth: "d",
-    month: "mo",
-  } as const satisfies Record<CronIntervalUnit, string>;
-
-  return `Every ${row.interval_value}${unitLabels[row.interval_unit]}`;
+  return describeRecurrence({
+    rrule: row.rrule,
+    startsAt: row.starts_at,
+    timezone: row.timezone,
+  });
 }
 
 function formatScheduleHeading(label: string, useCustomEmoji: boolean): string {
@@ -1093,7 +1237,16 @@ function formatCronMessageLine(row: CronMessage, index: number): string {
   const number = index + 1;
   const label = formatScheduleLabel(row, "Repeating message");
 
-  return `${number}. ${label}\n${formatCronInterval(row)} /cancel_c${number}`;
+  const description = escapeHtml(formatCronInterval(row));
+  const next =
+    row.next_run_at && row.status !== "failed"
+      ? `\nNext: ${formatRecurrenceDate(new Date(row.next_run_at).getTime(), row.timezone)}`
+      : "";
+  const state =
+    row.status === "failed"
+      ? "\nPaused: recurrence could not be calculated."
+      : "";
+  return `${number}. ${label}\n${description}${next}${state} /cancel_c${number}`;
 }
 
 export function formatScheduleList(
@@ -1109,7 +1262,7 @@ export function formatScheduleList(
     "",
     formatScheduleHeading("Repeating", useCustomEmoji),
     cronMessages.length > 0
-      ? cronMessages.map(formatCronMessageLine).join("\n")
+      ? cronMessages.map(formatCronMessageLine).join("\n\n")
       : "None.",
   ].join("\n");
 }
@@ -1132,16 +1285,29 @@ export async function replyWithSchedules(ctx: Context): Promise<void> {
     return;
   }
 
-  try {
-    await ctx.reply(await getScheduleList(ctx.database, ctx.chat.id), {
-      ...linkPreviewOptions,
-      parse_mode: "HTML",
-    });
-  } catch {
-    await ctx.reply(await getScheduleList(ctx.database, ctx.chat.id, false), {
-      ...linkPreviewOptions,
-      parse_mode: "HTML",
-    });
+  // Rich recurrence descriptions can exceed a single Telegram message. Break
+  // at lines/spaces, keeping complete HTML entities and emoji tags intact.
+  let remaining = await getScheduleList(ctx.database, ctx.chat.id);
+  while (remaining) {
+    let end = remaining.length;
+    if (end > 3500) {
+      end = remaining.lastIndexOf("\n", 3500);
+      if (end <= 0) end = remaining.lastIndexOf(" ", 3500);
+      if (end <= 0) end = 3500;
+    }
+    const chunk = remaining.slice(0, end);
+    remaining = remaining.slice(end).trimStart();
+    try {
+      await ctx.reply(chunk, { ...linkPreviewOptions, parse_mode: "HTML" });
+    } catch {
+      await ctx.reply(
+        chunk.replace(/<tg-emoji[^>]*>(.*?)<\/tg-emoji>/g, "$1"),
+        {
+          ...linkPreviewOptions,
+          parse_mode: "HTML",
+        },
+      );
+    }
   }
 }
 

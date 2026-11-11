@@ -1,6 +1,7 @@
 import { sql } from "kysely";
 import type { Context } from "../bot.ts";
 import { trollAgent } from "./agents/index.ts";
+import { areAutomaticResponsesBanished } from "./banish.ts";
 import type { Database } from "./database.ts";
 import { readLastMessages } from "./last-messages.ts";
 import { requestLlm, requestTrollingValidation } from "./llm.ts";
@@ -335,6 +336,8 @@ export async function preparePeriodicTroll(
   sender: Sender,
   chatId: number,
 ): Promise<(() => Promise<void>) | undefined> {
+  if (await areAutomaticResponsesBanished(ctx.database, chatId, message))
+    return;
   if (!(await hasUsageRemaining(ctx.database, chatId, ctx.from?.id))) return;
   const { messageCount, enabled, intervalMessageCount } =
     await incrementTrollingMessageCount(ctx.database, chatId);
@@ -352,6 +355,8 @@ async function sendPeriodicTroll(
   sender: Sender,
   chatId: number,
 ): Promise<void> {
+  if (await areAutomaticResponsesBanished(ctx.database, chatId, message))
+    return;
   const topicScope = getMessageTopicScope(message, message.reply_to_message);
   const messages = await readLastMessages(TROLLING_CONTEXT_MESSAGE_COUNT, {
     chatId,
@@ -426,7 +431,11 @@ async function sendPeriodicTroll(
     },
     { telemetry },
   );
-  if (!valid) return;
+  if (
+    !valid ||
+    (await areAutomaticResponsesBanished(ctx.database, chatId, message))
+  )
+    return;
 
   await ctx.reply(text, {
     link_preview_options: { is_disabled: true },

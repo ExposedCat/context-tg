@@ -13,9 +13,47 @@ bun run check      # biome
 ```
 
 SQLite uses `bun:sqlite`; integers read back exactly up to 2^53, so Telegram
-chat and user ids are safe. Schedules use in-process `Bun.cron` in UTC. The
+chat and user ids are safe. One-time schedules use in-process `Bun.cron` in UTC;
+recurring reminders use persisted RRULE schedules and next-occurrence timers. The
 container image bakes in source and dependencies, with persistent `./data` and
 an optional read-only `./secrets` directory for credentials.
+
+## Recurring reminders
+
+The normal and tofu agents create recurring Telegram reminders with `cron_message`.
+It accepts one RFC5545 `rrule`, a minute-precision local `starts_at` (`YYYY-MM-DD HH:mm`),
+and an explicit IANA `timezone`. The `rrule` library parses recurrence and provides
+natural-language descriptions. `/schedule` shows the description, local time zone,
+next occurrence, and the existing `/cancel_cN` command. One-time reminders are unchanged.
+
+Examples: `FREQ=DAILY` anchored at 09:00 in `Europe/Prague`;
+`FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR` for weekdays;
+`FREQ=MONTHLY;BYDAY=1MO` for the first Monday;
+`FREQ=HOURLY;INTERVAL=5` in UTC for exact five-hour intervals across midnight.
+Use named zones for wall-clock schedules and UTC for elapsed-hour/minute intervals.
+Temporal converts wall-clock dates independently of the host timezone. Nonexistent
+DST times are skipped; repeated local times use their earlier instant once.
+Optional `COUNT` or UTC `UNTIL` bounds a series.
+
+Each reminder has a **five-minute minimum**. Creation validates the complete time
+pattern, including hour/day wraparound, rather than relying on a finite preview.
+Seconds must be zero, `SECONDLY` is unsupported, and time combinations whose spacing
+cannot be proved safe are rejected. An atomic SQLite reservation and persisted
+cooldown also enforce the limit during delivery, including failures and retries.
+A scheduled occurrence may wait briefly for the previous delivery's cooldown.
+There are at most ten active/paused recurring reminders per chat; different messages
+may share the same schedule. This is a per-reminder limit, not a chat-wide rate limit.
+
+The single bot process restores persisted timers on startup and skips missed
+occurrences without a catch-up burst. Interrupted sends get a fresh five-minute
+cooldown. Recurrence calculations run in workers with a two-second deadline;
+pathological rules are rejected on creation or shown as paused in `/schedule`.
+
+Existing cron reminders migrate transactionally, retaining IDs, topics, cancellations,
+and UTC cron timings. Old sub-five-minute patterns are slowed to five minutes;
+minute patterns with a shorter gap at the hour boundary drop the offending last slot.
+New five-hour RRULE intervals use elapsed five-hour spacing; legacy cron-based
+five-hour reminders retain their original clock-hour slots.
 
 ## Automatic model routing
 
@@ -44,6 +82,15 @@ verdict produces no reply. Structured outputs with a strict JSON schema enforce
 the result format. Existing quotas and response cancellation still apply. Periodic proactive
 and trolling responses are suppressed while this mode is active to avoid a
 second automatic reply. An unconfigured router leaves normal triggering intact.
+
+The unlisted `/banish` command permanently suppresses proactive, automatic troll,
+and unsolicited Smart replies in the current forum topic (including General),
+or the entire chat outside forums. Chat admins and the bot admin can use it in
+groups; users can use it in their private chat. Other forum topics and direct
+requests to the bot are unaffected. The setting persists in SQLite independently
+of the chat-wide response toggles. Its confirmation is ephemeral and visible only
+to the sender. Incoming ephemeral commands are supported; manually typed public
+commands are deleted where Telegram permissions allow, so they may appear briefly.
 
 ## Finance MCP
 

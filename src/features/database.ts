@@ -2,6 +2,10 @@ import { mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 import { Kysely } from "kysely";
 import {
+  type BanishedAutomaticResponsesTable,
+  migrateBanishedAutomaticResponses,
+} from "./banish.ts";
+import {
   type CalendarChallengeTable,
   type ChatCalendarSettingsTable,
   type ChatCalendarTable,
@@ -59,6 +63,7 @@ import {
 } from "./user-settings.ts";
 
 export type DatabaseSchema = {
+  banished_automatic_responses: BanishedAutomaticResponsesTable;
   chat_calendars: ChatCalendarTable;
   chat_calendar_links: ChatCalendarTable;
   calendar_event_archives: CalendarEventArchiveTable;
@@ -117,6 +122,7 @@ export function initDatabase() {
     await migrateUsage(database);
     await migrateProactiveResponses(database);
     await migrateTrolling(database);
+    await migrateBanishedAutomaticResponses(database);
     await migrateEmojiPacks(database);
     await migrateMemos(database);
     await migrateImages(database);

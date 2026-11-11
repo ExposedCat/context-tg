@@ -19,6 +19,7 @@ for (const [key, value] of Object.entries({
   Bun.env[key] = value;
 
 const { chatComposer } = await import("./chat.ts");
+const { banishAutomaticResponses } = await import("./banish.ts");
 const { initDatabase } = await import("./database.ts");
 const { LLM_DEPLOYMENTS, setLlmDeploymentName } = await import(
   "./llm-deployments.ts"
@@ -276,6 +277,32 @@ test("opt-in checks relevance before charges or tasks and scopes three-message c
     await persistChatRouterEnabled(database, chat.id, false);
     await receive("disabled again");
     strictEqual(requests.length, 0);
+
+    await persistChatRouterEnabled(database, chat.id, true);
+    await banishAutomaticResponses(database, chat.id, {
+      chat,
+      is_topic_message: true,
+      message_thread_id: 7,
+    });
+    await receive("unsolicited reply in a banished topic");
+    strictEqual(requests.length, 0);
+    strictEqual(scrolls.length, 0);
+    await receive("laylo hello");
+    deepStrictEqual(
+      requests.map((r) => r.model),
+      ["test-small"],
+    );
+    await receive(`${trollAgent.name[0]} hello`);
+    deepStrictEqual(
+      requests.map((r) => r.model),
+      ["test-troll"],
+    );
+    historyFails = false;
+    await receive("General still responds", chat, false);
+    deepStrictEqual(
+      requests.map((r) => r.model),
+      ["test-router", "test-small"],
+    );
   } finally {
     globalThis.fetch = originalFetch;
     for (const [key, value] of Object.entries(LLM_DEPLOYMENTS))

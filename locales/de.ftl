@@ -146,3 +146,4 @@ trolling-mode-clean = Ohne Beschimpfungen
 configure-progress = Fortschrittsmeldungen
 configure-router = Intelligente Antworten (Relevanzprüfung und Modellauswahl)
 settings-model-router = Router
+banish-confirmation = Automatische Antworten sind in diesem Thema oder Chat verbannt. Direkte Anfragen funktionieren weiterhin.

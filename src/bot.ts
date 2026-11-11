@@ -10,6 +10,7 @@ import { run } from "@grammyjs/runner";
 import { DiagLogLevel } from "@opentelemetry/api";
 import { Bot, type Context as GrammyContext, type Transformer } from "grammy";
 import { safelyMaybeSendAutomaticResponse } from "./features/automatic-responses.ts";
+import { banishComposer } from "./features/banish.ts";
 import { calendarComposer } from "./features/calendar.ts";
 import { startCalendarWatchDispatcher } from "./features/calendar-watch.ts";
 import { chatComposer } from "./features/chat.ts";
@@ -134,6 +135,8 @@ export function initBot(token: string, database: Database) {
 
   bot.use(i18n);
 
+  // Consume hidden commands before indexing or automatic response handling.
+  bot.use(banishComposer);
   bot.use(messagesComposer);
   bot.use(emojiPacksComposer);
   bot.use(calendarComposer);

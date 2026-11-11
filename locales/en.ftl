@@ -146,3 +146,4 @@ trolling-mode-clean = Clean
 configure-progress = Progress updates
 configure-router = Smart replies (automatic relevance and model selection)
 settings-model-router = Router
+banish-confirmation = Automatic replies are banished from this topic or chat. Direct requests still work.
