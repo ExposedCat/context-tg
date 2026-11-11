@@ -558,31 +558,29 @@ Respond with a name for this thread. Don't use formatting, don't add anything el
   }
 });
 
-test("slow model responses are never aborted by a time limit", async () => {
+test("model calls time out after one minute without retrying", async () => {
   setLlmDeploymentName("small", "test-model");
   const originalFetch = globalThis.fetch;
   const originalSetTimeout = globalThis.setTimeout;
-  // Any real limit (a minute up to weeks) fires after 20ms; only the SDK's
-  // ~24.8-day "no timeout" sentinel keeps its delay. The fake model takes
-  // 150ms to answer, so only a limit-free path passes.
+  let calls = 0;
+  const deadlines: number[] = [];
+  // Accelerate the deadline while exercising the real abort/error path.
   globalThis.setTimeout = ((
     callback: (...args: unknown[]) => void,
     delay?: number,
     ...args: unknown[]
-  ) =>
-    originalSetTimeout(
-      callback,
-      delay !== undefined && delay >= 60_000 && delay < 2 ** 31 - 1
-        ? 20
-        : delay,
-      ...args,
-    )) as unknown as typeof setTimeout;
+  ) => {
+    if (delay === 60_000) deadlines.push(delay);
+    return originalSetTimeout(callback, delay === 60_000 ? 20 : delay, ...args);
+  }) as unknown as typeof setTimeout;
   globalThis.fetch = (async (_input: unknown, init?: RequestInit) => {
+    calls++;
     await new Promise((resolve, reject) => {
-      originalSetTimeout(resolve, 150);
-      init?.signal?.addEventListener("abort", () =>
-        reject(init.signal?.reason),
-      );
+      const timer = originalSetTimeout(resolve, 150);
+      init?.signal?.addEventListener("abort", () => {
+        clearTimeout(timer);
+        reject(init.signal?.reason);
+      });
     });
     return Response.json(
       createApiResponse("resp_slow", [
@@ -597,8 +595,15 @@ test("slow model responses are never aborted by a time limit", async () => {
     );
   }) as unknown as typeof fetch;
   try {
-    const result = await requestLlm("Slow", [], undefined, {}, "Be brief.");
-    strictEqual(result.response, "Done.");
+    await assertRejects(
+      () => requestLlm("Slow", [], undefined, {}, "Be brief."),
+      (error) =>
+        error instanceof LlmRequestError &&
+        error.kind === "timeout" &&
+        error.details.includes("60 seconds"),
+    );
+    strictEqual(calls, 1);
+    ok(deadlines.length > 0);
   } finally {
     globalThis.fetch = originalFetch;
     globalThis.setTimeout = originalSetTimeout;

@@ -399,10 +399,12 @@ failure after stream events stops without automatic replay of that generation;
 the previous complete context is preserved for an explicit continuation. An
 aborted stream charges only the assistant text received before it stopped.
 
-Model calls have no time limit, streaming or not: progress placeholders show
-that a request is still pending, and its `/cancel_<id>` command stops it. The application can
-retry connection failures that happen before any output arrives; SDK retries
-are disabled so attempts cannot bypass accounting.
+Each text-model call has a one-minute deadline, including the full response body
+or stream. Tool follow-ups get a fresh deadline; tool execution time is separate.
+Timeouts stop the request without automatic retries and preserve context for an
+explicit continuation. The application can retry other connection failures that
+happen before any output arrives; SDK retries are disabled so attempts cannot
+bypass accounting. `/cancel_<id>` can stop a pending task earlier.
 
 **Progress updates** is a per-chat `/settings` toggle, enabled by default and
 controlled by chat admins (or the user in a private chat). During conversation

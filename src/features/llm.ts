@@ -357,17 +357,13 @@ function createRequestMarker(options: LlmRequestOptions): ResponseInputItem[] {
       ];
 }
 
-// Model calls have no time limit: progress placeholders show the request is
-// pending and users can cancel it. The SDK always arms a timer (default 10
-// minutes) until response headers arrive, and timers above 2^31-1 ms fire
-// after 1 ms, so use the largest valid delay (~24.8 days) rather than Infinity.
-const NO_TIMEOUT_MS = 2 ** 31 - 1;
+const MODEL_CALL_TIMEOUT_MS = 60_000;
 
 function getClient(): OpenAI {
   return new OpenAI({
     apiKey: APP_ENV.LLM_API_KEY,
     baseURL: APP_ENV.LLM_BASE_URL,
-    timeout: NO_TIMEOUT_MS,
+    timeout: MODEL_CALL_TIMEOUT_MS,
     // The application handles retries and credit checks.
     maxRetries: 0,
   });
@@ -389,13 +385,24 @@ async function createModelResponse(
   preservePartial = false,
   creditWrapUp = false,
 ): Promise<ApiResponse> {
+  // The SDK timeout only covers response headers. Keep our deadline active
+  // until the complete response body or SSE stream has been consumed.
+  const deadline = new AbortController();
+  const timeout = setTimeout(
+    () =>
+      deadline.abort(new DOMException("Model call timed out", "TimeoutError")),
+    MODEL_CALL_TIMEOUT_MS,
+  );
+  const requestSignal = signal
+    ? AbortSignal.any([signal, deadline.signal])
+    : deadline.signal;
   const textMeter = new TextCreditMeter();
   let abortStream: (() => void) | undefined;
   let receivedEvent = false;
   let billedTokens = 0;
   let lastCharge = performance.now();
   try {
-    throwIfAborted(signal);
+    throwIfAborted(requestSignal);
     const modelParams = {
       ...params,
       ...(outputLimit !== undefined ? { max_output_tokens: outputLimit } : {}),
@@ -404,13 +411,13 @@ async function createModelResponse(
     if (APP_ENV.LLM_STREAMING) {
       const stream = await client.responses.create(
         { ...modelParams, stream: true },
-        { signal },
+        { signal: requestSignal },
       );
       abortStream = () => stream.controller.abort();
       let terminalResponse: ApiResponse | undefined;
       for await (const event of stream) {
         receivedEvent = true;
-        throwIfAborted(signal);
+        throwIfAborted(requestSignal);
         textMeter.observe(event);
         if (
           event.type === "response.completed" ||
@@ -430,15 +437,18 @@ async function createModelResponse(
           return checkpoint;
         }
         await onStreamEvent?.(event);
-        throwIfAborted(signal);
+        throwIfAborted(requestSignal);
         if (terminalResponse) break;
       }
-      throwIfAborted(signal);
+      throwIfAborted(requestSignal);
       if (!terminalResponse)
         throw new Error("Response stream ended without a terminal response");
       response = terminalResponse;
     } else {
-      response = await client.responses.create(modelParams, { signal });
+      response = await client.responses.create(modelParams, {
+        signal: requestSignal,
+      });
+      throwIfAborted(requestSignal);
       textMeter.complete(response);
       if (!(await flushTextCredits(true)) && !creditWrapUp)
         creditLimitedResponses.add(response);
@@ -458,6 +468,16 @@ async function createModelResponse(
     return response;
   } catch (error) {
     throwIfAborted(signal);
+    if (
+      deadline.signal.aborted ||
+      error instanceof OpenAI.APIConnectionTimeoutError
+    ) {
+      throw new LlmRequestError(
+        "Model call timed out",
+        "The model did not finish within 60 seconds. The request was stopped without retrying.",
+        "timeout",
+      );
+    }
     if (receivedEvent) {
       logError("Model stream ended early", { cause: error });
       // The SDK throws APIError for provider errors sent over SSE, even
@@ -483,6 +503,7 @@ async function createModelResponse(
     }
     throw error;
   } finally {
+    clearTimeout(timeout);
     abortStream?.();
     await flushTextCredits(true);
   }
@@ -1009,6 +1030,7 @@ export class LlmRequestError extends Error {
       | "error"
       | "token_limit"
       | "stream_failed"
+      | "timeout"
       | "stream_interrupted" = "error",
     readonly lastResponseId?: string,
     readonly code: string = kind === "error" ? "unknown" : kind,
@@ -1894,7 +1916,9 @@ async function createLlmResponseWithRetries(
       throwIfAborted(options.signal);
       if (
         error instanceof LlmRequestError &&
-        (error.kind === "stream_interrupted" || error.kind === "stream_failed")
+        (error.kind === "stream_interrupted" ||
+          error.kind === "stream_failed" ||
+          error.kind === "timeout")
       ) {
         const checkpoint = await saveFailedResponseInputCheckpoint(
           currentInput,

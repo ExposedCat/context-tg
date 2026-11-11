@@ -1181,12 +1181,10 @@ test("an admin stream can exceed 64000 text tokens without an application genera
   }
 });
 
-test("streams have no time limit: long silences and long answers both finish", async () => {
+test("one-minute deadline closes silent and active streams without retrying", async () => {
   setLlmDeploymentName("small", "stream-test");
   const originalFetch = globalThis.fetch;
   const originalSetTimeout = globalThis.setTimeout;
-  // Any real limit (a minute up to weeks) fires after 20ms; the stream is silent
-  // for 150ms (like long reasoning) and then streams for another 150ms.
   globalThis.setTimeout = ((
     callback: (...args: unknown[]) => void,
     delay?: number,
@@ -1194,39 +1192,63 @@ test("streams have no time limit: long silences and long answers both finish", a
   ) =>
     originalSetTimeout(
       callback,
-      delay !== undefined && delay >= 60_000 && delay < 2 ** 31 - 1
-        ? 20
-        : delay,
+      delay === 60_000 ? 50 : delay,
       ...args,
     )) as unknown as typeof setTimeout;
-  globalThis.fetch = (async (_input: unknown, init?: RequestInit) =>
-    new Response(
-      new ReadableStream<Uint8Array>({
-        async start(controller) {
-          // Like real fetch, an aborted request errors the body.
-          init?.signal?.addEventListener("abort", () =>
-            controller.error(init.signal?.reason),
-          );
-          controller.enqueue(frame(created));
-          await Bun.sleep(150);
-          for (let i = 0; i < 10; i++) {
-            await Bun.sleep(15);
-            controller.enqueue(frame({ ...delta, delta: "word " }));
-          }
-          controller.enqueue(
-            frame({
-              type: "response.completed",
-              response: response("resp_slow"),
-            }),
-          );
-          controller.close();
-        },
-      }),
-      { headers: { "content-type": "text/event-stream" } },
-    )) as unknown as typeof fetch;
   try {
-    const result = await requestLlm("Long", [], undefined, {}, "Be brief.");
-    strictEqual(result.response, "Hello!");
+    for (const active of [false, true]) {
+      let requests = 0;
+      let closed = false;
+      let deltas = 0;
+      globalThis.fetch = (async (_input: unknown, init?: RequestInit) => {
+        requests++;
+        return new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.enqueue(frame(created));
+              const interval = active
+                ? setInterval(() => {
+                    controller.enqueue(frame({ ...delta, delta: "word " }));
+                  }, 5)
+                : undefined;
+              // Like real fetch, aborting the connection errors its body.
+              init?.signal?.addEventListener(
+                "abort",
+                () => {
+                  closed = true;
+                  clearInterval(interval);
+                  controller.error(init.signal?.reason);
+                },
+                { once: true },
+              );
+            },
+          }),
+          { headers: { "content-type": "text/event-stream" } },
+        );
+      }) as unknown as typeof fetch;
+      await rejects(
+        () =>
+          requestLlm(
+            "Long",
+            [],
+            undefined,
+            {
+              onStreamEvent: (event) => {
+                if (event.type === "response.output_text.delta") deltas++;
+              },
+            },
+            "Be brief.",
+          ),
+        (error) =>
+          error instanceof LlmRequestError &&
+          error.kind === "timeout" &&
+          Boolean(error.lastResponseId),
+      );
+      strictEqual(requests, 1);
+      strictEqual(closed, true);
+      if (active) ok(deltas > 0);
+      else strictEqual(deltas, 0);
+    }
   } finally {
     globalThis.fetch = originalFetch;
     globalThis.setTimeout = originalSetTimeout;
