@@ -917,7 +917,7 @@ test("native compaction prunes checkpoints and survives tool rounds, restarts an
   }
 });
 
-test("rejected encrypted reasoning recovers a persisted thread without discarding conversation or tool results", async () => {
+test("successive rejected encrypted reasoning items recover a persisted thread without discarding conversation or tool results", async () => {
   setLlmDeploymentName("small", "test-model");
   const database = await initDatabase()();
   const { saveLlmResponseInputItems, getLlmResponseInputItems } = await import(
@@ -934,6 +934,11 @@ test("rejected encrypted reasoning recovers a persisted thread without discardin
     ...rejected,
     id: "rs_valid",
     encrypted_content: "valid-opaque-reasoning",
+  };
+  const secondRejected = {
+    ...rejected,
+    id: "rs_rejected_second",
+    encrypted_content: "second-old-opaque-reasoning",
   };
   const compaction: Extract<ResponseOutput, { type: "compaction" }> = {
     type: "compaction",
@@ -960,6 +965,7 @@ test("rejected encrypted reasoning recovers a persisted thread without discardin
       output: "Saved search results",
     },
     rejected,
+    secondRejected,
     {
       type: "message" as const,
       role: "assistant" as const,
@@ -976,13 +982,13 @@ test("rejected encrypted reasoning recovers a persisted thread without discardin
   const requests: Array<{ input: Array<Record<string, unknown>> }> = [];
   globalThis.fetch = (async (input, init) => {
     requests.push(await new Request(input, init).json());
-    if (requests.length === 1)
+    if (requests.length <= 2)
       return Response.json(
         {
           error: {
             code: "invalid_encrypted_content",
             type: "invalid_request_error",
-            message: `The encrypted content for item ${rejected.id} could not be verified. Reason: Encrypted content could not be decrypted or parsed.`,
+            message: `The encrypted content for item ${requests.length === 1 ? rejected.id : secondRejected.id} could not be verified. Reason: Encrypted content could not be decrypted or parsed.`,
           },
         },
         { status: 400 },
@@ -1002,12 +1008,16 @@ test("rejected encrypted reasoning recovers a persisted thread without discardin
       "resp_stale_reasoning",
       { database, context: { chatId: 501, messageId: 2 } },
     );
-    strictEqual(requests.length, 2);
+    strictEqual(requests.length, 3);
     strictEqual(result.response, "Done.");
     ok(requests[0].input.some((item) => item.id === rejected.id));
     deepStrictEqual(
       requests[1].input,
       requests[0].input.filter((item) => item.id !== rejected.id),
+    );
+    deepStrictEqual(
+      requests[2].input,
+      requests[1].input.filter((item) => item.id !== secondRejected.id),
     );
     deepStrictEqual(requests[1].input[0], compaction);
     ok(requests[1].input.some((item) => item.id === valid.id));
@@ -1015,6 +1025,7 @@ test("rejected encrypted reasoning recovers a persisted thread without discardin
     const saved = await getLlmResponseInputItems(database, result.response_id);
     ok(saved);
     ok(!saved.some((item) => "id" in item && item.id === rejected.id));
+    ok(!saved.some((item) => "id" in item && item.id === secondRejected.id));
     deepStrictEqual(
       await getLlmResponseInputItems(database, "resp_stale_reasoning"),
       history,
@@ -1027,8 +1038,9 @@ test("rejected encrypted reasoning recovers a persisted thread without discardin
       database,
       context: { chatId: 501, messageId: 3 },
     });
-    strictEqual(requests.length, 3);
-    ok(!requests[2].input.some((item) => item.id === rejected.id));
+    strictEqual(requests.length, 4);
+    ok(!requests[3].input.some((item) => item.id === rejected.id));
+    ok(!requests[3].input.some((item) => item.id === secondRejected.id));
   } finally {
     globalThis.fetch = originalFetch;
     await database.destroy();

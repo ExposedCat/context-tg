@@ -1816,7 +1816,6 @@ async function createLlmResponseWithRetries(
   let emptyResponseRetries = 0;
   let rateLimitRetries = 0;
   let corruptedImageRemovalCount = 0;
-  let recoveredRejectedReasoning = false;
 
   while (true) {
     throwIfAborted(options.signal);
@@ -1932,17 +1931,16 @@ async function createLlmResponseWithRetries(
             );
       }
       lastError = error;
-      if (!recoveredRejectedReasoning) {
-        const recovered = recoverRejectedReasoningInput(
-          currentInput,
-          state,
-          error,
-        );
-        if (recovered) {
-          recoveredRejectedReasoning = true;
-          currentInput = recovered;
-          continue;
-        }
+      // The provider reports one rejected item at a time. Each recovery must
+      // remove an existing reasoning item, so the shrinking input bounds retries.
+      const recoveredReasoningInput = recoverRejectedReasoningInput(
+        currentInput,
+        state,
+        error,
+      );
+      if (recoveredReasoningInput) {
+        currentInput = recoveredReasoningInput;
+        continue;
       }
       const recoveredInput = recoverUnavailableReadImageInput(
         currentInput,
