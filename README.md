@@ -83,7 +83,7 @@ the result format. Existing quotas and response cancellation still apply. Period
 and trolling responses are suppressed while this mode is active to avoid a
 second automatic reply. An unconfigured router leaves normal triggering intact.
 
-The unlisted `/banish` command permanently suppresses proactive, automatic troll,
+The ephemeral `/banish` command permanently suppresses proactive, automatic troll,
 and unsolicited Smart replies in the current forum topic (including General),
 or the entire chat outside forums. Chat admins and the bot admin can use it in
 groups; users can use it in their private chat. Other forum topics and direct

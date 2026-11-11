@@ -1,4 +1,5 @@
 command-settings-description = Change chat and personal settings
+command-banish-description = Disable automatic replies in this topic or chat
 command-calendar-description = Connect a Google calendar to this chat
 command-debug-description = Turn debug details on or off
 command-packs-description = List emoji packs

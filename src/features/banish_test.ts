@@ -71,7 +71,7 @@ test("banishment persists per forum topic, normalizes General, and covers non-fo
   }
 });
 
-test("hidden banish commands use ephemeral replies, enforce permissions and consume only this bot's command", async () => {
+test("banish commands use ephemeral replies, enforce permissions and consume only this bot's command", async () => {
   const database = await initDatabase()();
   const api = new Api("test");
   const calls: Array<{ method: string; payload: Record<string, unknown> }> = [];

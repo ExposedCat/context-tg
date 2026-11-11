@@ -1,4 +1,5 @@
 command-settings-description = Chat- und persönliche Einstellungen ändern
+command-banish-description = Automatische Antworten in diesem Thema oder Chat deaktivieren
 command-debug-description = Debug-Modus ein- oder ausschalten
 command-packs-description = Emoji-Pakete anzeigen
 command-tasks-description = Letzte Aufgaben zeigen

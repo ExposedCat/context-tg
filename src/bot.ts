@@ -41,6 +41,11 @@ const BOT_COMMANDS = [
     descriptionKey: "command-settings-description",
     is_ephemeral: true,
   },
+  {
+    command: "banish",
+    descriptionKey: "command-banish-description",
+    is_ephemeral: true,
+  },
   { command: "debug", descriptionKey: "command-debug-description" },
   { command: "packs", descriptionKey: "command-packs-description" },
   { command: "tasks", descriptionKey: "command-tasks-description" },

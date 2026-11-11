@@ -1,4 +1,5 @@
 command-settings-description = Изменить настройки чата и личные настройки
+command-banish-description = Отключить автоматические ответы в этой теме или чате
 command-debug-description = Включить или выключить отладку
 command-packs-description = Показать наборы эмодзи
 command-tasks-description = Показать последние задачи
