@@ -83,6 +83,12 @@ setLlmDeploymentName("judge", "test-judge");
 type ResponseOutput =
   | {
       id: string;
+      type: "reasoning";
+      summary: Array<{ type: "summary_text"; text: string }>;
+      encrypted_content: string;
+    }
+  | {
+      id: string;
       type: "compaction";
       encrypted_content: string;
     }
@@ -905,6 +911,248 @@ test("native compaction prunes checkpoints and survives tool rounds, restarts an
       await getLlmResponseInputItems(database, first.response_id),
       saved,
     );
+  } finally {
+    globalThis.fetch = originalFetch;
+    await database.destroy();
+  }
+});
+
+test("rejected encrypted reasoning recovers a persisted thread without discarding conversation or tool results", async () => {
+  setLlmDeploymentName("small", "test-model");
+  const database = await initDatabase()();
+  const { saveLlmResponseInputItems, getLlmResponseInputItems } = await import(
+    "./llm-chat-responses.ts"
+  );
+  const originalFetch = globalThis.fetch;
+  const rejected: Extract<ResponseOutput, { type: "reasoning" }> = {
+    type: "reasoning",
+    id: "rs_rejected_old",
+    summary: [],
+    encrypted_content: "old-opaque-reasoning",
+  };
+  const valid = {
+    ...rejected,
+    id: "rs_valid",
+    encrypted_content: "valid-opaque-reasoning",
+  };
+  const compaction: Extract<ResponseOutput, { type: "compaction" }> = {
+    type: "compaction",
+    id: "cmp_valid",
+    encrypted_content: "valid-opaque-compaction",
+  };
+  const history = [
+    compaction,
+    {
+      type: "message" as const,
+      role: "user" as const,
+      content: "Earlier user question",
+    },
+    valid,
+    {
+      type: "function_call" as const,
+      call_id: "already_executed",
+      name: "web_search",
+      arguments: '{"query":"earlier search"}',
+    },
+    {
+      type: "function_call_output" as const,
+      call_id: "already_executed",
+      output: "Saved search results",
+    },
+    rejected,
+    {
+      type: "message" as const,
+      role: "assistant" as const,
+      phase: "commentary" as const,
+      content: "Earlier progress",
+    },
+    {
+      type: "message" as const,
+      role: "assistant" as const,
+      phase: "final_answer" as const,
+      content: "Earlier answer",
+    },
+  ];
+  const requests: Array<{ input: Array<Record<string, unknown>> }> = [];
+  globalThis.fetch = (async (input, init) => {
+    requests.push(await new Request(input, init).json());
+    if (requests.length === 1)
+      return Response.json(
+        {
+          error: {
+            code: "invalid_encrypted_content",
+            type: "invalid_request_error",
+            message: `The encrypted content for item ${rejected.id} could not be verified. Reason: Encrypted content could not be decrypted or parsed.`,
+          },
+        },
+        { status: 400 },
+      );
+    return Response.json(
+      budgetTestAnswer(`resp_recovered_reasoning_${requests.length}`),
+    );
+  }) as typeof fetch;
+  try {
+    await saveLlmResponseInputItems(database, {
+      responseId: "resp_stale_reasoning",
+      inputItems: history,
+    });
+    const result = await requestLlm(
+      "Continue the discussion",
+      [],
+      "resp_stale_reasoning",
+      { database, context: { chatId: 501, messageId: 2 } },
+    );
+    strictEqual(requests.length, 2);
+    strictEqual(result.response, "Done.");
+    ok(requests[0].input.some((item) => item.id === rejected.id));
+    deepStrictEqual(
+      requests[1].input,
+      requests[0].input.filter((item) => item.id !== rejected.id),
+    );
+    deepStrictEqual(requests[1].input[0], compaction);
+    ok(requests[1].input.some((item) => item.id === valid.id));
+    ok(result.response_id);
+    const saved = await getLlmResponseInputItems(database, result.response_id);
+    ok(saved);
+    ok(!saved.some((item) => "id" in item && item.id === rejected.id));
+    deepStrictEqual(
+      await getLlmResponseInputItems(database, "resp_stale_reasoning"),
+      history,
+    );
+    await saveLlmResponseInputItems(database, {
+      responseId: "resp_recovered_restart",
+      inputItems: saved,
+    });
+    await requestLlm("Continue after restart", [], "resp_recovered_restart", {
+      database,
+      context: { chatId: 501, messageId: 3 },
+    });
+    strictEqual(requests.length, 3);
+    ok(!requests[2].input.some((item) => item.id === rejected.id));
+  } finally {
+    globalThis.fetch = originalFetch;
+    await database.destroy();
+  }
+});
+
+test("encrypted reasoning recovery retries only the failed model step after a tool call", async () => {
+  setLlmDeploymentName("small", "test-model");
+  const originalFetch = globalThis.fetch;
+  const requests: Array<{ input: Array<Record<string, unknown>> }> = [];
+  globalThis.fetch = (async (input, init) => {
+    requests.push(await new Request(input, init).json());
+    if (requests.length === 1)
+      return Response.json(
+        createApiResponse("resp_before_rejection", [
+          {
+            type: "reasoning",
+            id: "rs_step",
+            summary: [],
+            encrypted_content: "opaque-step",
+          },
+          {
+            type: "function_call",
+            id: "fc_once",
+            call_id: "call_once",
+            name: "set_reply_message_id",
+            arguments: '{"message_id":42}',
+            status: "completed",
+          },
+        ]),
+      );
+    if (requests.length === 2)
+      return Response.json(
+        {
+          error: {
+            code: "invalid_encrypted_content",
+            message:
+              "The encrypted content for item rs_step could not be verified.",
+          },
+        },
+        { status: 400 },
+      );
+    return Response.json(budgetTestAnswer("resp_after_rejection"));
+  }) as typeof fetch;
+  try {
+    const result = await requestLlm(
+      "Reply to 42",
+      ["set_reply_message_id"],
+      undefined,
+      { context: { chatId: 501, messageId: 1 } },
+    );
+    strictEqual(requests.length, 3);
+    strictEqual(result.tool_call_count, 1);
+    strictEqual(result.replyMessageId, 42);
+    deepStrictEqual(
+      requests[2].input,
+      requests[1].input.filter((item) => item.id !== "rs_step"),
+    );
+    strictEqual(
+      requests[2].input.filter(
+        (item) =>
+          item.type === "function_call_output" && item.call_id === "call_once",
+      ).length,
+      1,
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("encrypted reasoning recovery is bounded and never drops compaction or repairs unrelated 400s", async () => {
+  setLlmDeploymentName("small", "test-model");
+  const database = await initDatabase()();
+  const { saveLlmResponseInputItems } = await import("./llm-chat-responses.ts");
+  const originalFetch = globalThis.fetch;
+  const compaction = {
+    type: "compaction" as const,
+    id: "cmp_preserve",
+    encrypted_content: "only-copy-of-context",
+  };
+  const reasoning = {
+    type: "reasoning" as const,
+    id: "rs_preserve",
+    summary: [],
+    encrypted_content: "reasoning-to-check",
+  };
+  try {
+    for (const [label, code, itemId, expectedCalls] of [
+      ["unrelated", "invalid_request_error", "rs_preserve", 1],
+      ["compaction", "invalid_encrypted_content", "cmp_preserve", 1],
+      ["unknown", "invalid_encrypted_content", "rs_unknown", 1],
+      ["bounded", "invalid_encrypted_content", "rs_preserve", 2],
+    ] as const) {
+      let calls = 0;
+      globalThis.fetch = (async (input, init) => {
+        calls++;
+        const body = await new Request(input, init).json();
+        deepStrictEqual(body.input[0], compaction);
+        return Response.json(
+          {
+            error: {
+              code,
+              message: `The encrypted content for item ${itemId} could not be verified.`,
+            },
+          },
+          { status: 400 },
+        );
+      }) as typeof fetch;
+      const responseId = `resp_error_${label}`;
+      await saveLlmResponseInputItems(database, {
+        responseId,
+        inputItems: [compaction, reasoning],
+      });
+      await assertRejects(
+        () =>
+          requestLlm("Continue", [], responseId, {
+            database,
+            context: { chatId: 501, messageId: 1 },
+          }),
+        (error: unknown) =>
+          error instanceof LlmRequestError && error.code === "400",
+      );
+      strictEqual(calls, expectedCalls);
+    }
   } finally {
     globalThis.fetch = originalFetch;
     await database.destroy();

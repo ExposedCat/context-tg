@@ -1104,6 +1104,42 @@ function isContentFilterError(error: unknown): boolean {
   );
 }
 
+function recoverRejectedReasoningInput(
+  input: LlmApiInput,
+  state: LlmRequestState,
+  error: unknown,
+): LlmApiInput | undefined {
+  const errorObject = getErrorObject(error);
+  const apiError = getErrorObject(errorObject?.error);
+  if (
+    errorObject?.code !== "invalid_encrypted_content" &&
+    apiError?.code !== "invalid_encrypted_content"
+  )
+    return;
+  const rejectedId = /encrypted content for item ['"]?([\w-]+)/i.exec(
+    getErrorDetail(error),
+  )?.[1];
+  if (!rejectedId) return;
+
+  // Remove only the reasoning item the provider explicitly rejected. Plain
+  // conversation/tool history and opaque compaction checkpoints stay intact.
+  const keep = (item: ResponseInputItem) =>
+    !(item.type === "reasoning" && item.id === rejectedId);
+  const previousInput = state.inputItems.filter(keep);
+  const currentInput = input.filter(keep);
+  if (
+    previousInput.length === state.inputItems.length &&
+    currentInput.length === input.length
+  )
+    return;
+  state.inputItems = previousInput;
+  logError(
+    "Removed rejected encrypted reasoning item; retrying the model step",
+    { itemId: rejectedId },
+  );
+  return currentInput;
+}
+
 function getResponseError(response: ApiResponse): LlmRequestError | undefined {
   if (response.incomplete_details?.reason === "max_output_tokens") {
     return new LlmRequestError(
@@ -1780,6 +1816,7 @@ async function createLlmResponseWithRetries(
   let emptyResponseRetries = 0;
   let rateLimitRetries = 0;
   let corruptedImageRemovalCount = 0;
+  let recoveredRejectedReasoning = false;
 
   while (true) {
     throwIfAborted(options.signal);
@@ -1895,6 +1932,18 @@ async function createLlmResponseWithRetries(
             );
       }
       lastError = error;
+      if (!recoveredRejectedReasoning) {
+        const recovered = recoverRejectedReasoningInput(
+          currentInput,
+          state,
+          error,
+        );
+        if (recovered) {
+          recoveredRejectedReasoning = true;
+          currentInput = recovered;
+          continue;
+        }
+      }
       const recoveredInput = recoverUnavailableReadImageInput(
         currentInput,
         state,
