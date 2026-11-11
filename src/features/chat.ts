@@ -51,11 +51,17 @@ import {
   type LlmToolContext,
   type LlmToolError,
   requestLlm,
+  requestModelRoute,
   requestThreadName,
   type ToolName,
 } from "./llm.ts";
 import { LlmToolBudget } from "./llm-budget.ts";
-import { getChatDebugMode, getChatProgressEnabled } from "./llm-models.ts";
+import { LLM_DEPLOYMENTS } from "./llm-deployments.ts";
+import {
+  getChatDebugMode,
+  getChatProgressEnabled,
+  getChatRouterEnabled,
+} from "./llm-models.ts";
 import { createProgressUpdates } from "./llm-progress.ts";
 import {
   formatPromptMessageXml,
@@ -744,8 +750,18 @@ function selectNormalMediaGroupMessage(
   ownUsername: string,
   botId: number,
   privateChat: boolean,
+  routerEnabled = false,
 ): TextMessage | undefined {
   const groupHasImages = hasMessagesImageAttachments(messages);
+  if (routerEnabled) {
+    const named = messages.find((message) => {
+      const text = getMessageText(message);
+      return (
+        text && !startsWithCommandPrefix(text) && isAddressed(text, ownUsername)
+      );
+    });
+    if (named) return named;
+  }
 
   return messages.find((message) => {
     const text = getMessageText(message);
@@ -754,14 +770,14 @@ function selectNormalMediaGroupMessage(
     const directReply = isDirectReplyToBot(reply, botId);
     const requestText =
       text ??
-      ((directReply || privateChat) && groupHasImages
+      ((directReply || privateChat || routerEnabled) && groupHasImages
         ? "Please respond to the attached image."
         : undefined);
 
     return (
       Boolean(requestText) &&
       !startsWithCommandPrefix(text) &&
-      (addressed || directReply || privateChat)
+      (addressed || directReply || privateChat || routerEnabled)
     );
   });
 }
@@ -2140,6 +2156,7 @@ type HandleChatRequestOptions = {
   nameThread?: boolean;
   taskText?: string;
   tools?: ToolName[];
+  routeModel?: boolean;
   onUnhandledError?: () => Promise<void>;
 };
 
@@ -2215,6 +2232,50 @@ async function handleChatRequest(
     const threadAgent = getAgentById(thread?.agent_id) ?? normalAgent;
     const agent: AgentDefinition = explicitAgent ?? threadAgent;
     const agentName = trigger?.name ?? thread?.agent_name ?? agent.name[0];
+    let responseModel = agent.MODEL;
+    if (options.routeModel && !trigger) {
+      try {
+        let recent: MessageMetadata[] = [];
+        try {
+          recent = await readLastMessages(2, {
+            chatId,
+            messageId: message.message_id - 1,
+            threadId:
+              message.chat?.type === "private"
+                ? (getMessageTopicId(message, reply) ?? null)
+                : getMessageTopicScope(message, reply),
+          });
+        } catch (error) {
+          if (taskAbortController.signal.aborted) throw error;
+          logError(
+            "Router history unavailable; using only the current message",
+            { error },
+          );
+        }
+        const current = formatRegularMessageXml(
+          message,
+          buildLlmMessageText(message, text),
+        );
+        const route = await requestModelRoute(
+          [...recent.map(formatStoredMessageXml), current],
+          {
+            signal: taskAbortController.signal,
+            telemetry: createLlmCallTelemetry(
+              ctx.chat.type,
+              "normal",
+              ctx.telemetry.event,
+            ),
+          },
+        );
+        responseModel =
+          route === "large" ? LLM_DEPLOYMENTS.big : LLM_DEPLOYMENTS.small;
+      } catch (error) {
+        if (taskAbortController.signal.aborted) throw error;
+        logError("Model routing failed; using the conversation's model", {
+          error,
+        });
+      }
+    }
     activeAgent = agent;
     activeAgentName = agentName;
     const topicId = getMessageTopicId(message, reply);
@@ -2327,7 +2388,7 @@ async function handleChatRequest(
               responseId,
               requestOptions,
               agent.buildInstructions(chatId, agentName),
-              agent.MODEL,
+              responseModel,
             );
           }
 
@@ -2350,7 +2411,7 @@ async function handleChatRequest(
             undefined,
             requestOptions,
             agent.buildInstructions(chatId, agentName),
-            agent.MODEL,
+            responseModel,
           );
         });
       } finally {
@@ -3088,6 +3149,10 @@ chatComposer.on("message", async (ctx, next) => {
     getActualReply(incomingMessage),
   );
   const privateChat = ctx.chat.type === "private";
+  const routerEnabled =
+    Boolean(LLM_DEPLOYMENTS.router.deploymentName) &&
+    ctx.from?.is_bot !== true &&
+    (await getChatRouterEnabled(ctx.database, ctx.chat.id));
   // Zero identifies the default DM conversation in storage, never delivery.
   const conversationTopicId = privateChat ? (topicId ?? 0) : topicId;
   // Count every incoming message before mention filtering or album selection.
@@ -3107,6 +3172,7 @@ chatComposer.on("message", async (ctx, next) => {
     ctx.me.username,
     ctx.me.id,
     privateChat,
+    routerEnabled,
   );
 
   if (!message || message.message_id !== incomingMessage.message_id) {
@@ -3146,7 +3212,7 @@ chatComposer.on("message", async (ctx, next) => {
       : undefined;
   const requestText =
     text ??
-    ((isDirectBotReply || privateChat) &&
+    ((isDirectBotReply || privateChat || routerEnabled) &&
     hasMessagesImageAttachments(mediaGroupMessages)
       ? "Please respond to the attached image."
       : undefined);
@@ -3154,13 +3220,15 @@ chatComposer.on("message", async (ctx, next) => {
   if (
     !requestText ||
     startsWithCommandPrefix(text) ||
-    (!addressed && !isDirectBotReply && !privateChat)
+    (!addressed && !isDirectBotReply && !privateChat && !routerEnabled)
   ) {
     await next();
     return;
   }
 
   await handleChatRequest(ctx, message, requestText, {
+    silentQuota:
+      routerEnabled && !addressed && !isDirectBotReply && !privateChat,
     reply,
     replyContext,
     thread,
@@ -3168,6 +3236,7 @@ chatComposer.on("message", async (ctx, next) => {
     nameThread:
       privateChat && topicId !== undefined && !thread && Boolean(text?.trim()),
     imageMessages: mediaGroupMessages,
+    routeModel: routerEnabled,
     onUnhandledError: next,
   });
 });

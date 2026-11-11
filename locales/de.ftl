@@ -144,3 +144,5 @@ trolling-mode-mild = Mild
 trolling-mode-clean = Ohne Beschimpfungen
 
 configure-progress = Fortschrittsmeldungen
+configure-router = Auf jede Nachricht antworten (automatische Modellauswahl)
+settings-model-router = Router

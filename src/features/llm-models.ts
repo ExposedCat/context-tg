@@ -15,7 +15,7 @@ export type ReasoningEffort =
   | "xhigh";
 export type ReasoningSetting = ReasoningEffort | null;
 export type ChatLlmSettingKey = "reasoning" | "debug";
-type StoredChatLlmSettingKey = ChatLlmSettingKey | "progress";
+type StoredChatLlmSettingKey = ChatLlmSettingKey | "progress" | "router";
 export type LlmSettingsDeployment = LlmDeploymentId | "all";
 export type LlmSettingsTable = {
   key: string;
@@ -390,6 +390,29 @@ export async function getChatProgressEnabled(
   return (
     (await getDirectChatLlmSetting(database, chatId, "all", "progress")) !==
     "off"
+  );
+}
+
+export async function getChatRouterEnabled(
+  database: LlmSettingsDatabase,
+  chatId: number,
+): Promise<boolean> {
+  return (
+    (await getDirectChatLlmSetting(database, chatId, "all", "router")) === "on"
+  );
+}
+
+export async function persistChatRouterEnabled(
+  database: LlmSettingsDatabase,
+  chatId: number,
+  enabled: boolean,
+): Promise<void> {
+  await persistChatLlmSetting(
+    database,
+    chatId,
+    "all",
+    "router",
+    enabled ? "on" : "off",
   );
 }
 

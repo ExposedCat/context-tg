@@ -17,6 +17,27 @@ chat and user ids are safe. Schedules use in-process `Bun.cron` in UTC. The
 container image bakes in source and dependencies, with persistent `./data` and
 an optional read-only `./secrets` directory for credentials.
 
+## Automatic model routing
+
+Configure a routing deployment with `/model router DEPLOYMENT_NAME`, alongside
+the existing `small` and `big` deployments. No model name is hardcoded. The router
+always uses reasoning `none`, independently of the chat's effort settings.
+
+In `/settings`, **Reply to every message (automatic model selection)** is off
+by default. Chat administrators can enable it in groups; users can enable it in
+their private chat. With a router deployment configured, it answers ordinary
+messages without requiring a mention. Commands keep their existing handlers.
+Messages starting with a bot username or agent name skip routing and retain their
+explicit agent selection.
+
+Each routing call receives the current message and up to two earlier indexed
+messages from the same chat/topic, oldest first. It chooses `small` or `large`
+(`large` uses the `big` deployment). Missing history falls back to the current
+message; a failed or invalid router verdict falls back to the conversation's
+existing model. Existing quotas and cancellation still apply. Periodic proactive
+and trolling responses are suppressed while this mode is active to avoid a
+second automatic reply. An unconfigured router leaves normal triggering intact.
+
 ## Finance MCP
 
 Anyone can open `/settings`. In groups, the command and menu are ephemeral,

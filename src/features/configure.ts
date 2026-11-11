@@ -12,12 +12,14 @@ import {
   getChatDebugMode,
   getChatProgressEnabled,
   getChatReasoningEffort,
+  getChatRouterEnabled,
   isLlmSettingsDeployment,
   type LlmSettingsDeployment,
   parseReasoningSetting,
   persistChatDebugMode,
   persistChatProgressEnabled,
   persistChatReasoningEffort,
+  persistChatRouterEnabled,
 } from "./llm-models.ts";
 import {
   getProactiveResponseSettings,
@@ -88,6 +90,10 @@ export async function buildRichConfigureMessage(
       rows.push(
         `<p>${t("configure-progress")} ${toggle(ctx, `progress:${progressEnabled ? "off" : "on"}`, progressEnabled)}</p>`,
       );
+      const routerEnabled = await getChatRouterEnabled(ctx.database, chatId);
+      rows.push(
+        `<p>${t("configure-router")} ${toggle(ctx, `router:${routerEnabled ? "off" : "on"}`, routerEnabled)}</p>`,
+      );
       const calendarEnabled = await getCalendarMcpEnabled(ctx.database, chatId);
       rows.push(
         `<p>${t("configure-calendar-mcp")} ${toggle(ctx, `calendar:${chatId}:${calendarEnabled ? "off" : "on"}`, calendarEnabled)}</p>`,
@@ -131,17 +137,19 @@ export async function buildRichConfigureMessage(
     }
   } else {
     const rows = await Promise.all(
-      LLM_DEPLOYMENT_OPTIONS.map(async (model) => {
-        const effort = await getChatReasoningEffort(
-          ctx.database,
-          chatId,
-          model.id,
-        );
-        const active = selected === "all" || selected === model.id;
-        const cell = (value: string) =>
-          `<td>${active ? `<mark>${escapeHtml(value)}</mark>` : escapeHtml(value)}</td>`;
-        return `<tr>${cell(model.id)}${cell(ctx.t(`settings-value-${effort ?? "null"}`))}<td>${configure(`effort:${model.id}`, active)}</td></tr>`;
-      }),
+      LLM_DEPLOYMENT_OPTIONS.filter((model) => model.id !== "router").map(
+        async (model) => {
+          const effort = await getChatReasoningEffort(
+            ctx.database,
+            chatId,
+            model.id,
+          );
+          const active = selected === "all" || selected === model.id;
+          const cell = (value: string) =>
+            `<td>${active ? `<mark>${escapeHtml(value)}</mark>` : escapeHtml(value)}</td>`;
+          return `<tr>${cell(model.id)}${cell(ctx.t(`settings-value-${effort ?? "null"}`))}<td>${configure(`effort:${model.id}`, active)}</td></tr>`;
+        },
+      ),
     );
     html = `<table><tr><th>${t("configure-kind")}</th><th>${t("configure-effort")}</th><th>${t("configure-button")}</th></tr>${rows.join("")}</table><p>${button(ctx.t("configure-all"), "effort:all", selected === "all" ? "primary" : undefined)}</p>`;
     if (selected) {
@@ -189,7 +197,8 @@ configureComposer.callbackQuery(/^cfg:/, async (ctx) => {
     !ctx.from ||
     (!["menu", "finance"].includes(action) &&
       !(
-        ["progress", "calendar"].includes(action) && ctx.chat.type === "private"
+        ["progress", "calendar", "router"].includes(action) &&
+        ctx.chat.type === "private"
       ) &&
       !(await canConfigureChat(ctx)))
   ) {
@@ -240,6 +249,8 @@ configureComposer.callbackQuery(/^cfg:/, async (ctx) => {
       ctx.chat.id,
       target === "on",
     );
+  } else if (action === "router" && (target === "on" || target === "off")) {
+    await persistChatRouterEnabled(ctx.database, ctx.chat.id, target === "on");
   } else if (action === "debug" && (target === "on" || target === "off")) {
     await persistChatDebugMode(ctx.database, ctx.chat.id, target === "on");
   } else if (

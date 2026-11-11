@@ -21,8 +21,12 @@ for (const [key, value] of Object.entries({
 
 const { configureComposer } = await import("./configure.ts");
 const { initDatabase } = await import("./database.ts");
-const { getChatReasoningEffort, getChatDebugMode, getChatProgressEnabled } =
-  await import("./llm-models.ts");
+const {
+  getChatReasoningEffort,
+  getChatDebugMode,
+  getChatProgressEnabled,
+  getChatRouterEnabled,
+} = await import("./llm-models.ts");
 const { getTrollingSettings, setTrollingInterval } = await import(
   "./trolling.ts"
 );
@@ -174,6 +178,16 @@ test("rich configure navigation, persistence and authorization", async () => {
       /Progress updates <tg-button[^>]+style="success" data="cfg:progress:off"/,
     );
     strictEqual(await getChatProgressEnabled(database, chat.id), true);
+    strictEqual(await getChatRouterEnabled(database, chat.id), false);
+    match(html(), /data="cfg:router:on"/);
+    await click("cfg:router:on", 2);
+    strictEqual(await getChatRouterEnabled(database, chat.id), true);
+    strictEqual(await getChatRouterEnabled(database, -200), false);
+    match(html(), /data="cfg:router:off"/);
+    await click("cfg:router:off", 3);
+    strictEqual(await getChatRouterEnabled(database, chat.id), true);
+    await click("cfg:router:off", 2);
+    strictEqual(await getChatRouterEnabled(database, chat.id), false);
     await click("cfg:progress:off", 2);
     strictEqual(await getChatProgressEnabled(database, chat.id), false);
     strictEqual(await getChatProgressEnabled(database, -200), true);
@@ -205,6 +219,7 @@ test("rich configure navigation, persistence and authorization", async () => {
       "trolling",
       "proactive",
       "progress",
+      "router",
       "effort",
     ]) {
       ok(!html().includes(`data="cfg:${action}`));
@@ -291,6 +306,7 @@ test("rich configure navigation, persistence and authorization", async () => {
       match(html(), /data="cfg:menu">Back/);
     }
     await click("cfg:models");
+    match(html(), /<td>router<\/td>/);
     match(html(), /<td>Fallback<\/td>/);
     match(html(), /<td>Image Small<\/td>/);
     match(html(), /<td>Image Big<\/td>/);

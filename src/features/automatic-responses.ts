@@ -1,6 +1,8 @@
 import { createDebug } from "@grammyjs/debug";
 import type { Context } from "../bot.ts";
 import { prepareProactiveAgentResponse } from "./chat.ts";
+import { LLM_DEPLOYMENTS } from "./llm-deployments.ts";
+import { getChatRouterEnabled } from "./llm-models.ts";
 import { preparePeriodicTroll } from "./trolling.ts";
 
 const logError = createDebug("app:automatic-responses:error");
@@ -11,6 +13,12 @@ export async function safelyMaybeSendAutomaticResponse(
   sender: Parameters<typeof preparePeriodicTroll>[2],
   chatId: number,
 ): Promise<void> {
+  // Router chats already respond to every message through the chat handler.
+  if (
+    LLM_DEPLOYMENTS.router.deploymentName &&
+    (await getChatRouterEnabled(ctx.database, chatId))
+  )
+    return;
   const responses: Array<() => Promise<void>> = [];
   // Advance both counters before selecting a response or spending credits.
   for (const prepare of [

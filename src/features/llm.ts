@@ -2388,6 +2388,81 @@ export async function requestLlm(
   );
 }
 
+export const MODEL_ROUTING_INSTRUCTIONS = `You are routing a model request: respond with JSON exactly {"model":"small"} or {"model":"large"}.
+Small model: reminders, explicit tool calls, clearly specified searches, translation, reformatting, simple answers, casual chat.
+Strong model: coding and debugging, analysis and comparisons, planning, ambiguous requests, reconstructing chat context, conflicts and nuanced humor.
+Routing rule: clear action → small model; figuring out what the user actually means or weighing multiple factors → strong model.`;
+
+export async function requestModelRoute(
+  messages: string[],
+  options: Pick<LlmRequestOptions, "signal" | "telemetry"> = {},
+): Promise<"small" | "large"> {
+  const timing = createLlmCallTiming();
+  let response: ApiResponse | undefined;
+  let status: LlmCallStatus = "failed";
+  try {
+    response = await createModelResponse(
+      getClient(),
+      {
+        model: getConfiguredDeploymentName(LLM_DEPLOYMENTS.router),
+        reasoning: { effort: "none" },
+        store: false,
+        instructions: MODEL_ROUTING_INSTRUCTIONS,
+        input: [{ role: "user", content: JSON.stringify(messages.slice(-3)) }],
+        text: {
+          format: {
+            type: "json_schema",
+            name: "model_route",
+            strict: true,
+            schema: {
+              type: "object",
+              properties: {
+                model: { type: "string", enum: ["small", "large"] },
+              },
+              required: ["model"],
+              additionalProperties: false,
+            },
+          },
+        },
+      },
+      options.signal,
+      64,
+    );
+    const error = getResponseError(response);
+    if (error || response.status !== "completed") {
+      throw new Error(
+        `Model routing failed: ${error?.message ?? response.status}`,
+      );
+    }
+    const verdict: unknown = JSON.parse(getResponseText(response) ?? "null");
+    if (
+      !isRecord(verdict) ||
+      Object.keys(verdict).length !== 1 ||
+      (verdict.model !== "small" && verdict.model !== "large")
+    ) {
+      throw new Error(
+        "Model routing must return exactly { model: small | large }",
+      );
+    }
+    status = "success";
+    return verdict.model;
+  } finally {
+    if (options.telemetry) {
+      const usage = response ? getResponseUsage(response) : undefined;
+      emitLlmCallTelemetryPayload(options.telemetry, {
+        ...timing.snapshot(),
+        chat_type: options.telemetry.chatType,
+        input_tokens: usage?.input_tokens ?? 0,
+        cached_tokens: usage?.cached_tokens ?? 0,
+        output_tokens: usage?.output_tokens ?? 0,
+        tools: [],
+        mode: options.telemetry.mode,
+        status,
+      });
+    }
+  }
+}
+
 export type TrollingValidationInput = {
   messages: string[];
   candidate: string;

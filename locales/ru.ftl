@@ -146,3 +146,5 @@ trolling-mode-mild = Мягкий
 trolling-mode-clean = Без обзывательств
 
 configure-progress = Обновления о ходе работы
+configure-router = Отвечать на каждое сообщение (автовыбор модели)
+settings-model-router = Маршрутизатор
