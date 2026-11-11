@@ -9,6 +9,7 @@ import {
   truncateCodePoints,
 } from "../utils/text.ts";
 import {
+  AGENTS,
   type AgentDefinition,
   getAgentById,
   guestAgent,
@@ -2180,6 +2181,55 @@ async function handleChatRequest(
   const chatId = ctx.chat.id;
   const toolBudget = new LlmToolBudget();
   const reply = options.reply;
+  let routedModel: AgentDefinition["MODEL"] | undefined;
+  if (options.routeModel) {
+    if (!(await hasUsageRemaining(ctx.database, chatId, ctx.from?.id))) return;
+    try {
+      let recent: MessageMetadata[] = [];
+      try {
+        recent = await readLastMessages(2, {
+          chatId,
+          messageId: message.message_id - 1,
+          threadId:
+            message.chat?.type === "private"
+              ? (getMessageTopicId(message, reply) ?? null)
+              : getMessageTopicScope(message, reply),
+        });
+      } catch (error) {
+        logError("Router history unavailable; using only the current message", {
+          error,
+        });
+      }
+      const current = formatRegularMessageXml(
+        message,
+        buildLlmMessageText(message, text),
+      );
+      const decision = await requestModelRoute(
+        [...recent.map(formatStoredMessageXml), current],
+        [
+          ...new Set([
+            ...AGENTS.flatMap((agent) => agent.name),
+            `@${ctx.me.username}`,
+          ]),
+        ],
+        {
+          telemetry: createLlmCallTelemetry(
+            ctx.chat.type,
+            "normal",
+            ctx.telemetry.event,
+          ),
+        },
+      );
+      if (!decision.respond) return;
+      routedModel =
+        decision.model === "large"
+          ? LLM_DEPLOYMENTS.big
+          : LLM_DEPLOYMENTS.small;
+    } catch (error) {
+      logError("Model routing failed; skipping response", { error });
+      return;
+    }
+  }
   const replyContext = options.replyContext ?? reply;
   const thread = options.thread;
   const threadId =
@@ -2232,50 +2282,7 @@ async function handleChatRequest(
     const threadAgent = getAgentById(thread?.agent_id) ?? normalAgent;
     const agent: AgentDefinition = explicitAgent ?? threadAgent;
     const agentName = trigger?.name ?? thread?.agent_name ?? agent.name[0];
-    let responseModel = agent.MODEL;
-    if (options.routeModel && !trigger) {
-      try {
-        let recent: MessageMetadata[] = [];
-        try {
-          recent = await readLastMessages(2, {
-            chatId,
-            messageId: message.message_id - 1,
-            threadId:
-              message.chat?.type === "private"
-                ? (getMessageTopicId(message, reply) ?? null)
-                : getMessageTopicScope(message, reply),
-          });
-        } catch (error) {
-          if (taskAbortController.signal.aborted) throw error;
-          logError(
-            "Router history unavailable; using only the current message",
-            { error },
-          );
-        }
-        const current = formatRegularMessageXml(
-          message,
-          buildLlmMessageText(message, text),
-        );
-        const route = await requestModelRoute(
-          [...recent.map(formatStoredMessageXml), current],
-          {
-            signal: taskAbortController.signal,
-            telemetry: createLlmCallTelemetry(
-              ctx.chat.type,
-              "normal",
-              ctx.telemetry.event,
-            ),
-          },
-        );
-        responseModel =
-          route === "large" ? LLM_DEPLOYMENTS.big : LLM_DEPLOYMENTS.small;
-      } catch (error) {
-        if (taskAbortController.signal.aborted) throw error;
-        logError("Model routing failed; using the conversation's model", {
-          error,
-        });
-      }
-    }
+    const responseModel = routedModel ?? agent.MODEL;
     activeAgent = agent;
     activeAgentName = agentName;
     const topicId = getMessageTopicId(message, reply);
@@ -3227,8 +3234,7 @@ chatComposer.on("message", async (ctx, next) => {
   }
 
   await handleChatRequest(ctx, message, requestText, {
-    silentQuota:
-      routerEnabled && !addressed && !isDirectBotReply && !privateChat,
+    silentQuota: routerEnabled,
     reply,
     replyContext,
     thread,

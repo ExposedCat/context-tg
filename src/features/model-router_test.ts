@@ -27,6 +27,7 @@ const { getChatRouterEnabled, persistChatRouterEnabled } = await import(
   "./llm-models.ts"
 );
 const { requestModelRoute } = await import("./llm.ts");
+const { getUsageStatus } = await import("./usage.ts");
 const { safelyMaybeSendAutomaticResponse } = await import(
   "./automatic-responses.ts"
 );
@@ -50,7 +51,7 @@ function response(text: string, id: number, status = "completed") {
   });
 }
 
-test("opt-in routes ordinary messages, preserves name triggers, and scopes three-message context", async () => {
+test("opt-in checks relevance before charges or tasks and scopes three-message context", async () => {
   const database = await initDatabase()();
   const originalFetch = globalThis.fetch;
   const previous = Object.fromEntries(
@@ -77,6 +78,7 @@ test("opt-in routes ordinary messages, preserves name triggers, and scopes three
     passed = 0,
     serial = 0,
     route = "large",
+    shouldRespond = true,
     historyFails = false;
   const requests: Array<{
     model: string;
@@ -127,7 +129,10 @@ test("opt-in routes ordinary messages, preserves name triggers, and scopes three
     requests.push(body);
     return response(
       body.model === "test-router"
-        ? JSON.stringify({ model: route })
+        ? JSON.stringify({
+            respond: shouldRespond,
+            model: shouldRespond ? route : null,
+          })
         : "Answer",
       requests.length,
     );
@@ -187,6 +192,31 @@ test("opt-in routes ordinary messages, preserves name triggers, and scopes three
     const beforeAutomatic = sent;
     await safelyMaybeSendAutomaticResponse(ctx, ctx.message, sender, chat.id);
     strictEqual(sent, beforeAutomatic);
+    shouldRespond = false;
+    const usageBefore = await getUsageStatus(database, chat.id);
+    const tasksBefore = await database
+      .selectFrom("tasks")
+      .selectAll()
+      .execute();
+    for (const text of [
+      "ordinary conversation",
+      "I mentioned laylo yesterday",
+      "laylo was mentioned yesterday",
+      "@test_bot was offline yesterday",
+    ]) {
+      await receive(text);
+      deepStrictEqual(
+        requests.map((r) => r.model),
+        ["test-router"],
+      );
+      strictEqual(sent, beforeAutomatic);
+    }
+    deepStrictEqual(await getUsageStatus(database, chat.id), usageBefore);
+    deepStrictEqual(
+      await database.selectFrom("tasks").selectAll().execute(),
+      tasksBefore,
+    );
+    shouldRespond = true;
     route = "small";
     await receive("translate this");
     deepStrictEqual(
@@ -202,9 +232,9 @@ test("opt-in routes ordinary messages, preserves name triggers, and scopes three
       await receive(text);
       deepStrictEqual(
         requests.map((r) => r.model),
-        ["test-small"],
+        ["test-router", "test-small"],
       );
-      strictEqual(scrolls.length, 0);
+      strictEqual(scrolls.length, 1);
     }
     await receive("ordinary", { ...chat, id: -200 });
     strictEqual(requests.length, 0);
@@ -217,14 +247,18 @@ test("opt-in routes ordinary messages, preserves name triggers, and scopes three
       ),
     );
     route = "invalid";
+    const sentBeforeInvalid = sent;
     await receive("fallback");
     deepStrictEqual(
       requests.map((r) => r.model),
-      ["test-router", "test-small"],
+      ["test-router"],
     );
+    strictEqual(sent, sentBeforeInvalid);
     historyFails = true;
+    route = "small";
     await receive("history failed");
     strictEqual(requests.at(-1)?.model, "test-small");
+    strictEqual(JSON.parse(requests[0].input[0].content).length, 1);
     setLlmDeploymentName("router", "");
     await receive("not configured");
     strictEqual(requests.length, 0);
@@ -243,7 +277,7 @@ test("opt-in routes ordinary messages, preserves name triggers, and scopes three
 test("router enforces its verdict and reports tokens without exposing internal output", async () => {
   const originalFetch = globalThis.fetch;
   const previous = LLM_DEPLOYMENTS.router.deploymentName;
-  let output = '{"model":"small"}',
+  let output = '{"respond":true,"model":"small"}',
     status = "completed",
     calls = 0;
   const events: Array<{
@@ -263,6 +297,9 @@ test("router enforces its verdict and reports tokens without exposing internal o
     strictEqual(body.tools, undefined);
     strictEqual(body.store, false);
     strictEqual(body.text.format.strict, true);
+    ok(body.instructions.includes('agent named "laylo", "лейло", "@test_bot"'));
+    ok(body.instructions.includes("never respond if name is barely mentioned"));
+    deepStrictEqual(body.text.format.schema.required, ["respond", "model"]);
     return response(output, ++calls, status);
   }) as typeof fetch;
   const options = {
@@ -274,20 +311,35 @@ test("router enforces its verdict and reports tokens without exposing internal o
       },
     },
   };
+  const names = ["laylo", "лейло", "@test_bot"];
   try {
     setLlmDeploymentName("router", "custom-router");
-    strictEqual(
-      await requestModelRoute(["first", "second", "third", "current"], options),
-      "small",
+    deepStrictEqual(
+      await requestModelRoute(
+        ["first", "second", "third", "current"],
+        names,
+        options,
+      ),
+      { respond: true, model: "small" },
     );
-    output = '{"model":"large"}';
-    strictEqual(
-      await requestModelRoute(["second", "third", "current"], options),
-      "large",
+    output = '{"respond":true,"model":"large"}';
+    deepStrictEqual(
+      await requestModelRoute(["second", "third", "current"], names, options),
+      { respond: true, model: "large" },
+    );
+    output = '{"respond":false,"model":null}';
+    deepStrictEqual(
+      await requestModelRoute(["second", "third", "current"], names, options),
+      { respond: false, model: null },
     );
     for (const invalid of [
       '{"model":"big"}',
       '{"model":"small","extra":1}',
+      '{"respond":false,"model":"small"}',
+      '{"respond":true,"model":null}',
+      '{"respond":"false","model":null}',
+      '{"respond":true,"model":"big"}',
+      '{"respond":true,"model":"small","extra":1}',
       "{}",
       "[]",
       "null",
@@ -296,13 +348,13 @@ test("router enforces its verdict and reports tokens without exposing internal o
     ]) {
       output = invalid;
       await rejects(() =>
-        requestModelRoute(["second", "third", "current"], options),
+        requestModelRoute(["second", "third", "current"], names, options),
       );
     }
-    output = '{"model":"small"}';
+    output = '{"respond":true,"model":"small"}';
     status = "incomplete";
     await rejects(
-      () => requestModelRoute(["second", "third", "current"], options),
+      () => requestModelRoute(["second", "third", "current"], names, options),
       /routing failed/,
     );
     strictEqual(events[0].status, "success");
@@ -311,7 +363,7 @@ test("router enforces its verdict and reports tokens without exposing internal o
     strictEqual(events.at(-1)?.status, "failed");
     const before = calls;
     await rejects(() =>
-      requestModelRoute(["current"], { signal: AbortSignal.abort() }),
+      requestModelRoute(["current"], names, { signal: AbortSignal.abort() }),
     );
     strictEqual(calls, before);
   } finally {

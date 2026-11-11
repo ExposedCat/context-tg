@@ -13,7 +13,7 @@ export async function safelyMaybeSendAutomaticResponse(
   sender: Parameters<typeof preparePeriodicTroll>[2],
   chatId: number,
 ): Promise<void> {
-  // Router chats already respond to every message through the chat handler.
+  // Respect the router's decision instead of sending another automatic reply.
   if (
     LLM_DEPLOYMENTS.router.deploymentName &&
     (await getChatRouterEnabled(ctx.database, chatId))

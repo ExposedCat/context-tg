@@ -144,5 +144,5 @@ trolling-mode-mild = Mild
 trolling-mode-clean = Clean
 
 configure-progress = Progress updates
-configure-router = Reply to every message (automatic model selection)
+configure-router = Smart replies (automatic relevance and model selection)
 settings-model-router = Router
