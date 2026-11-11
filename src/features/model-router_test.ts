@@ -27,6 +27,7 @@ const { getChatRouterEnabled, persistChatRouterEnabled } = await import(
   "./llm-models.ts"
 );
 const { requestModelRoute } = await import("./llm.ts");
+const { trollAgent } = await import("./agents/index.ts");
 const { getUsageStatus } = await import("./usage.ts");
 const { safelyMaybeSendAutomaticResponse } = await import(
   "./automatic-responses.ts"
@@ -166,6 +167,7 @@ test("opt-in checks relevance before charges or tasks and scopes three-message c
     setLlmDeploymentName("router", "test-router");
     setLlmDeploymentName("small", "test-small");
     setLlmDeploymentName("big", "test-big");
+    setLlmDeploymentName("openminded", "test-troll");
     strictEqual(await getChatRouterEnabled(database, chat.id), false);
     await receive("ordinary chat");
     strictEqual(passed, 1);
@@ -201,8 +203,6 @@ test("opt-in checks relevance before charges or tasks and scopes three-message c
     for (const text of [
       "ordinary conversation",
       "I mentioned laylo yesterday",
-      "laylo was mentioned yesterday",
-      "@test_bot was offline yesterday",
     ]) {
       await receive(text);
       deepStrictEqual(
@@ -216,6 +216,29 @@ test("opt-in checks relevance before charges or tasks and scopes three-message c
       await database.selectFrom("tasks").selectAll().execute(),
       tasksBefore,
     );
+    // Prefix matches bypass even a negative decision and retain their model.
+    route = "large";
+    for (const text of [
+      "laylo hello",
+      "  ЛЕЙЛО: hello",
+      "@test_bot hello",
+      "tofu laylo hello",
+      "laylo was mentioned yesterday",
+      "@test_bot was offline yesterday",
+    ]) {
+      await receive(text);
+      deepStrictEqual(
+        requests.map((r) => r.model),
+        ["test-small"],
+      );
+      strictEqual(scrolls.length, 0);
+    }
+    await receive(`${trollAgent.name[0]} hello`);
+    deepStrictEqual(
+      requests.map((r) => r.model),
+      ["test-troll"],
+    );
+    strictEqual(scrolls.length, 0);
     shouldRespond = true;
     route = "small";
     await receive("translate this");
@@ -223,19 +246,6 @@ test("opt-in checks relevance before charges or tasks and scopes three-message c
       requests.map((r) => r.model),
       ["test-router", "test-small"],
     );
-    for (const text of [
-      "laylo hello",
-      "  ЛЕЙЛО: hello",
-      "@test_bot hello",
-      "tofu laylo hello",
-    ]) {
-      await receive(text);
-      deepStrictEqual(
-        requests.map((r) => r.model),
-        ["test-router", "test-small"],
-      );
-      strictEqual(scrolls.length, 1);
-    }
     await receive("ordinary", { ...chat, id: -200 });
     strictEqual(requests.length, 0);
     await receive("/unknown");
@@ -298,8 +308,14 @@ test("router enforces its verdict and reports tokens without exposing internal o
     strictEqual(body.store, false);
     strictEqual(body.text.format.strict, true);
     ok(body.instructions.includes('agent named "laylo", "лейло", "@test_bot"'));
-    ok(body.instructions.includes("never respond if name is barely mentioned"));
+    ok(body.instructions.includes("serious news post"));
+    ok(body.instructions.includes("public figure or popular person"));
+    ok(body.instructions.includes("strong statement or accusation"));
+    ok(!body.instructions.includes("When uncertain whether to intervene"));
+    ok(!body.instructions.includes("No explanation or additional fields"));
+    ok(!body.instructions.includes("Respond with JSON exactly"));
     deepStrictEqual(body.text.format.schema.required, ["respond", "model"]);
+    strictEqual(body.text.format.schema.additionalProperties, false);
     return response(output, ++calls, status);
   }) as typeof fetch;
   const options = {

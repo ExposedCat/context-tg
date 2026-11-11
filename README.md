@@ -27,10 +27,12 @@ In `/settings`, **Smart replies (automatic relevance and model selection)** is o
 by default. Chat administrators can enable it in groups; users can enable it in
 their private chat. With a router deployment configured, it evaluates whether the
 agent should respond before generating an answer. Research needs, missing
-information, challenged claims requiring fact-checking, and direct agent requests
-can warrant a reply; ordinary conversation and incidental name mentions do not.
-Commands keep their existing handlers. Name-prefixed messages also pass the
-relevance check; approved requests retain the explicitly named agent's identity.
+information, challenged claims requiring fact-checking, serious news posts,
+information about public figures or popular people, strong statements or
+accusations, and direct agent requests can warrant a reply. Ordinary conversation
+and incidental name mentions do not. Commands keep their existing handlers.
+Messages starting with a matching agent name or bot username bypass the router
+entirely and retain their existing agent and model selection.
 
 Each routing call receives the current message and up to two earlier indexed
 messages from the same chat/topic, oldest first, along with the configured agent
@@ -38,7 +40,8 @@ names and bot username. It returns either `respond=false, model=null`, or
 `respond=true` with `small` or `large` (`large` uses the `big` deployment).
 Declined messages create no response task and spend no request or answer credits.
 Missing history falls back to the current message; a failed or invalid router
-verdict produces no reply. Existing quotas and response cancellation still apply. Periodic proactive
+verdict produces no reply. Structured outputs with a strict JSON schema enforce
+the result format. Existing quotas and response cancellation still apply. Periodic proactive
 and trolling responses are suppressed while this mode is active to avoid a
 second automatic reply. An unconfigured router leaves normal triggering intact.
 

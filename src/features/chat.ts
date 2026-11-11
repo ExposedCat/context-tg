@@ -2182,7 +2182,10 @@ async function handleChatRequest(
   const toolBudget = new LlmToolBudget();
   const reply = options.reply;
   let routedModel: AgentDefinition["MODEL"] | undefined;
-  if (options.routeModel) {
+  if (
+    options.routeModel &&
+    !resolveMessageAgentTrigger(text, ctx.me.username)
+  ) {
     if (!(await hasUsageRemaining(ctx.database, chatId, ctx.from?.id))) return;
     try {
       let recent: MessageMetadata[] = [];
@@ -3234,7 +3237,8 @@ chatComposer.on("message", async (ctx, next) => {
   }
 
   await handleChatRequest(ctx, message, requestText, {
-    silentQuota: routerEnabled,
+    silentQuota:
+      routerEnabled && !addressed && !isDirectBotReply && !privateChat,
     reply,
     replyContext,
     thread,
