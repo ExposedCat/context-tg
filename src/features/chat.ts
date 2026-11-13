@@ -279,6 +279,7 @@ type GuestResponseDelivery = {
 
 type BotReaction = "🤔";
 
+const logDebug = createDebug("app:chat:debug");
 const logError = createDebug("app:chat:error");
 
 export const chatComposer = new Composer<Context>();
@@ -767,23 +768,8 @@ function selectNormalMediaGroupMessage(
   privateChat: boolean,
   routerEnabled = false,
 ): TextMessage | undefined {
-  if (routerEnabled) {
-    const eligible = messages.filter((message) => {
-      const text = getMessageText(message);
-      return (
-        !startsWithCommandPrefix(text) &&
-        ((text && referencesMessageAgent(text, ownUsername)) ||
-          isForwardedMessage(message))
-      );
-    });
-    return (
-      eligible.find((message) => getMessageText(message)?.trim()) ??
-      eligible.find(hasImageAttachments)
-    );
-  }
-
   const groupHasImages = hasMessagesImageAttachments(messages);
-  return messages.find((message) => {
+  const normalMessage = messages.find((message) => {
     const text = getMessageText(message);
     const reply = getActualReply(message);
     const addressed = text ? isAddressed(text, ownUsername) : false;
@@ -795,6 +781,21 @@ function selectNormalMediaGroupMessage(
       (addressed || directReply || privateChat)
     );
   });
+  if (normalMessage || !routerEnabled) return normalMessage;
+
+  // Smart replies add triggers after ordinary conversation handling.
+  const eligible = messages.filter((message) => {
+    const text = getMessageText(message);
+    return (
+      !startsWithCommandPrefix(text) &&
+      ((text && referencesMessageAgent(text, ownUsername)) ||
+        isForwardedMessage(message))
+    );
+  });
+  return (
+    eligible.find((message) => getMessageText(message)?.trim()) ??
+    eligible.find(hasImageAttachments)
+  );
 }
 
 function isAddressed(text: string, ownUsername: string): boolean {
@@ -2329,16 +2330,24 @@ async function handleChatRequest(
           ),
         },
       );
+      logDebug("Model routing decision", {
+        chatId,
+        messageId: message.message_id,
+        ...decision,
+      });
       if (!decision.respond) return;
-      // Explicit specialized agents retain their configured deployment,
-      // but their prefix no longer bypasses relevance checking.
+      // Direct name-prefixed requests use the ordinary agent path instead.
       if (!trigger || trigger.agent.id === normalAgent.id)
         routedModel =
           decision.model === "large"
             ? LLM_DEPLOYMENTS.big
             : LLM_DEPLOYMENTS.small;
     } catch (error) {
-      logError("Model routing failed; skipping response", { error });
+      logError("Model routing failed; skipping response", {
+        chatId,
+        messageId: message.message_id,
+        error,
+      });
       return;
     }
   }
@@ -3334,6 +3343,9 @@ chatComposer.on("message", async (ctx, next) => {
   const replyContext = getReplyContext(message, reply);
   const isDirectBotReply = isDirectReplyToBot(reply, ctx.me.id);
   const addressed = text ? isAddressed(text, ctx.me.username) : false;
+  // Smart replies supplement name invocations, bot replies, and private chats.
+  const routeModel =
+    routerEnabled && !addressed && !isDirectBotReply && !privateChat;
   let thread = reply
     ? ctx.chat.type !== "private" &&
       (reply.guest_bot_caller_user || reply.guest_bot_caller_chat)
@@ -3363,8 +3375,9 @@ chatComposer.on("message", async (ctx, next) => {
     (!text?.trim() &&
       !(
         hasMessagesImageAttachments(mediaGroupMessages) &&
-        (((isDirectBotReply || privateChat) && !routerEnabled) ||
-          (routerEnabled && isForwardedMessage(message)))
+        (isDirectBotReply ||
+          privateChat ||
+          (routeModel && isForwardedMessage(message)))
       )) ||
     startsWithCommandPrefix(text) ||
     (!addressed && !isDirectBotReply && !privateChat && !routerEnabled)
@@ -3375,8 +3388,7 @@ chatComposer.on("message", async (ctx, next) => {
 
   const respond = () =>
     handleChatRequest(ctx, message, text ?? "", {
-      silentQuota:
-        routerEnabled && !addressed && !isDirectBotReply && !privateChat,
+      silentQuota: routeModel,
       reply,
       replyContext,
       thread,
@@ -3387,10 +3399,10 @@ chatComposer.on("message", async (ctx, next) => {
         !thread &&
         Boolean(text?.trim()),
       imageMessages: mediaGroupMessages,
-      routeModel: routerEnabled,
+      routeModel,
       onUnhandledError: next,
     });
-  if (routerEnabled && isForwardedMessage(message)) {
+  if (routeModel && isForwardedMessage(message)) {
     await withForwardReplyLimit(ctx.database, ctx.chat.id, respond);
   } else {
     await respond();

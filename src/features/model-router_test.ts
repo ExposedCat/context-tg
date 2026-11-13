@@ -53,7 +53,7 @@ function response(text: string, id: number, status = "completed") {
   });
 }
 
-test("Smart replies admits only current name mentions or rate-limited forwards before charging", async () => {
+test("direct invocations bypass Smart replies while other mentions and forwards are filtered", async () => {
   const database = await initDatabase()();
   const originalFetch = globalThis.fetch;
   const previous = Object.fromEntries(
@@ -79,6 +79,7 @@ test("Smart replies admits only current name mentions or rate-limited forwards b
   let sent = 0,
     passed = 0,
     serial = 0,
+    responseSerial = 0,
     route = "large",
     shouldRespond = true;
   const requests: Array<{
@@ -141,7 +142,7 @@ test("Smart replies admits only current name mentions or rate-limited forwards b
             model: shouldRespond ? route : null,
           })
         : "Answer",
-      requests.length,
+      ++responseSerial,
     );
   }) as typeof fetch;
   const receive = async (
@@ -185,7 +186,7 @@ test("Smart replies admits only current name mentions or rate-limited forwards b
     strictEqual(passed, 1);
     strictEqual(requests.length, 0);
     await persistChatRouterEnabled(database, chat.id, true);
-    const ctx = await receive("laylo, please compare these");
+    const ctx = await receive("please compare these, laylo");
     ok(ctx.message);
     deepStrictEqual(
       requests.map((r) => r.model),
@@ -194,7 +195,7 @@ test("Smart replies admits only current name mentions or rate-limited forwards b
     deepStrictEqual(requests[0].reasoning, { effort: "none" });
     const messages = JSON.parse(requests[0].input[0].content);
     strictEqual(messages.length, 1);
-    ok(messages[0].includes("laylo, please compare these"));
+    ok(messages[0].includes("please compare these, laylo"));
     ok(
       requests[1].instructions.includes(
         `The sole current request and response target is message ${ctx.message.message_id}`,
@@ -231,25 +232,6 @@ test("Smart replies admits only current name mentions or rate-limited forwards b
       await database.selectFrom("tasks").selectAll().execute(),
       tasksBefore,
     );
-    // Prefixes must pass relevance checking too, including specialized agents.
-    route = "large";
-    for (const text of [
-      "laylo hello",
-      "  ЛЕЙЛО: hello",
-      "@test_bot hello",
-      "tofu laylo hello",
-      "laylo was mentioned yesterday",
-      "@test_bot was offline yesterday",
-      "лейло бы точно смог ответить",
-      `${trollAgent.name[0]} hello`,
-    ]) {
-      await receive(text);
-      deepStrictEqual(
-        requests.map((r) => r.model),
-        ["test-router"],
-      );
-      strictEqual(sent, beforeAutomatic);
-    }
     // No name in the latest message: do not ask the model, even if it would
     // approve a reply or earlier context contains an agent request.
     shouldRespond = true;
@@ -273,35 +255,104 @@ test("Smart replies admits only current name mentions or rate-limited forwards b
       strictEqual(scrolls.length, 0);
       strictEqual(sent, beforeAutomatic);
     }
-    // An uncaptioned image or album must never create a synthetic request,
-    // including when the photo replies directly to the bot.
-    for (const reply_to_message of [
-      undefined,
-      {
-        message_id: 11,
-        date: 1,
-        chat,
-        from: bot,
-        text: "Earlier bot reply",
-      },
-    ]) {
-      await receive(undefined, chat, true, {
-        photo: [{ file_id: "photo", width: 10, height: 10 }],
-        reply_to_message,
-      });
-      strictEqual(requests.length, 0);
-      strictEqual(scrolls.length, 0);
-      strictEqual(sent, beforeAutomatic);
-    }
+    // An unaddressed group photo is not an additional Smart replies trigger.
+    await receive(undefined, chat, true, {
+      photo: [{ file_id: "photo", width: 10, height: 10 }],
+    });
+    strictEqual(requests.length, 0);
+    strictEqual(scrolls.length, 0);
+    strictEqual(sent, beforeAutomatic);
     deepStrictEqual(await getUsageStatus(database, chat.id), usageBefore);
     deepStrictEqual(
       await database.selectFrom("tasks").selectAll().execute(),
       tasksBefore,
     );
+    // Direct prefixes must answer even when the router would decline or fail.
+    shouldRespond = false;
+    route = "invalid";
+    for (const [text, model] of [
+      ["лейло грабзука или слингшот в коркипере", "test-small"],
+      ["laylo hello", "test-small"],
+      ["  ЛЕЙЛО: hello", "test-small"],
+      ["@test_bot hello", "test-small"],
+      ["tofu laylo hello", "test-small"],
+      ["laylo was mentioned yesterday", "test-small"],
+      ["@test_bot was offline yesterday", "test-small"],
+      ["лейло бы точно смог ответить", "test-small"],
+      [`${trollAgent.name[0]} hello`, "test-troll"],
+    ]) {
+      const sentBeforeDirect = sent;
+      const direct = await receive(text);
+      ok(direct.message);
+      deepStrictEqual(
+        requests.map((r) => r.model),
+        [model],
+      );
+      strictEqual(sent, sentBeforeDirect + 1);
+      strictEqual(replyTargets.at(-1), direct.message?.message_id);
+      strictEqual(
+        (
+          await database
+            .selectFrom("tasks")
+            .select("status")
+            .where("chat_id", "=", chat.id)
+            .where("message_id", "=", direct.message.message_id)
+            .executeTakeFirstOrThrow()
+        ).status,
+        "finished",
+      );
+    }
+    // The reported follow-up must continue the saved normal conversation,
+    // even when the Smart replies router would decline or return invalid JSON.
+    const root = await receive(
+      "лейло можно в коркипере шаман сет собрать или только шапка",
+    );
+    ok(root.message);
+    const rootThread = await database
+      .selectFrom("threads")
+      .selectAll()
+      .where("chat_id", "=", chat.id)
+      .where("message_id", "=", root.message.message_id)
+      .executeTakeFirstOrThrow();
+    const followup = await receive("a waypoints можно крафтить", chat, true, {
+      reply_to_message: {
+        message_id: 1000 + sent,
+        date: 1,
+        chat,
+        from: bot,
+        text: "Только шапка — череп шамана (Shaman Skull).",
+      },
+    });
+    ok(followup.message);
+    deepStrictEqual(
+      requests.map((r) => r.model),
+      ["test-small"],
+    );
+    strictEqual(replyTargets.at(-1), followup.message.message_id);
+    const followupThread = await database
+      .selectFrom("threads")
+      .selectAll()
+      .where("chat_id", "=", chat.id)
+      .where("message_id", "=", followup.message.message_id)
+      .executeTakeFirstOrThrow();
+    strictEqual(followupThread.thread_id, rootThread.thread_id);
+    strictEqual(followupThread.agent_name, "лейло");
+    const history = await database
+      .selectFrom("llm_chat_responses")
+      .selectAll()
+      .where("response_id", "=", followupThread.response_id)
+      .executeTakeFirstOrThrow();
+    strictEqual(history.previous_response_id, rootThread.response_id);
+    ok(JSON.stringify(requests[0].input).includes("шаман сет собрать"));
+    ok(
+      JSON.stringify(requests[0].input).includes("a waypoints можно крафтить"),
+    );
+    shouldRespond = true;
+    route = "large";
     await receive(`${trollAgent.name[0]}, explain this`);
     deepStrictEqual(
       requests.map((r) => r.model),
-      ["test-router", "test-troll"],
+      ["test-troll"],
     );
     route = "small";
     await receive("translate this, laylo");
@@ -317,14 +368,14 @@ test("Smart replies admits only current name mentions or rate-limited forwards b
     strictEqual(scrolls.length, 0);
     route = "invalid";
     const sentBeforeInvalid = sent;
-    await receive("laylo, fallback");
+    await receive("fallback, laylo");
     deepStrictEqual(
       requests.map((r) => r.model),
       ["test-router"],
     );
     strictEqual(sent, sentBeforeInvalid);
     route = "small";
-    await receive("laylo, explain this");
+    await receive("explain this, laylo");
     strictEqual(requests.at(-1)?.model, "test-small");
     strictEqual(JSON.parse(requests[0].input[0].content).length, 1);
     await receive("Переведи этот текст", chat, true, {
@@ -336,8 +387,11 @@ test("Smart replies admits only current name mentions or rate-limited forwards b
         text: "Text to translate",
       },
     });
-    strictEqual(requests.length, 0);
-    await receive("laylo, переведи этот текст", chat, true, {
+    deepStrictEqual(
+      requests.map((r) => r.model),
+      ["test-small"],
+    );
+    await receive("переведи этот текст, laylo", chat, true, {
       reply_to_message: {
         message_id: 12,
         date: 1,
@@ -346,12 +400,14 @@ test("Smart replies admits only current name mentions or rate-limited forwards b
         text: "Text to translate",
       },
     });
-    strictEqual(requests.length, 2);
-    const replyInput = JSON.parse(requests[0].input[0].content).at(-1);
-    ok(replyInput.includes('<in_reply_to_message id="12"'));
-    ok(replyInput.includes('sender_id="42"'));
+    deepStrictEqual(
+      requests.map((r) => r.model),
+      ["test-small"],
+    );
+    const replyInput = JSON.stringify(requests[0].input);
+    ok(replyInput.includes('in_reply_to_message id=\\"12\\"'));
+    ok(replyInput.includes('sender_id=\\"42\\"'));
     ok(replyInput.includes("Text to translate"));
-    ok(requests[0].instructions.includes("forwarded_post=false"));
     await persistChatRouterEnabled(database, 1, true);
     await receive(
       "Напиши функцию сортировки на Python",
@@ -362,7 +418,10 @@ test("Smart replies admits only current name mentions or rate-limited forwards b
       },
       false,
     );
-    strictEqual(requests.length, 0);
+    deepStrictEqual(
+      requests.map((r) => r.model),
+      ["test-small"],
+    );
 
     // Every forward is eligible without a name, but only one router attempt
     // may run for a chat's burst, even across topics and when it is declined.
@@ -374,7 +433,7 @@ test("Smart replies admits only current name mentions or rate-limited forwards b
       await Promise.all(
         Array.from({ length: 10 }, (_, index) =>
           receive(
-            index === 1 ? "laylo, explain this post" : "A forwarded post",
+            index === 1 ? "explain this post, laylo" : "A forwarded post",
             forwardChat,
             true,
             {
@@ -415,10 +474,10 @@ test("Smart replies admits only current name mentions or rate-limited forwards b
       await receive("laylo, answer this", forwardChat);
       deepStrictEqual(
         requests.map((request) => request.model),
-        ["test-router", "test-small"],
+        ["test-small"],
       );
-      // A forward mentioning the name still cannot bypass the cooldown.
-      await receive("laylo, explain this post", forwardChat, true, {
+      // Automatic forward replies remain blocked by the cooldown.
+      await receive("explain this post, laylo", forwardChat, true, {
         forward_origin: {
           type: "hidden_user",
           sender_user_name: "Hidden",
@@ -426,6 +485,20 @@ test("Smart replies admits only current name mentions or rate-limited forwards b
         },
       });
       strictEqual(requests.length, 0);
+      // An explicit prefix still invokes the agent during that cooldown.
+      const sentBeforeDirect = sent;
+      await receive("laylo, explain this post", forwardChat, true, {
+        forward_origin: {
+          type: "hidden_user",
+          sender_user_name: "Hidden",
+          date: 1,
+        },
+      });
+      deepStrictEqual(
+        requests.map((r) => r.model),
+        ["test-small"],
+      );
+      strictEqual(sent, sentBeforeDirect + 1);
     }
     const imageForwardChat = { ...chat, id: -302 };
     await persistChatRouterEnabled(database, imageForwardChat.id, true);
@@ -508,7 +581,7 @@ test("Smart replies admits only current name mentions or rate-limited forwards b
     await receive("laylo, explain this", chat, false);
     deepStrictEqual(
       requests.map((r) => r.model),
-      ["test-router", "test-small"],
+      ["test-small"],
     );
   } finally {
     globalThis.fetch = originalFetch;

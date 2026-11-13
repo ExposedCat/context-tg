@@ -57,8 +57,8 @@ export function resolveMessageAgent(
   return resolveMessageAgentTrigger(text, ownUsername)?.agent;
 }
 
-// This only establishes a possible addressee. The relevance router must still
-// distinguish a request to the agent from a quote or discussion about it.
+// Mentions away from the leading name need relevance checking to distinguish
+// requests from quotes or discussion about the agent.
 export function referencesMessageAgent(
   text: string,
   ownUsername: string,

@@ -63,15 +63,18 @@ always uses reasoning `none`, independently of the chat's effort settings.
 
 In `/settings`, **Smart replies (automatic relevance and model selection)** is off
 by default. Chat administrators can enable it in groups; users can enable it in
-their private chat. With a router deployment configured, only these messages
-are eligible for Smart replies:
+their private chat. Smart replies add response triggers to the normal conversation
+flow. Messages starting with a configured agent name or the bot username, replies
+to the bot, and private-chat messages always use the normal agent and conversation
+history, without Smart replies relevance checks or automatic-forward cooldowns.
+With a router deployment configured, these other group messages are eligible for
+Smart replies:
 
 - The current message's text or caption mentions a configured agent name or the
   bot username anywhere (case-insensitive, whole-name matching).
 - Telegram identifies the current message as a forwarded post.
 
-This applies in private chats and direct replies too: neither bypasses the
-name-or-forward filter. Names in earlier messages or a reply parent do not count.
+For this additional flow, names in earlier messages or a reply parent do not count.
 Commands keep their existing handlers. When Smart replies is off or no router is
 configured, ordinary triggering retains its existing behavior.
 
@@ -79,17 +82,23 @@ Forwards share one persisted cooldown per chat, across all senders and topics.
 The first forward reserves the slot **before** routing; the rest of a burst are
 dropped, never queued. The slot stays occupied throughout processing and for
 60 seconds after completion, including declined or failed attempts. Ten forwards
-at once therefore produce zero or one response. A forwarded post mentioning an
-agent name still uses this limit. Ordinary name mentions do not consume it.
+at once therefore produce zero or one automatic response. A forwarded post
+mentioning an agent name away from the start still uses this limit. Direct
+invocations, bot replies, private chats, and ordinary name mentions do not consume it.
 
 Eligibility does not guarantee a reply. For ordinary name mentions, the router
 requires an unambiguous request directed to the agent. For forwarded posts, it
 may contribute a substantive explanation or fact-check without an explicit
 request; empty content, memes, ads, and posts without a useful contribution are
-skipped. Uncertainty means silence. Name prefixes do not bypass relevance
-checking. Explicit specialized agents retain their configured model after
-passing the check. Missing captions remain empty in all modes; the application
-never invents an image-analysis request.
+skipped. Uncertainty means silence for Smart replies. Normal conversation triggers
+bypass this check, including specialized agents. Missing captions
+remain empty in all modes; the application never invents an image-analysis request.
+Short conversational questions also qualify: an addressed "X or Y in this game"
+comparison needs no question mark or explicit "which is better". Slang, typos,
+and unfamiliar item names do not justify silence; the answering agent can research
+or ask for clarification. Comparison and uncertain domain questions use the large
+model. Router decisions log the chat/message IDs, response decision, and selected
+model without logging message text.
 
 Each routing call receives only the current message, its reply metadata/excerpt,
 and the configured agent names and bot username. Earlier messages cannot supply

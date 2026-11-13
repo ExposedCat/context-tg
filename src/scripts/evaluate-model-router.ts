@@ -10,6 +10,7 @@ type EvaluationCase = {
   reply?: { sender: string; text: string };
   forwarded?: boolean;
   respond: boolean;
+  model?: "small" | "large";
 };
 
 const cases: EvaluationCase[] = [
@@ -120,6 +121,67 @@ const cases: EvaluationCase[] = [
     respond: true,
   },
   {
+    name: "reported shorthand comparison",
+    current: "лейло грабзука или слингшот в коркипере",
+    respond: true,
+    model: "large",
+  },
+  {
+    name: "shorthand comparison with suffix address",
+    current: "грабзука или слингшот в коркипере, лейло",
+    respond: true,
+    model: "large",
+  },
+  {
+    name: "shorthand comparison with middle address",
+    current: "а как думаешь лейло грабзука или слингшот в коркипере",
+    respond: true,
+    model: "large",
+  },
+  {
+    name: "unfamiliar terms with suffix address",
+    current: "зырпушка или флимбомёт для босса в игре, лейло",
+    respond: true,
+    model: "large",
+  },
+  {
+    name: "English comparison without question mark",
+    current: "grabzooka or slingshot in core keeper, laylo",
+    respond: true,
+    model: "large",
+  },
+  {
+    name: "informal factual question",
+    current: "а сколько хп у босса в коркипере, лейло",
+    respond: true,
+  },
+  {
+    name: "comparison addressed to another person",
+    current: "Даня, грабзука или слингшот? лейло вчера советовал грабзуку",
+    respond: false,
+  },
+  {
+    name: "comparison quoted as someone else's request",
+    current:
+      "Вчера спросил «лейло грабзука или слингшот в коркипере», а потом сам разобрался",
+    respond: false,
+  },
+  {
+    name: "answer uncertainty about the bot is not a request",
+    current: "лейло наверное не знает что такое грабзука или слингшот",
+    respond: false,
+  },
+  {
+    name: "unclear acknowledgement with suffix address",
+    current: "ну вот так, лейло",
+    respond: false,
+  },
+  {
+    name: "unaddressed comparison",
+    current: "грабзука или слингшот в коркипере",
+    respond: false,
+  },
+  {
     name: "username request",
     current: "@test_bot, сравни эти два подхода",
     respond: true,
@@ -164,6 +226,7 @@ setLlmDeploymentName("router", deployment);
 
 let falsePositives = 0;
 let missedRequests = 0;
+let wrongModels = 0;
 let errors = 0;
 const checks = cases.flatMap((scenario) =>
   Array.from({ length: repetitions }, (_, repetition) => async () => {
@@ -188,17 +251,22 @@ const checks = cases.flatMap((scenario) =>
         ["laylo", "лейло", "@test_bot"],
         { forwarded: scenario.forwarded },
       );
-      const passed = verdict.respond === scenario.respond;
-      if (!passed) {
+      const relevancePassed = verdict.respond === scenario.respond;
+      const modelPassed =
+        scenario.model === undefined || verdict.model === scenario.model;
+      const passed = relevancePassed && modelPassed;
+      if (!relevancePassed) {
         if (verdict.respond) falsePositives++;
         else missedRequests++;
       }
+      if (verdict.respond && !modelPassed) wrongModels++;
       console.log(
         JSON.stringify({
           case: scenario.name,
           repetition: repetition + 1,
           passed,
           expected: scenario.respond,
+          expectedModel: scenario.model,
           verdict,
         }),
       );
@@ -222,7 +290,9 @@ console.log(
     checks: checks.length,
     falsePositives,
     missedRequests,
+    wrongModels,
     errors,
   }),
 );
-if (falsePositives || missedRequests || errors) process.exitCode = 1;
+if (falsePositives || missedRequests || wrongModels || errors)
+  process.exitCode = 1;

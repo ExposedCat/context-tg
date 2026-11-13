@@ -502,9 +502,10 @@ test("trigger aliases persist through replies and update on explicit triggers", 
   }
 });
 
-test("group replies retain their parent and history scope while forum topics stay isolated", async () => {
+test("group replies retain their parent and history scope with Smart replies enabled", async () => {
   const { getThread } = await import("./threads.ts");
   const { setLlmDeploymentName } = await import("./llm-deployments.ts");
+  const { persistChatRouterEnabled } = await import("./llm-models.ts");
   const database = await initDatabase()();
   const originalFetch = globalThis.fetch;
   const chat = { id: -1, type: "supergroup", title: "Test" } as const;
@@ -605,6 +606,8 @@ test("group replies retain their parent and history scope while forum topics sta
 
   try {
     setLlmDeploymentName("small", "test-model");
+    setLlmDeploymentName("router", "must-not-be-called");
+    await persistChatRouterEnabled(database, chat.id, true);
     const cases = [
       {
         id: 20,
@@ -762,16 +765,18 @@ test("group replies retain their parent and history scope while forum topics sta
   } finally {
     globalThis.fetch = originalFetch;
     setLlmDeploymentName("small", "");
+    setLlmDeploymentName("router", "");
     await database.destroy();
   }
 });
 
-test("DMs continue without mentions with or without topic IDs and preserve explicit reply branches", async () => {
+test("DMs preserve normal continuation, topics, photos, and reply branches with Smart replies enabled", async () => {
   const { createPrivateTopicMiddleware } = await import("./private-topics.ts");
   const resolvePrivateTopic = createPrivateTopicMiddleware();
   const { getThread, migrateThreads } = await import("./threads.ts");
   const { maybeSendProactiveAgentResponse } = await import("./chat.ts");
   const { setLlmDeploymentName } = await import("./llm-deployments.ts");
+  const { persistChatRouterEnabled } = await import("./llm-models.ts");
   const database = await initDatabase()();
   const originalFetch = globalThis.fetch;
   const requests: Array<{ input: unknown; instructions: string }> = [];
@@ -897,6 +902,8 @@ test("DMs continue without mentions with or without topic IDs and preserve expli
   try {
     setLlmDeploymentName("small", "test-model");
     setLlmDeploymentName("openminded", "test-troll-model");
+    setLlmDeploymentName("router", "must-not-be-called");
+    await persistChatRouterEnabled(database, chat.id, true);
     const cases = [
       {
         id: 10,
@@ -1155,6 +1162,7 @@ test("DMs continue without mentions with or without topic IDs and preserve expli
     globalThis.fetch = originalFetch;
     setLlmDeploymentName("small", "");
     setLlmDeploymentName("openminded", "");
+    setLlmDeploymentName("router", "");
     await database.destroy();
   }
 });
