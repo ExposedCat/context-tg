@@ -151,6 +151,38 @@ function budgetTestAnswer(id: string) {
   ]);
 }
 
+test("image input with no caption never invents a user request", async () => {
+  const originalFetch = globalThis.fetch;
+  setLlmDeploymentName("small", "test-model");
+  globalThis.fetch = (async (_url, init) => {
+    const body = JSON.parse(String(init?.body));
+    deepStrictEqual(body.input[0].content, [
+      {
+        type: "input_text",
+        text: '<events>\n<message sender="User">\n  <content></content>\n</message>\n</events>',
+      },
+      {
+        type: "input_image",
+        image_url: "data:image/png;base64,AA==",
+        detail: "auto",
+      },
+    ]);
+    return Response.json(budgetTestAnswer("resp_uncaptioned_image"));
+  }) as typeof fetch;
+  try {
+    await requestLlm(
+      { text: "", images: [{ image_url: "data:image/png;base64,AA==" }] },
+      [],
+      undefined,
+      {},
+      "Keep the attachment as provided.",
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+    setLlmDeploymentName("small", "");
+  }
+});
+
 test("large instructions and replayed thread context are not rejected by an application token cap", async () => {
   setLlmDeploymentName("small", "budget-test");
   const { saveLlmResponseInputItems } = await import("./llm-chat-responses.ts");

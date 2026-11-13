@@ -4,11 +4,31 @@ import {
   AGENTS,
   guestAgent,
   normalAgent,
+  referencesMessageAgent,
   resolveMessageAgent,
   resolveMessageAgentTrigger,
   stripMessageAgentName,
 } from "./index.ts";
 import type { AgentDefinition } from "./types.ts";
+
+test("possible agent addresses use complete aliases and Unicode word boundaries", () => {
+  for (const text of [
+    "ЛЕЙЛО, помоги",
+    "Что думаешь, laylo?",
+    "@TEST_BOT, translate",
+    "думаю лейло бы смог",
+  ])
+    strictEqual(referencesMessageAgent(text, "test_bot"), true, text);
+  for (const text of [
+    "я не шучу",
+    "ant laylope",
+    "лейлоша",
+    "@test_bot_other",
+    "@other_laylo",
+    "@laylo",
+  ])
+    strictEqual(referencesMessageAgent(text, "test_bot"), false, text);
+});
 
 test("all responding agents reject meaningless token-draining requests", () => {
   for (const agent of AGENTS) {

@@ -63,25 +63,50 @@ always uses reasoning `none`, independently of the chat's effort settings.
 
 In `/settings`, **Smart replies (automatic relevance and model selection)** is off
 by default. Chat administrators can enable it in groups; users can enable it in
-their private chat. With a router deployment configured, it evaluates whether the
-agent should respond before generating an answer. Research needs, missing
-information, challenged claims requiring fact-checking, serious news posts,
-information about public figures or popular people, strong statements or
-accusations, and direct agent requests can warrant a reply. Ordinary conversation
-and incidental name mentions do not. Commands keep their existing handlers.
-Messages starting with a matching agent name or bot username bypass the router
-entirely and retain their existing agent and model selection.
+their private chat. With a router deployment configured, only these messages
+are eligible for Smart replies:
 
-Each routing call receives the current message and up to two earlier indexed
-messages from the same chat/topic, oldest first, along with the configured agent
-names and bot username. It returns either `respond=false, model=null`, or
-`respond=true` with `small` or `large` (`large` uses the `big` deployment).
-Declined messages create no response task and spend no request or answer credits.
-Missing history falls back to the current message; a failed or invalid router
-verdict produces no reply. Structured outputs with a strict JSON schema enforce
-the result format. Existing quotas and response cancellation still apply. Periodic proactive
-and trolling responses are suppressed while this mode is active to avoid a
-second automatic reply. An unconfigured router leaves normal triggering intact.
+- The current message's text or caption mentions a configured agent name or the
+  bot username anywhere (case-insensitive, whole-name matching).
+- Telegram identifies the current message as a forwarded post.
+
+This applies in private chats and direct replies too: neither bypasses the
+name-or-forward filter. Names in earlier messages or a reply parent do not count.
+Commands keep their existing handlers. When Smart replies is off or no router is
+configured, ordinary triggering retains its existing behavior.
+
+Forwards share one persisted cooldown per chat, across all senders and topics.
+The first forward reserves the slot **before** routing; the rest of a burst are
+dropped, never queued. The slot stays occupied throughout processing and for
+60 seconds after completion, including declined or failed attempts. Ten forwards
+at once therefore produce zero or one response. A forwarded post mentioning an
+agent name still uses this limit. Ordinary name mentions do not consume it.
+
+Eligibility does not guarantee a reply. For ordinary name mentions, the router
+requires an unambiguous request directed to the agent. For forwarded posts, it
+may contribute a substantive explanation or fact-check without an explicit
+request; empty content, memes, ads, and posts without a useful contribution are
+skipped. Uncertainty means silence. Name prefixes do not bypass relevance
+checking. Explicit specialized agents retain their configured model after
+passing the check. Missing captions remain empty in all modes; the application
+never invents an image-analysis request.
+
+Each routing call receives only the current message, its reply metadata/excerpt,
+and the configured agent names and bot username. Earlier messages cannot supply
+a trigger. Generation may read history to understand the current message, but
+answers only that message and keeps it as the reply target. The router returns
+`respond=false, model=null`, or `respond=true` with `small` or `large` (`large`
+uses the `big` deployment). Declined messages create no response task and spend
+no request or answer credits. A failed or invalid verdict produces no reply.
+Existing quotas and cancellation still apply. Periodic proactive and trolling
+responses are suppressed while Smart replies is active.
+
+Run the opt-in relevance evaluation against a configured endpoint with
+`bun src/scripts/evaluate-model-router.ts DEPLOYMENT_NAME [REPETITIONS]`.
+It makes live model calls using `.env`, reports false positives separately from
+missed requests, and never contacts Telegram or writes to the database. Unit
+tests cover concurrent forward bursts, declined attempts, slow processing,
+minute boundaries, per-chat isolation, and persistence across restarts offline.
 
 The ephemeral `/banish` command permanently suppresses proactive, automatic troll,
 and unsolicited Smart replies in the current forum topic (including General),

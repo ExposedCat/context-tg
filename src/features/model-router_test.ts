@@ -53,7 +53,7 @@ function response(text: string, id: number, status = "completed") {
   });
 }
 
-test("opt-in checks relevance before charges or tasks and scopes three-message context", async () => {
+test("Smart replies admits only current name mentions or rate-limited forwards before charging", async () => {
   const database = await initDatabase()();
   const originalFetch = globalThis.fetch;
   const previous = Object.fromEntries(
@@ -80,10 +80,11 @@ test("opt-in checks relevance before charges or tasks and scopes three-message c
     passed = 0,
     serial = 0,
     route = "large",
-    shouldRespond = true,
-    historyFails = false;
+    shouldRespond = true;
   const requests: Array<{
     model: string;
+    instructions: string;
+    tools?: Array<{ name: string }>;
     reasoning?: unknown;
     input: Array<{ content: string }>;
   }> = [];
@@ -91,19 +92,22 @@ test("opt-in checks relevance before charges or tasks and scopes three-message c
     limit: number;
     filter: { must: Array<{ is_empty?: { key: string } }> };
   }> = [];
+  const replyTargets: Array<number | undefined> = [];
   api.sendChatAction = async () => true;
-  api.sendRichMessage = async () => ({
-    message_id: 1000 + ++sent,
-    date: 1,
-    chat,
-    from: bot,
-    rich_message: { blocks: [{ type: "paragraph", text: "Answer" }] },
-  });
+  api.sendRichMessage = async (_chatId, _richMessage, options) => {
+    replyTargets.push(options?.reply_parameters?.message_id);
+    return {
+      message_id: 1000 + ++sent,
+      date: 1,
+      chat,
+      from: bot,
+      rich_message: { blocks: [{ type: "paragraph", text: "Answer" }] },
+    };
+  };
   globalThis.fetch = (async (input, init) => {
     const request = new Request(input, init);
     if (new URL(request.url).hostname === "qdrant.test") {
       if (request.url.endsWith("/points/scroll")) {
-        if (historyFails) throw new Error("History unavailable");
         const body = await request.json();
         scrolls.push(body);
         return Response.json({
@@ -119,6 +123,7 @@ test("opt-in checks relevance before charges or tasks and scopes three-message c
                 sender_id: 2,
                 date: "2026-11-11",
                 date_timestamp: id,
+                ...(id === 9 ? { reply_to_message_id: 8 } : {}),
               },
             })),
           },
@@ -139,7 +144,12 @@ test("opt-in checks relevance before charges or tasks and scopes three-message c
       requests.length,
     );
   }) as typeof fetch;
-  const receive = async (text: string, otherChat = chat, topic = true) => {
+  const receive = async (
+    text: string | undefined,
+    otherChat: NonNullable<Context["message"]>["chat"] = chat,
+    topic = true,
+    overrides: Record<string, unknown> = {},
+  ) => {
     requests.length = 0;
     scrolls.length = 0;
     const ctx = new GrammyContext(
@@ -152,6 +162,7 @@ test("opt-in checks relevance before charges or tasks and scopes three-message c
           chat: otherChat,
           text,
           ...(topic ? { is_topic_message: true, message_thread_id: 7 } : {}),
+          ...overrides,
         },
       },
       api,
@@ -174,7 +185,7 @@ test("opt-in checks relevance before charges or tasks and scopes three-message c
     strictEqual(passed, 1);
     strictEqual(requests.length, 0);
     await persistChatRouterEnabled(database, chat.id, true);
-    const ctx = await receive("please compare these");
+    const ctx = await receive("laylo, please compare these");
     ok(ctx.message);
     deepStrictEqual(
       requests.map((r) => r.model),
@@ -182,16 +193,18 @@ test("opt-in checks relevance before charges or tasks and scopes three-message c
     );
     deepStrictEqual(requests[0].reasoning, { effort: "none" });
     const messages = JSON.parse(requests[0].input[0].content);
-    strictEqual(messages.length, 3);
-    ok(messages[0].includes("earlier 8"));
-    ok(messages[1].includes("earlier 9"));
-    ok(messages[2].includes("please compare these"));
-    strictEqual(scrolls[0].limit, 2);
-    deepStrictEqual(scrolls[0].filter.must, [
-      { key: "chat_id", match: { value: chat.id } },
-      { key: "thread_id", match: { value: 7 } },
-      { key: "message_id", range: { lte: ctx.message.message_id - 1 } },
-    ]);
+    strictEqual(messages.length, 1);
+    ok(messages[0].includes("laylo, please compare these"));
+    ok(
+      requests[1].instructions.includes(
+        `The sole current request and response target is message ${ctx.message.message_id}`,
+      ),
+    );
+    ok(
+      !requests[1].tools?.some((tool) => tool.name === "set_reply_message_id"),
+    );
+    strictEqual(replyTargets.at(-1), ctx.message.message_id);
+    strictEqual(scrolls.length, 0);
     const beforeAutomatic = sent;
     await safelyMaybeSendAutomaticResponse(ctx, ctx.message, sender, chat.id);
     strictEqual(sent, beforeAutomatic);
@@ -202,8 +215,9 @@ test("opt-in checks relevance before charges or tasks and scopes three-message c
       .selectAll()
       .execute();
     for (const text of [
-      "ordinary conversation",
       "I mentioned laylo yesterday",
+      "как думаете лейло умный или нет",
+      "думаю лейло бы точно смог ответить",
     ]) {
       await receive(text);
       deepStrictEqual(
@@ -217,7 +231,7 @@ test("opt-in checks relevance before charges or tasks and scopes three-message c
       await database.selectFrom("tasks").selectAll().execute(),
       tasksBefore,
     );
-    // Prefix matches bypass even a negative decision and retain their model.
+    // Prefixes must pass relevance checking too, including specialized agents.
     route = "large";
     for (const text of [
       "laylo hello",
@@ -226,23 +240,71 @@ test("opt-in checks relevance before charges or tasks and scopes three-message c
       "tofu laylo hello",
       "laylo was mentioned yesterday",
       "@test_bot was offline yesterday",
+      "лейло бы точно смог ответить",
+      `${trollAgent.name[0]} hello`,
     ]) {
       await receive(text);
       deepStrictEqual(
         requests.map((r) => r.model),
-        ["test-small"],
+        ["test-router"],
       );
-      strictEqual(scrolls.length, 0);
+      strictEqual(sent, beforeAutomatic);
     }
-    await receive(`${trollAgent.name[0]} hello`);
+    // No name in the latest message: do not ask the model, even if it would
+    // approve a reply or earlier context contains an agent request.
+    shouldRespond = true;
+    for (const text of [
+      "ordinary conversation",
+      "я не шучу",
+      "тест",
+      "I see things which you do not",
+      "братаны кто знает это правда что сега спасла нвидию",
+    ]) {
+      await receive(text, chat, true, {
+        reply_to_message: {
+          message_id: 10,
+          date: 1,
+          from: { id: 3, is_bot: false, first_name: "Daniel" },
+          chat,
+          text: "laylo, answer this older question",
+        },
+      });
+      strictEqual(requests.length, 0);
+      strictEqual(scrolls.length, 0);
+      strictEqual(sent, beforeAutomatic);
+    }
+    // An uncaptioned image or album must never create a synthetic request,
+    // including when the photo replies directly to the bot.
+    for (const reply_to_message of [
+      undefined,
+      {
+        message_id: 11,
+        date: 1,
+        chat,
+        from: bot,
+        text: "Earlier bot reply",
+      },
+    ]) {
+      await receive(undefined, chat, true, {
+        photo: [{ file_id: "photo", width: 10, height: 10 }],
+        reply_to_message,
+      });
+      strictEqual(requests.length, 0);
+      strictEqual(scrolls.length, 0);
+      strictEqual(sent, beforeAutomatic);
+    }
+    deepStrictEqual(await getUsageStatus(database, chat.id), usageBefore);
+    deepStrictEqual(
+      await database.selectFrom("tasks").selectAll().execute(),
+      tasksBefore,
+    );
+    await receive(`${trollAgent.name[0]}, explain this`);
     deepStrictEqual(
       requests.map((r) => r.model),
-      ["test-troll"],
+      ["test-router", "test-troll"],
     );
-    strictEqual(scrolls.length, 0);
-    shouldRespond = true;
     route = "small";
-    await receive("translate this");
+    await receive("translate this, laylo");
     deepStrictEqual(
       requests.map((r) => r.model),
       ["test-router", "test-small"],
@@ -251,25 +313,171 @@ test("opt-in checks relevance before charges or tasks and scopes three-message c
     strictEqual(requests.length, 0);
     await receive("/unknown");
     strictEqual(requests.length, 0);
-    await receive("general topic", chat, false);
-    ok(
-      scrolls[0].filter.must.some(
-        (condition) => condition.is_empty?.key === "thread_id",
-      ),
-    );
+    await receive("laylo, explain this general topic", chat, false);
+    strictEqual(scrolls.length, 0);
     route = "invalid";
     const sentBeforeInvalid = sent;
-    await receive("fallback");
+    await receive("laylo, fallback");
     deepStrictEqual(
       requests.map((r) => r.model),
       ["test-router"],
     );
     strictEqual(sent, sentBeforeInvalid);
-    historyFails = true;
     route = "small";
-    await receive("history failed");
+    await receive("laylo, explain this");
     strictEqual(requests.at(-1)?.model, "test-small");
     strictEqual(JSON.parse(requests[0].input[0].content).length, 1);
+    await receive("Переведи этот текст", chat, true, {
+      reply_to_message: {
+        message_id: 12,
+        date: 1,
+        chat,
+        from: bot,
+        text: "Text to translate",
+      },
+    });
+    strictEqual(requests.length, 0);
+    await receive("laylo, переведи этот текст", chat, true, {
+      reply_to_message: {
+        message_id: 12,
+        date: 1,
+        chat,
+        from: bot,
+        text: "Text to translate",
+      },
+    });
+    strictEqual(requests.length, 2);
+    const replyInput = JSON.parse(requests[0].input[0].content).at(-1);
+    ok(replyInput.includes('<in_reply_to_message id="12"'));
+    ok(replyInput.includes('sender_id="42"'));
+    ok(replyInput.includes("Text to translate"));
+    ok(requests[0].instructions.includes("forwarded_post=false"));
+    await persistChatRouterEnabled(database, 1, true);
+    await receive(
+      "Напиши функцию сортировки на Python",
+      {
+        id: 1,
+        type: "private",
+        first_name: "User",
+      },
+      false,
+    );
+    strictEqual(requests.length, 0);
+
+    // Every forward is eligible without a name, but only one router attempt
+    // may run for a chat's burst, even across topics and when it is declined.
+    for (const allow of [false, true]) {
+      const forwardChat = { ...chat, id: allow ? -301 : -300 };
+      await persistChatRouterEnabled(database, forwardChat.id, true);
+      shouldRespond = allow;
+      const sentBeforeBurst = sent;
+      await Promise.all(
+        Array.from({ length: 10 }, (_, index) =>
+          receive(
+            index === 1 ? "laylo, explain this post" : "A forwarded post",
+            forwardChat,
+            true,
+            {
+              message_thread_id: 7 + index,
+              forward_origin: {
+                type: "channel",
+                chat: { id: -900, type: "channel", title: "News" },
+                message_id: index + 1,
+                date: 1,
+              },
+            },
+          ),
+        ),
+      );
+      strictEqual(
+        requests.filter((request) => request.model === "test-router").length,
+        1,
+      );
+      strictEqual(sent - sentBeforeBurst, allow ? 1 : 0);
+      ok(requests[0].instructions.includes("forwarded_post=true"));
+      // Quoted forwards and the word 'forwarded' are not forward metadata.
+      await receive("forwarded post", forwardChat, true, {
+        reply_to_message: {
+          message_id: 10,
+          chat: forwardChat,
+          date: 1,
+          from: sender,
+          forward_origin: {
+            type: "hidden_user",
+            sender_user_name: "Hidden",
+            date: 1,
+          },
+        },
+      });
+      strictEqual(requests.length, 0);
+      // Ordinary name mentions are independent of the forward cooldown.
+      shouldRespond = true;
+      await receive("laylo, answer this", forwardChat);
+      deepStrictEqual(
+        requests.map((request) => request.model),
+        ["test-router", "test-small"],
+      );
+      // A forward mentioning the name still cannot bypass the cooldown.
+      await receive("laylo, explain this post", forwardChat, true, {
+        forward_origin: {
+          type: "hidden_user",
+          sender_user_name: "Hidden",
+          date: 1,
+        },
+      });
+      strictEqual(requests.length, 0);
+    }
+    const imageForwardChat = { ...chat, id: -302 };
+    await persistChatRouterEnabled(database, imageForwardChat.id, true);
+    shouldRespond = false;
+    await receive(undefined, imageForwardChat, true, {
+      forward_origin: {
+        type: "hidden_user",
+        sender_user_name: "Hidden",
+        date: 1,
+      },
+      photo: [{ file_id: "forwarded-photo", width: 10, height: 10 }],
+    });
+    strictEqual(requests.length, 1);
+    ok(requests[0].instructions.includes("forwarded_post=true"));
+    ok(
+      JSON.parse(requests[0].input[0].content)[0].includes(
+        "<content></content>",
+      ),
+    );
+    await receive("Another forwarded post", imageForwardChat, true, {
+      forward_origin: {
+        type: "hidden_user",
+        sender_user_name: "Hidden",
+        date: 1,
+      },
+    });
+    strictEqual(requests.length, 0);
+    shouldRespond = true;
+    const albumForwardChat = { ...chat, id: -303 };
+    await persistChatRouterEnabled(database, albumForwardChat.id, true);
+    shouldRespond = false;
+    await Promise.all(
+      Array.from({ length: 10 }, (_, index) =>
+        receive(undefined, albumForwardChat, true, {
+          media_group_id: "forwarded-album",
+          ...(index === 9 ? { caption: "Caption of the forwarded post" } : {}),
+          forward_origin: {
+            type: "hidden_user",
+            sender_user_name: "Hidden",
+            date: 1,
+          },
+          photo: [{ file_id: `album-${index}`, width: 10, height: 10 }],
+        }),
+      ),
+    );
+    strictEqual(requests.length, 1);
+    ok(
+      JSON.parse(requests[0].input[0].content)[0].includes(
+        "Caption of the forwarded post",
+      ),
+    );
+    shouldRespond = true;
     setLlmDeploymentName("router", "");
     await receive("not configured");
     strictEqual(requests.length, 0);
@@ -297,8 +505,7 @@ test("opt-in checks relevance before charges or tasks and scopes three-message c
       requests.map((r) => r.model),
       ["test-troll"],
     );
-    historyFails = false;
-    await receive("General still responds", chat, false);
+    await receive("laylo, explain this", chat, false);
     deepStrictEqual(
       requests.map((r) => r.model),
       ["test-router", "test-small"],
@@ -335,10 +542,14 @@ test("router enforces its verdict and reports tokens without exposing internal o
     strictEqual(body.store, false);
     strictEqual(body.text.format.strict, true);
     ok(body.instructions.includes('agent named "laylo", "лейло", "@test_bot"'));
-    ok(body.instructions.includes("serious news post"));
-    ok(body.instructions.includes("public figure or popular person"));
-    ok(body.instructions.includes("strong statement or accusation"));
-    ok(!body.instructions.includes("When uncertain whether to intervene"));
+    ok(body.instructions.includes("Default to respond=false"));
+    ok(
+      body.instructions.includes(
+        "explicit request or question directed to the agent",
+      ),
+    );
+    ok(body.instructions.includes("sole possible trigger and response target"));
+    ok(body.instructions.includes("When uncertain whether to intervene"));
     ok(!body.instructions.includes("No explanation or additional fields"));
     ok(!body.instructions.includes("Respond with JSON exactly"));
     deepStrictEqual(body.text.format.schema.required, ["respond", "model"]);

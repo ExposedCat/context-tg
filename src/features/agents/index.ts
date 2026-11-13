@@ -57,6 +57,23 @@ export function resolveMessageAgent(
   return resolveMessageAgentTrigger(text, ownUsername)?.agent;
 }
 
+// This only establishes a possible addressee. The relevance router must still
+// distinguish a request to the agent from a quote or discussion about it.
+export function referencesMessageAgent(
+  text: string,
+  ownUsername: string,
+): boolean {
+  return [...AGENTS.flatMap((agent) => agent.name), `@${ownUsername}`].some(
+    (name) => {
+      const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      return new RegExp(
+        `(?<![\\p{L}\\p{N}_@])${escaped}(?![\\p{L}\\p{N}_])`,
+        "iu",
+      ).test(text);
+    },
+  );
+}
+
 export function resolveMessageAgentTrigger(
   text: string,
   ownUsername: string,

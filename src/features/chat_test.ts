@@ -1891,12 +1891,11 @@ test("normal and guest requests send every rich-message image to the model", asy
             .join("\n");
           ok(
             text.includes(
-              source === "image-only"
-                ? "Please respond to the attached image."
-                : "compare these images",
+              source === "image-only" ? "![](tg://" : "compare these images",
             ),
             `${guest}/${source}: ${text}`,
           );
+          ok(!text.includes("Please respond to the attached image."));
           strictEqual(
             (text.match(/!\[\]\(tg:\/\/(photo|document)\?id=/g) ?? []).length,
             fileIds.length,
