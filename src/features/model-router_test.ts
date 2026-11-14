@@ -28,7 +28,7 @@ const { getChatRouterEnabled, persistChatRouterEnabled } = await import(
   "./llm-models.ts"
 );
 const { requestModelRoute } = await import("./llm.ts");
-const { trollAgent } = await import("./agents/index.ts");
+const { normalAgent, trollAgent } = await import("./agents/index.ts");
 const { getUsageStatus } = await import("./usage.ts");
 const { safelyMaybeSendAutomaticResponse } = await import(
   "./automatic-responses.ts"
@@ -140,6 +140,7 @@ test("direct invocations bypass Smart replies while other mentions and forwards 
         ? JSON.stringify({
             respond: shouldRespond,
             model: shouldRespond ? route : null,
+            goal: "answer",
           })
         : "Answer",
       ++responseSerial,
@@ -196,10 +197,9 @@ test("direct invocations bypass Smart replies while other mentions and forwards 
     const messages = JSON.parse(requests[0].input[0].content);
     strictEqual(messages.length, 1);
     ok(messages[0].includes("please compare these, laylo"));
-    ok(
-      requests[1].instructions.includes(
-        `The sole current request and response target is message ${ctx.message.message_id}`,
-      ),
+    strictEqual(
+      requests[1].instructions,
+      normalAgent.buildInstructions(chat.id),
     );
     ok(
       !requests[1].tools?.some((tool) => tool.name === "set_reply_message_id"),
@@ -591,10 +591,276 @@ test("direct invocations bypass Smart replies while other mentions and forwards 
   }
 });
 
+test("routing goals preserve ordinary answers and prepend the exact fact-check request before posts", async () => {
+  const { saveThread } = await import("./threads.ts");
+  const { saveLlmResponseInputItems } = await import("./llm-chat-responses.ts");
+  const database = await initDatabase()();
+  const originalFetch = globalThis.fetch;
+  const previous = {
+    small: LLM_DEPLOYMENTS.small.deploymentName,
+    router: LLM_DEPLOYMENTS.router.deploymentName,
+  };
+  const factcheckText =
+    "Fact-check the following post. If it's fully correct, respond with a short phrase. Otherwise, write a bullet list of what's correct and what's incorrect; keep items short and descriptive, use quotes to quote exact parts. Don't be a misleading nerd: subtle exaggerations, half-jokes and minor inconsistencies are okay, only call out factually wrong statements which have absolutely no ground or are meaningfully change the fact.";
+  const sender = {
+    id: 1,
+    is_bot: false,
+    first_name: "Forwarder",
+    username: "caller",
+  };
+  const bot = {
+    id: 42,
+    is_bot: true,
+    first_name: "Bot",
+    username: "test_bot",
+  } as Context["me"];
+  const api = new Api("test");
+  let goal: "answer" | "factcheck" = "answer";
+  let respond = true,
+    serial = 0,
+    sent = 0,
+    downloads = 0;
+  const requests: Array<{
+    model: string;
+    instructions: string;
+    input: Array<{
+      role: string;
+      content:
+        | string
+        | Array<{ type: string; text?: string; image_url?: string }>;
+    }>;
+  }> = [];
+  api.sendChatAction = async () => true;
+  api.sendRichMessage = async (chatId, _content, options) => {
+    strictEqual(options?.reply_parameters?.message_id, 100 + serial);
+    return {
+      message_id: 1000 + ++sent,
+      date: 1,
+      from: bot,
+      chat: { id: Number(chatId), type: "supergroup", title: "Test" },
+      rich_message: { blocks: [] },
+    };
+  };
+  api.getFile = async (fileId) => ({
+    file_id: fileId,
+    file_unique_id: fileId,
+    file_path: "photos/post.jpg",
+  });
+  globalThis.fetch = (async (input, init) => {
+    const request = new Request(input, init);
+    if (new URL(request.url).hostname === "api.telegram.org") {
+      downloads++;
+      return new Response(new Uint8Array([0]), {
+        headers: { "content-type": "image/jpeg" },
+      });
+    }
+    strictEqual(request.url, "https://llm.test/v1/responses");
+    const body = await request.json();
+    requests.push(body);
+    return response(
+      body.model === "goal-router"
+        ? JSON.stringify({ respond, model: respond ? "small" : null, goal })
+        : "Done",
+      2000 + requests.length + serial * 10,
+    );
+  }) as typeof fetch;
+  try {
+    setLlmDeploymentName("router", "goal-router");
+    setLlmDeploymentName("small", "goal-answer");
+    for (const selectedGoal of ["answer", "factcheck"] as const) {
+      goal = selectedGoal;
+      for (const continuing of [false, true]) {
+        for (const image of [false, true]) {
+          serial++;
+          requests.length = 0;
+          downloads = 0;
+          const chat = {
+            id: -1000 - serial,
+            type: "supergroup",
+            title: "Test",
+          } as const;
+          await persistChatRouterEnabled(database, chat.id, true);
+          const parent = {
+            message_id: 10,
+            date: 1,
+            chat,
+            reply_to_message: undefined,
+            from: { id: 3, is_bot: false, first_name: "Participant" },
+            text: "Earlier background",
+          };
+          if (continuing) {
+            await saveLlmResponseInputItems(database, {
+              responseId: `previous_${serial}`,
+              inputItems: [
+                { type: "message", role: "user", content: "Saved background" },
+              ],
+            });
+            await saveThread(database, {
+              chat_id: chat.id,
+              message_id: 10,
+              thread_id: 10,
+              agent_id: "normal",
+              agent_name: normalAgent.name[0],
+              response_id: `previous_${serial}`,
+            });
+          }
+          const message = {
+            message_id: 100 + serial,
+            date: 1700000000,
+            chat,
+            from: sender,
+            forward_origin: {
+              type: "channel" as const,
+              date: 1,
+              chat: {
+                id: -9999,
+                type: "channel" as const,
+                title: "Original author",
+              },
+              message_id: 1,
+            },
+            ...(image
+              ? {
+                  caption: "Forwarded content",
+                  photo: [
+                    {
+                      file_id: `post_${serial}`,
+                      file_unique_id: `post_${serial}`,
+                      width: 10,
+                      height: 10,
+                    },
+                  ],
+                }
+              : { text: "Forwarded content" }),
+            ...(continuing ? { reply_to_message: parent } : {}),
+          };
+          const ctx = new GrammyContext(
+            { update_id: serial, message },
+            api,
+            bot,
+          ) as Context;
+          ctx.database = database;
+          ctx.telemetry = { event: () => {} } as Context["telemetry"];
+          await chatComposer.middleware()(ctx, async () => {
+            throw new Error("Forward should be handled");
+          });
+          deepStrictEqual(
+            requests.map((request) => request.model),
+            ["goal-router", "goal-answer"],
+          );
+          const answer = requests[1];
+          strictEqual(
+            answer.instructions,
+            normalAgent.buildInstructions(chat.id, normalAgent.name[0]),
+          );
+          const userMessages = answer.input.filter(
+            (item) => item.role === "user",
+          );
+          const textOf = (item: (typeof userMessages)[number]) =>
+            typeof item.content === "string"
+              ? item.content
+              : item.content
+                  .filter((part) => part.type === "input_text")
+                  .map((part) => part.text)
+                  .join("\n");
+          const postMessage = userMessages.at(-1);
+          ok(postMessage);
+          const post = textOf(postMessage);
+          ok(post.includes("Forwarded content"));
+          const injected = userMessages.filter((item) =>
+            textOf(item).includes(factcheckText),
+          );
+          strictEqual(injected.length, goal === "factcheck" ? 1 : 0);
+          if (goal === "factcheck") {
+            const instructionMessage = userMessages.at(-2);
+            ok(instructionMessage);
+            const instruction = textOf(instructionMessage);
+            strictEqual(
+              instruction.match(/<content>([\s\S]*?)<\/content>/)?.[1],
+              factcheckText,
+            );
+            strictEqual(
+              instruction.match(/<message\b[^>]*>/)?.[0],
+              post.match(/<message\b[^>]*>/)?.[0],
+            );
+            ok(instruction.includes(`id="${message.message_id}"`));
+            ok(
+              instruction.includes(
+                'sender="Forwarder (@caller)" sender_id="1"',
+              ),
+            );
+            ok(!instruction.includes("Original author"));
+          }
+          const imageParts = userMessages
+            .flatMap((item) =>
+              typeof item.content === "string" ? [] : item.content,
+            )
+            .filter((part) => part.type === "input_image");
+          strictEqual(imageParts.length, image ? 1 : 0);
+          strictEqual(downloads, image ? 1 : 0);
+          const checkpoint = await database
+            .selectFrom("llm_chat_responses")
+            .select("messages")
+            .where(
+              "response_id",
+              "=",
+              `resp_router_${2000 + requests.length + serial * 10}`,
+            )
+            .executeTakeFirstOrThrow();
+          strictEqual(
+            checkpoint.messages.split(factcheckText).length - 1,
+            goal === "factcheck" ? 1 : 0,
+          );
+        }
+      }
+    }
+    // A declined factcheck verdict must not invoke the answering agent.
+    respond = false;
+    goal = "factcheck";
+    serial++;
+    requests.length = 0;
+    const chat = {
+      id: -1000 - serial,
+      type: "supergroup",
+      title: "Test",
+    } as const;
+    await persistChatRouterEnabled(database, chat.id, true);
+    const ctx = new GrammyContext(
+      {
+        update_id: serial,
+        message: {
+          message_id: 100 + serial,
+          date: 1,
+          chat,
+          from: sender,
+          text: "Forwarded content",
+          forward_origin: {
+            type: "hidden_user",
+            sender_user_name: "Hidden",
+            date: 1,
+          },
+        },
+      },
+      api,
+      bot,
+    ) as Context;
+    ctx.database = database;
+    ctx.telemetry = { event: () => {} } as Context["telemetry"];
+    await chatComposer.middleware()(ctx, async () => {});
+    strictEqual(requests.length, 1);
+    strictEqual(sent, 8);
+  } finally {
+    globalThis.fetch = originalFetch;
+    setLlmDeploymentName("router", previous.router);
+    setLlmDeploymentName("small", previous.small);
+    await database.destroy();
+  }
+});
+
 test("router enforces its verdict and reports tokens without exposing internal output", async () => {
   const originalFetch = globalThis.fetch;
   const previous = LLM_DEPLOYMENTS.router.deploymentName;
-  let output = '{"respond":true,"model":"small"}',
+  let output = '{"respond":true,"model":"small","goal":"answer"}',
     status = "completed",
     calls = 0;
   const events: Array<{
@@ -625,8 +891,16 @@ test("router enforces its verdict and reports tokens without exposing internal o
     ok(body.instructions.includes("When uncertain whether to intervene"));
     ok(!body.instructions.includes("No explanation or additional fields"));
     ok(!body.instructions.includes("Respond with JSON exactly"));
-    deepStrictEqual(body.text.format.schema.required, ["respond", "model"]);
+    deepStrictEqual(body.text.format.schema.required, [
+      "respond",
+      "model",
+      "goal",
+    ]);
     strictEqual(body.text.format.schema.additionalProperties, false);
+    deepStrictEqual(body.text.format.schema.properties.goal, {
+      type: "string",
+      enum: ["answer", "factcheck"],
+    });
     return response(output, ++calls, status);
   }) as typeof fetch;
   const options = {
@@ -647,26 +921,31 @@ test("router enforces its verdict and reports tokens without exposing internal o
         names,
         options,
       ),
-      { respond: true, model: "small" },
+      { respond: true, model: "small", goal: "answer" },
     );
-    output = '{"respond":true,"model":"large"}';
+    output = '{"respond":true,"model":"large","goal":"factcheck"}';
     deepStrictEqual(
       await requestModelRoute(["second", "third", "current"], names, options),
-      { respond: true, model: "large" },
+      { respond: true, model: "large", goal: "factcheck" },
     );
-    output = '{"respond":false,"model":null}';
+    output = '{"respond":false,"model":null,"goal":"answer"}';
     deepStrictEqual(
       await requestModelRoute(["second", "third", "current"], names, options),
-      { respond: false, model: null },
+      { respond: false, model: null, goal: "answer" },
     );
     for (const invalid of [
       '{"model":"big"}',
       '{"model":"small","extra":1}',
-      '{"respond":false,"model":"small"}',
-      '{"respond":true,"model":null}',
-      '{"respond":"false","model":null}',
-      '{"respond":true,"model":"big"}',
-      '{"respond":true,"model":"small","extra":1}',
+      '{"respond":false,"model":"small","goal":"answer"}',
+      '{"respond":true,"model":null,"goal":"answer"}',
+      '{"respond":"false","model":null,"goal":"answer"}',
+      '{"respond":true,"model":"big","goal":"answer"}',
+      '{"respond":true,"model":"small","goal":"answer","extra":1}',
+      '{"respond":true,"model":"small"}',
+      '{"respond":true,"model":"small","goal":null}',
+      '{"respond":true,"model":"small","goal":true}',
+      '{"respond":true,"model":"small","goal":"summarize"}',
+      '{"respond":false,"model":null}',
       "{}",
       "[]",
       "null",
@@ -678,7 +957,7 @@ test("router enforces its verdict and reports tokens without exposing internal o
         requestModelRoute(["second", "third", "current"], names, options),
       );
     }
-    output = '{"respond":true,"model":"small"}';
+    output = '{"respond":true,"model":"small","goal":"answer"}';
     status = "incomplete";
     await rejects(
       () => requestModelRoute(["second", "third", "current"], names, options),

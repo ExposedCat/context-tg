@@ -1,5 +1,5 @@
 // Opt-in live evaluation; calls only the model endpoint, never Telegram or SQLite.
-import { requestModelRoute } from "../features/llm.ts";
+import { type ModelRoutingGoal, requestModelRoute } from "../features/llm.ts";
 import { setLlmDeploymentName } from "../features/llm-deployments.ts";
 import { formatPromptMessageXml } from "../features/llm-prompt.ts";
 
@@ -11,6 +11,7 @@ type EvaluationCase = {
   forwarded?: boolean;
   respond: boolean;
   model?: "small" | "large";
+  goal?: ModelRoutingGoal;
 };
 
 const cases: EvaluationCase[] = [
@@ -20,6 +21,14 @@ const cases: EvaluationCase[] = [
       "Sega помогла NVIDIA избежать банкротства, выделив 5 миллионов долларов на разработку следующего чипа.",
     forwarded: true,
     respond: true,
+    goal: "factcheck",
+  },
+  {
+    name: "forwarded question",
+    current: "Как перевести слово scissors на русский?",
+    forwarded: true,
+    respond: true,
+    goal: "answer",
   },
   {
     name: "forwarded advertisement",
@@ -114,6 +123,7 @@ const cases: EvaluationCase[] = [
     name: "direct research request",
     current: "лейло, проверь, правда ли Sega спасла NVIDIA",
     respond: true,
+    goal: "factcheck",
   },
   {
     name: "suffix address",
@@ -227,6 +237,7 @@ setLlmDeploymentName("router", deployment);
 let falsePositives = 0;
 let missedRequests = 0;
 let wrongModels = 0;
+let wrongGoals = 0;
 let errors = 0;
 const checks = cases.flatMap((scenario) =>
   Array.from({ length: repetitions }, (_, repetition) => async () => {
@@ -254,12 +265,15 @@ const checks = cases.flatMap((scenario) =>
       const relevancePassed = verdict.respond === scenario.respond;
       const modelPassed =
         scenario.model === undefined || verdict.model === scenario.model;
-      const passed = relevancePassed && modelPassed;
+      const expectedGoal = scenario.goal ?? "answer";
+      const goalPassed = !verdict.respond || verdict.goal === expectedGoal;
+      const passed = relevancePassed && modelPassed && goalPassed;
       if (!relevancePassed) {
         if (verdict.respond) falsePositives++;
         else missedRequests++;
       }
       if (verdict.respond && !modelPassed) wrongModels++;
+      if (verdict.respond && scenario.respond && !goalPassed) wrongGoals++;
       console.log(
         JSON.stringify({
           case: scenario.name,
@@ -267,6 +281,7 @@ const checks = cases.flatMap((scenario) =>
           passed,
           expected: scenario.respond,
           expectedModel: scenario.model,
+          expectedGoal: scenario.respond ? expectedGoal : undefined,
           verdict,
         }),
       );
@@ -291,8 +306,9 @@ console.log(
     falsePositives,
     missedRequests,
     wrongModels,
+    wrongGoals,
     errors,
   }),
 );
-if (falsePositives || missedRequests || wrongModels || errors)
+if (falsePositives || missedRequests || wrongModels || wrongGoals || errors)
   process.exitCode = 1;

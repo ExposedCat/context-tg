@@ -88,8 +88,8 @@ invocations, bot replies, private chats, and ordinary name mentions do not consu
 
 Eligibility does not guarantee a reply. For ordinary name mentions, the router
 requires an unambiguous request directed to the agent. For forwarded posts, it
-may contribute a substantive explanation or fact-check without an explicit
-request; empty content, memes, ads, and posts without a useful contribution are
+may answer a question or contribute a substantive explanation or fact-check
+without an explicit request; empty content, memes, ads, and posts without a useful contribution are
 skipped. Uncertainty means silence for Smart replies. Normal conversation triggers
 bypass this check, including specialized agents. Missing captions
 remain empty in all modes; the application never invents an image-analysis request.
@@ -98,15 +98,23 @@ comparison needs no question mark or explicit "which is better". Slang, typos,
 and unfamiliar item names do not justify silence; the answering agent can research
 or ask for clarification. Comparison and uncertain domain questions use the large
 model. Router decisions log the chat/message IDs, response decision, and selected
-model without logging message text.
+model and goal without logging message text.
 
 Each routing call receives only the current message, its reply metadata/excerpt,
 and the configured agent names and bot username. Earlier messages cannot supply
 a trigger. Generation may read history to understand the current message, but
 answers only that message and keeps it as the reply target. The router returns
 `respond=false, model=null`, or `respond=true` with `small` or `large` (`large`
-uses the `big` deployment). Declined messages create no response task and spend
-no request or answer credits. A failed or invalid verdict produces no reply.
+uses the `big` deployment). Every verdict also includes `goal`, either `answer`
+or `factcheck`; it is ignored when declining. `answer` uses the ordinary agent
+instructions and message input unchanged. For `factcheck`, the exact fact-check
+request is inserted as a separate user message immediately before the post,
+with the same sender, message ID, and date/time. This message is retained in the
+model conversation history. Post images remain attached only to the post.
+The request asks for a short phrase when fully correct, otherwise short bullets
+quoting correct and incorrect parts, while accepting minor exaggerations,
+half-jokes, and insignificant inconsistencies. Declined messages create no
+response task and spend no request or answer credits. A failed or invalid verdict produces no reply.
 Existing quotas and cancellation still apply. Periodic proactive and trolling
 responses are suppressed while Smart replies is active.
 
