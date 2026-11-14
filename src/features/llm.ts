@@ -357,13 +357,14 @@ function createRequestMarker(options: LlmRequestOptions): ResponseInputItem[] {
       ];
 }
 
-const MODEL_CALL_TIMEOUT_MS = 60_000;
+const MODEL_IDLE_TIMEOUT_MS = 60_000;
+const MODEL_CALL_TIMEOUT_MS = 5 * 60_000;
 
 function getClient(): OpenAI {
   return new OpenAI({
     apiKey: APP_ENV.LLM_API_KEY,
     baseURL: APP_ENV.LLM_BASE_URL,
-    timeout: MODEL_CALL_TIMEOUT_MS,
+    timeout: MODEL_IDLE_TIMEOUT_MS,
     // The application handles retries and credit checks.
     maxRetries: 0,
   });
@@ -385,17 +386,31 @@ async function createModelResponse(
   preservePartial = false,
   creditWrapUp = false,
 ): Promise<ApiResponse> {
-  // The SDK timeout only covers response headers. Keep our deadline active
-  // until the complete response body or SSE stream has been consumed.
+  // The SDK timeout only covers response headers. Also bound the wait for
+  // each model event and cap the complete model call at five minutes.
+  // Local accounting and delivery callbacks do not count as model inactivity.
   const deadline = new AbortController();
-  const timeout = setTimeout(
+  const callTimeout = setTimeout(
     () =>
       deadline.abort(new DOMException("Model call timed out", "TimeoutError")),
     MODEL_CALL_TIMEOUT_MS,
   );
-  const requestSignal = signal
-    ? AbortSignal.any([signal, deadline.signal])
-    : deadline.signal;
+  const inactivity = new AbortController();
+  function waitForProgress() {
+    return setTimeout(
+      () =>
+        inactivity.abort(
+          new DOMException("Model call timed out", "TimeoutError"),
+        ),
+      MODEL_IDLE_TIMEOUT_MS,
+    );
+  }
+  let timeout = waitForProgress();
+  const requestSignal = AbortSignal.any([
+    deadline.signal,
+    inactivity.signal,
+    ...(signal ? [signal] : []),
+  ]);
   const textMeter = new TextCreditMeter();
   let abortStream: (() => void) | undefined;
   let receivedEvent = false;
@@ -416,6 +431,7 @@ async function createModelResponse(
       abortStream = () => stream.controller.abort();
       let terminalResponse: ApiResponse | undefined;
       for await (const event of stream) {
+        clearTimeout(timeout);
         receivedEvent = true;
         throwIfAborted(requestSignal);
         textMeter.observe(event);
@@ -439,6 +455,7 @@ async function createModelResponse(
         await onStreamEvent?.(event);
         throwIfAborted(requestSignal);
         if (terminalResponse) break;
+        timeout = waitForProgress();
       }
       throwIfAborted(requestSignal);
       if (!terminalResponse)
@@ -448,6 +465,7 @@ async function createModelResponse(
       response = await client.responses.create(modelParams, {
         signal: requestSignal,
       });
+      clearTimeout(timeout);
       throwIfAborted(requestSignal);
       textMeter.complete(response);
       if (!(await flushTextCredits(true)) && !creditWrapUp)
@@ -468,13 +486,20 @@ async function createModelResponse(
     return response;
   } catch (error) {
     throwIfAborted(signal);
+    if (deadline.signal.aborted) {
+      throw new LlmRequestError(
+        "Model call timed out",
+        "The model call exceeded the 5-minute limit. The request was stopped without retrying.",
+        "timeout",
+      );
+    }
     if (
-      deadline.signal.aborted ||
+      inactivity.signal.aborted ||
       error instanceof OpenAI.APIConnectionTimeoutError
     ) {
       throw new LlmRequestError(
         "Model call timed out",
-        "The model did not finish within 60 seconds. The request was stopped without retrying.",
+        "The model produced no progress for 60 seconds. The request was stopped without retrying.",
         "timeout",
       );
     }
@@ -503,6 +528,7 @@ async function createModelResponse(
     }
     throw error;
   } finally {
+    clearTimeout(callTimeout);
     clearTimeout(timeout);
     abortStream?.();
     await flushTextCredits(true);

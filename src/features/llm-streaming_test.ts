@@ -1,4 +1,4 @@
-import { test } from "bun:test";
+import { jest, test } from "bun:test";
 import { deepStrictEqual, ok, rejects, strictEqual } from "node:assert";
 
 for (const [key, value] of Object.entries({
@@ -1181,42 +1181,32 @@ test("an admin stream can exceed 64000 text tokens without an application genera
   }
 });
 
-test("one-minute deadline closes silent and active streams without retrying", async () => {
+test("one minute without model events closes silent and stalled streams without retrying", async () => {
   setLlmDeploymentName("small", "stream-test");
   const originalFetch = globalThis.fetch;
-  const originalSetTimeout = globalThis.setTimeout;
-  globalThis.setTimeout = ((
-    callback: (...args: unknown[]) => void,
-    delay?: number,
-    ...args: unknown[]
-  ) =>
-    originalSetTimeout(
-      callback,
-      delay === 60_000 ? 50 : delay,
-      ...args,
-    )) as unknown as typeof setTimeout;
+  const settle = async () => {
+    for (let i = 0; i < 100; i++) await Promise.resolve();
+  };
+  jest.useFakeTimers();
   try {
     for (const active of [false, true]) {
       let requests = 0;
       let closed = false;
-      let deltas = 0;
+      let events = 0;
+      let settled = false;
+      let body: ReadableStreamDefaultController<Uint8Array> | undefined;
       globalThis.fetch = (async (_input: unknown, init?: RequestInit) => {
         requests++;
         return new Response(
           new ReadableStream<Uint8Array>({
             start(controller) {
+              body = controller;
               controller.enqueue(frame(created));
-              const interval = active
-                ? setInterval(() => {
-                    controller.enqueue(frame({ ...delta, delta: "word " }));
-                  }, 5)
-                : undefined;
               // Like real fetch, aborting the connection errors its body.
               init?.signal?.addEventListener(
                 "abort",
                 () => {
                   closed = true;
-                  clearInterval(interval);
                   controller.error(init.signal?.reason);
                 },
                 { once: true },
@@ -1226,31 +1216,235 @@ test("one-minute deadline closes silent and active streams without retrying", as
           { headers: { "content-type": "text/event-stream" } },
         );
       }) as unknown as typeof fetch;
+      const pending = requestLlm(
+        "Long",
+        [],
+        undefined,
+        {
+          onStreamEvent: () => {
+            events++;
+          },
+        },
+        "Be brief.",
+      );
+      void pending.then(
+        () => {
+          settled = true;
+        },
+        () => {
+          settled = true;
+        },
+      );
+      await settle();
+      strictEqual(events, 1);
+      ok(body);
+      jest.advanceTimersByTime(59_000);
+      await settle();
+      strictEqual(settled, false);
+      if (active) {
+        body.enqueue(frame(delta));
+        await settle();
+        strictEqual(events, 2);
+        // Total duration now exceeds a minute, but the last event was recent.
+        jest.advanceTimersByTime(59_000);
+        await settle();
+        strictEqual(settled, false);
+      }
+      jest.advanceTimersByTime(1_000);
       await rejects(
-        () =>
-          requestLlm(
-            "Long",
-            [],
-            undefined,
-            {
-              onStreamEvent: (event) => {
-                if (event.type === "response.output_text.delta") deltas++;
-              },
-            },
-            "Be brief.",
-          ),
+        pending,
         (error) =>
           error instanceof LlmRequestError &&
           error.kind === "timeout" &&
+          error.details.includes("no progress for 60 seconds") &&
           Boolean(error.lastResponseId),
       );
       strictEqual(requests, 1);
       strictEqual(closed, true);
-      if (active) ok(deltas > 0);
-      else strictEqual(deltas, 0);
     }
   } finally {
     globalThis.fetch = originalFetch;
-    globalThis.setTimeout = originalSetTimeout;
+    jest.useRealTimers();
+  }
+});
+
+test("reasoning, tool arguments and text keep a long stream alive; local callbacks do not consume idle time", async () => {
+  setLlmDeploymentName("small", "stream-test");
+  const originalFetch = globalThis.fetch;
+  const settle = async () => {
+    for (let i = 0; i < 100; i++) await Promise.resolve();
+  };
+  let body: ReadableStreamDefaultController<Uint8Array> | undefined;
+  let releaseCallback = () => {};
+  const paused = new Promise<void>((resolve) => {
+    releaseCallback = resolve;
+  });
+  const events: string[] = [];
+  let requests = 0;
+  let settled = false;
+  jest.useFakeTimers();
+  try {
+    globalThis.fetch = (async (_input: unknown, init?: RequestInit) => {
+      requests++;
+      return new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            body = controller;
+            controller.enqueue(frame(created));
+            init?.signal?.addEventListener(
+              "abort",
+              () => controller.error(init.signal?.reason),
+              { once: true },
+            );
+          },
+        }),
+        { headers: { "content-type": "text/event-stream" } },
+      );
+    }) as unknown as typeof fetch;
+    const pending = requestLlm(
+      "Long",
+      [],
+      undefined,
+      {
+        onStreamEvent: async (event) => {
+          events.push(event.type);
+          if (event.type === "response.output_text.delta") await paused;
+        },
+      },
+      "Be brief.",
+    );
+    void pending.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      },
+    );
+    await settle();
+    strictEqual(events.length, 1);
+    ok(body);
+    for (const event of [
+      {
+        ...delta,
+        type: "response.reasoning_summary_text.delta",
+        delta: "Thinking",
+      },
+      {
+        type: "response.function_call_arguments.delta",
+        item_id: "fc_pending",
+        output_index: 0,
+        delta: '{"query":',
+      },
+      delta,
+    ]) {
+      jest.advanceTimersByTime(45_000);
+      body.enqueue(frame(event));
+      await settle();
+      strictEqual(events.at(-1), event.type);
+      strictEqual(settled, false);
+    }
+    // Model inactivity excludes time spent waiting on our own delivery callback.
+    jest.advanceTimersByTime(90_000);
+    await settle();
+    strictEqual(settled, false);
+    releaseCallback();
+    await settle();
+    jest.advanceTimersByTime(45_000);
+    body.enqueue(
+      frame({
+        type: "response.completed",
+        response: response("resp_long_active"),
+      }),
+    );
+    body.close();
+    strictEqual((await pending).response, "Hello!");
+    strictEqual(requests, 1);
+  } finally {
+    releaseCallback();
+    globalThis.fetch = originalFetch;
+    jest.useRealTimers();
+  }
+});
+
+test("an active model stream stops at five minutes without retrying and preserves a checkpoint", async () => {
+  setLlmDeploymentName("small", "stream-test");
+  const originalFetch = globalThis.fetch;
+  const settle = async () => {
+    for (let i = 0; i < 100; i++) await Promise.resolve();
+  };
+  let body: ReadableStreamDefaultController<Uint8Array> | undefined;
+  let requests = 0;
+  let closed = false;
+  let settled = false;
+  let events = 0;
+  jest.useFakeTimers();
+  try {
+    globalThis.fetch = (async (_input: unknown, init?: RequestInit) => {
+      requests++;
+      return new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            body = controller;
+            controller.enqueue(frame(created));
+            init?.signal?.addEventListener(
+              "abort",
+              () => {
+                closed = true;
+                controller.error(init.signal?.reason);
+              },
+              { once: true },
+            );
+          },
+        }),
+        { headers: { "content-type": "text/event-stream" } },
+      );
+    }) as unknown as typeof fetch;
+    const pending = requestLlm(
+      "Long",
+      [],
+      undefined,
+      {
+        onStreamEvent: () => {
+          events++;
+        },
+      },
+      "Be brief.",
+    );
+    void pending.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      },
+    );
+    await settle();
+    ok(body);
+    // Progress keeps the idle timer alive for 4.5 minutes.
+    for (let i = 0; i < 6; i++) {
+      jest.advanceTimersByTime(45_000);
+      body.enqueue(frame(delta));
+      await settle();
+      strictEqual(events, i + 2);
+      strictEqual(settled, false);
+    }
+    jest.advanceTimersByTime(29_999);
+    await settle();
+    strictEqual(settled, false);
+    jest.advanceTimersByTime(1);
+    await rejects(
+      pending,
+      (error) =>
+        error instanceof LlmRequestError &&
+        error.kind === "timeout" &&
+        error.details.includes("5-minute limit") &&
+        Boolean(error.lastResponseId),
+    );
+    strictEqual(closed, true);
+    strictEqual(requests, 1);
+  } finally {
+    globalThis.fetch = originalFetch;
+    jest.useRealTimers();
   }
 });

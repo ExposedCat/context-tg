@@ -590,7 +590,7 @@ Respond with a name for this thread. Don't use formatting, don't add anything el
   }
 });
 
-test("model calls time out after one minute without retrying", async () => {
+test("non-streamed model calls time out after one minute without a response or retry", async () => {
   setLlmDeploymentName("small", "test-model");
   const originalFetch = globalThis.fetch;
   const originalSetTimeout = globalThis.setTimeout;
