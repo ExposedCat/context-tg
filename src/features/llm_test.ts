@@ -590,7 +590,7 @@ Respond with a name for this thread. Don't use formatting, don't add anything el
   }
 });
 
-test("non-streamed model calls time out after one minute without a response or retry", async () => {
+test("non-streamed model calls time out after three minutes without a response or retry", async () => {
   setLlmDeploymentName("small", "test-model");
   const originalFetch = globalThis.fetch;
   const originalSetTimeout = globalThis.setTimeout;
@@ -602,8 +602,12 @@ test("non-streamed model calls time out after one minute without a response or r
     delay?: number,
     ...args: unknown[]
   ) => {
-    if (delay === 60_000) deadlines.push(delay);
-    return originalSetTimeout(callback, delay === 60_000 ? 20 : delay, ...args);
+    if (delay === 180_000) deadlines.push(delay);
+    return originalSetTimeout(
+      callback,
+      delay === 180_000 ? 20 : delay,
+      ...args,
+    );
   }) as unknown as typeof setTimeout;
   globalThis.fetch = (async (_input: unknown, init?: RequestInit) => {
     calls++;
@@ -632,7 +636,7 @@ test("non-streamed model calls time out after one minute without a response or r
       (error) =>
         error instanceof LlmRequestError &&
         error.kind === "timeout" &&
-        error.details.includes("60 seconds"),
+        error.details.includes("3 minutes"),
     );
     strictEqual(calls, 1);
     ok(deadlines.length > 0);

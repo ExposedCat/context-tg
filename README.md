@@ -441,12 +441,12 @@ failure after stream events stops without automatic replay of that generation;
 the previous complete context is preserved for an explicit continuation. An
 aborted stream charges only the assistant text received before it stopped.
 
-Each text-model call has a one-minute inactivity timeout and a five-minute total
+Each text-model call has a three-minute inactivity timeout and a five-minute total
 limit. Every model stream event resets the idle wait, including reasoning,
 tool-argument and text events, but does not extend the total limit. Tool follow-ups
 get fresh timers; tool execution is separate. Local event handling does not
 consume the model's idle allowance, but counts toward the total call limit.
-Without streaming, the full response must arrive within one minute because
+Without streaming, the full response must arrive within three minutes because
 intermediate progress is unavailable.
 Timeouts stop the request without automatic retries and preserve context for an
 explicit continuation. The application can retry other connection failures that

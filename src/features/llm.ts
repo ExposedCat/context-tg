@@ -357,7 +357,7 @@ function createRequestMarker(options: LlmRequestOptions): ResponseInputItem[] {
       ];
 }
 
-const MODEL_IDLE_TIMEOUT_MS = 60_000;
+const MODEL_IDLE_TIMEOUT_MS = 3 * 60_000;
 const MODEL_CALL_TIMEOUT_MS = 5 * 60_000;
 
 function getClient(): OpenAI {
@@ -499,7 +499,7 @@ async function createModelResponse(
     ) {
       throw new LlmRequestError(
         "Model call timed out",
-        "The model produced no progress for 60 seconds. The request was stopped without retrying.",
+        "The model produced no progress for 3 minutes. The request was stopped without retrying.",
         "timeout",
       );
     }

@@ -1181,7 +1181,7 @@ test("an admin stream can exceed 64000 text tokens without an application genera
   }
 });
 
-test("one minute without model events closes silent and stalled streams without retrying", async () => {
+test("three minutes without model events closes silent and stalled streams without retrying", async () => {
   setLlmDeploymentName("small", "stream-test");
   const originalFetch = globalThis.fetch;
   const settle = async () => {
@@ -1238,15 +1238,15 @@ test("one minute without model events closes silent and stalled streams without 
       await settle();
       strictEqual(events, 1);
       ok(body);
-      jest.advanceTimersByTime(59_000);
+      jest.advanceTimersByTime(active ? 90_000 : 179_000);
       await settle();
       strictEqual(settled, false);
       if (active) {
         body.enqueue(frame(delta));
         await settle();
         strictEqual(events, 2);
-        // Total duration now exceeds a minute, but the last event was recent.
-        jest.advanceTimersByTime(59_000);
+        // Total duration exceeds three minutes, but the last event was recent.
+        jest.advanceTimersByTime(179_000);
         await settle();
         strictEqual(settled, false);
       }
@@ -1256,7 +1256,7 @@ test("one minute without model events closes silent and stalled streams without 
         (error) =>
           error instanceof LlmRequestError &&
           error.kind === "timeout" &&
-          error.details.includes("no progress for 60 seconds") &&
+          error.details.includes("no progress for 3 minutes") &&
           Boolean(error.lastResponseId),
       );
       strictEqual(requests, 1);
@@ -1338,14 +1338,14 @@ test("reasoning, tool arguments and text keep a long stream alive; local callbac
       },
       delta,
     ]) {
-      jest.advanceTimersByTime(45_000);
+      jest.advanceTimersByTime(20_000);
       body.enqueue(frame(event));
       await settle();
       strictEqual(events.at(-1), event.type);
       strictEqual(settled, false);
     }
     // Model inactivity excludes time spent waiting on our own delivery callback.
-    jest.advanceTimersByTime(90_000);
+    jest.advanceTimersByTime(190_000);
     await settle();
     strictEqual(settled, false);
     releaseCallback();
