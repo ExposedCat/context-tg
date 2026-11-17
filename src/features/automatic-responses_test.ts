@@ -40,7 +40,7 @@ test("automatic responses choose one before generation and advance both counters
   const database = await initDatabase()();
   const originalFetch = globalThis.fetch;
   const originalRandom = Math.random;
-  const previousSmall = getLlmDeployment("small").deploymentName;
+  const previousBig = getLlmDeployment("big").deploymentName;
   const previousTroll = getLlmDeployment("openminded").deploymentName;
   const previousJudge = getLlmDeployment("judge").deploymentName;
   const models: string[] = [];
@@ -149,7 +149,7 @@ test("automatic responses choose one before generation and advance both counters
     await safelyMaybeSendAutomaticResponse(ctx, message, sender, chat.id);
   };
   try {
-    setLlmDeploymentName("small", "test-proactive");
+    setLlmDeploymentName("big", "test-proactive");
     setLlmDeploymentName("openminded", "test-troll");
     setLlmDeploymentName("judge", "test-judge");
     for (const test of [
@@ -294,7 +294,7 @@ test("automatic responses choose one before generation and advance both counters
   } finally {
     globalThis.fetch = originalFetch;
     Math.random = originalRandom;
-    setLlmDeploymentName("small", previousSmall);
+    setLlmDeploymentName("big", previousBig);
     setLlmDeploymentName("openminded", previousTroll);
     setLlmDeploymentName("judge", previousJudge);
     await database.destroy();

@@ -15,11 +15,12 @@ import { LLM_DEPLOYMENTS } from "./llm-deployments.ts";
 
 export const MEMO_BUCKETS = ["chat", "user", "self"] as const;
 export type MemoBucket = (typeof MEMO_BUCKETS)[number];
+type StoredMemoAgentId = AgentId | "tofu";
 
 export type MemosTable = {
   id: Generated<number>;
   chat_id: number;
-  agent_id: ColumnType<AgentId, AgentId | undefined, AgentId>;
+  agent_id: ColumnType<StoredMemoAgentId, AgentId | undefined, AgentId>;
   bucket: MemoBucket;
   user_id: ColumnType<number | null, number | null | undefined, number | null>;
   text: string;
@@ -65,7 +66,7 @@ const MEMO_AGENT_LABELS = {
   tofu: "Tofu Laylo",
   guest: "Guest Laylo",
   troll: "Troll Laylo",
-} as const satisfies Record<AgentId, string>;
+} as const satisfies Record<StoredMemoAgentId, string>;
 
 export async function migrateMemos(database: Database): Promise<void> {
   await sql`
@@ -580,7 +581,7 @@ export async function buildMemosMetadataSection(
   return formatMemosMetadataSection(memos, userName);
 }
 
-function formatMemoAgentLabel(agentId: AgentId): string {
+function formatMemoAgentLabel(agentId: StoredMemoAgentId): string {
   return MEMO_AGENT_LABELS[agentId];
 }
 
@@ -603,7 +604,7 @@ function formatMemosHtml(memos: readonly Memo[]): string {
     return "No active memos.";
   }
 
-  const grouped = new Map<AgentId, Memo[]>();
+  const grouped = new Map<StoredMemoAgentId, Memo[]>();
 
   for (const memo of memos) {
     const group = grouped.get(memo.agent_id) ?? [];

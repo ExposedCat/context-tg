@@ -9,7 +9,7 @@ import type { AgentDefinition } from "./types.ts";
 
 export const id = "guest";
 export const name = ["guest laylo"];
-export const MODEL = LLM_DEPLOYMENTS.small;
+export const MODEL = LLM_DEPLOYMENTS.big;
 export const tools = [
   "web_search",
   "read_web_page",

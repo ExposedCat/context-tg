@@ -1,4 +1,4 @@
-import { test } from "bun:test";
+import { jest, test } from "bun:test";
 import { deepStrictEqual, ok, rejects, strictEqual } from "node:assert";
 import { Api, Context as GrammyContext } from "grammy";
 import type { Context } from "../bot.ts";
@@ -18,7 +18,7 @@ for (const [key, value] of Object.entries({
 }))
   Bun.env[key] = value;
 
-const { chatComposer } = await import("./chat.ts");
+const { chatComposer, isSmartForwardUpdate } = await import("./chat.ts");
 const { banishAutomaticResponses } = await import("./banish.ts");
 const { initDatabase } = await import("./database.ts");
 const { LLM_DEPLOYMENTS, setLlmDeploymentName } = await import(
@@ -51,6 +51,24 @@ function response(text: string, id: number, status = "completed") {
       },
     ],
   });
+}
+
+const realSetImmediate = setImmediate;
+
+async function receiveForwardBatch<T>(
+  receive: () => T | Promise<T>,
+): Promise<T> {
+  jest.useFakeTimers();
+  try {
+    const pending = receive();
+    await new Promise<void>((resolve) => realSetImmediate(resolve));
+    jest.advanceTimersByTime(2_000); // Flush any Telegram album first.
+    await new Promise<void>((resolve) => realSetImmediate(resolve));
+    jest.advanceTimersByTime(2_000);
+    return await pending;
+  } finally {
+    jest.useRealTimers();
+  }
 }
 
 test("direct invocations bypass Smart replies while other mentions and forwards are filtered", async () => {
@@ -271,14 +289,13 @@ test("direct invocations bypass Smart replies while other mentions and forwards 
     shouldRespond = false;
     route = "invalid";
     for (const [text, model] of [
-      ["лейло грабзука или слингшот в коркипере", "test-small"],
-      ["laylo hello", "test-small"],
-      ["  ЛЕЙЛО: hello", "test-small"],
-      ["@test_bot hello", "test-small"],
-      ["tofu laylo hello", "test-small"],
-      ["laylo was mentioned yesterday", "test-small"],
-      ["@test_bot was offline yesterday", "test-small"],
-      ["лейло бы точно смог ответить", "test-small"],
+      ["лейло грабзука или слингшот в коркипере", "test-big"],
+      ["laylo hello", "test-big"],
+      ["  ЛЕЙЛО: hello", "test-big"],
+      ["@test_bot hello", "test-big"],
+      ["laylo was mentioned yesterday", "test-big"],
+      ["@test_bot was offline yesterday", "test-big"],
+      ["лейло бы точно смог ответить", "test-big"],
       [`${trollAgent.name[0]} hello`, "test-troll"],
     ]) {
       const sentBeforeDirect = sent;
@@ -326,7 +343,7 @@ test("direct invocations bypass Smart replies while other mentions and forwards 
     ok(followup.message);
     deepStrictEqual(
       requests.map((r) => r.model),
-      ["test-small"],
+      ["test-big"],
     );
     strictEqual(replyTargets.at(-1), followup.message.message_id);
     const followupThread = await database
@@ -389,7 +406,7 @@ test("direct invocations bypass Smart replies while other mentions and forwards 
     });
     deepStrictEqual(
       requests.map((r) => r.model),
-      ["test-small"],
+      ["test-big"],
     );
     await receive("переведи этот текст, laylo", chat, true, {
       reply_to_message: {
@@ -402,7 +419,7 @@ test("direct invocations bypass Smart replies while other mentions and forwards 
     });
     deepStrictEqual(
       requests.map((r) => r.model),
-      ["test-small"],
+      ["test-big"],
     );
     const replyInput = JSON.stringify(requests[0].input);
     ok(replyInput.includes('in_reply_to_message id=\\"12\\"'));
@@ -420,40 +437,70 @@ test("direct invocations bypass Smart replies while other mentions and forwards 
     );
     deepStrictEqual(
       requests.map((r) => r.model),
-      ["test-small"],
+      ["test-big"],
     );
 
-    // Every forward is eligible without a name, but only one router attempt
-    // may run for a chat's burst, even across topics and when it is declined.
+    // Overflow gets its own routing attempt whether the first batch answers or declines.
     for (const allow of [false, true]) {
       const forwardChat = { ...chat, id: allow ? -301 : -300 };
       await persistChatRouterEnabled(database, forwardChat.id, true);
       shouldRespond = allow;
       const sentBeforeBurst = sent;
-      await Promise.all(
-        Array.from({ length: 10 }, (_, index) =>
-          receive(
-            index === 1 ? "explain this post, laylo" : "A forwarded post",
-            forwardChat,
-            true,
-            {
-              message_thread_id: 7 + index,
+      const forwards = await receiveForwardBatch(() =>
+        Promise.all(
+          Array.from({ length: 13 }, (_, index) =>
+            receive(`Forwarded post #${index + 1}`, forwardChat, true, {
               forward_origin: {
                 type: "channel",
                 chat: { id: -900, type: "channel", title: "News" },
                 message_id: index + 1,
                 date: 1,
               },
-            },
+            }),
           ),
         ),
       );
-      strictEqual(
-        requests.filter((request) => request.model === "test-router").length,
-        1,
+      ok(
+        (
+          await Promise.all(
+            forwards.map((ctx) => isSmartForwardUpdate(ctx, database)),
+          )
+        ).every(Boolean),
       );
-      strictEqual(sent - sentBeforeBurst, allow ? 1 : 0);
-      ok(requests[0].instructions.includes("forwarded_post=true"));
+      const routeRequests = requests.filter((r) => r.model === "test-router");
+      deepStrictEqual(
+        routeRequests.map((r) => JSON.parse(r.input[0].content).length),
+        [10, 3],
+      );
+      ok(
+        routeRequests.every((r) =>
+          r.instructions.includes("forwarded_batch=true"),
+        ),
+      );
+      strictEqual(sent - sentBeforeBurst, allow ? 2 : 0);
+      if (allow) {
+        const answers = requests.filter((r) => r.model !== "test-router");
+        for (const [batchIndex, answer] of answers.entries()) {
+          const count = batchIndex === 0 ? 10 : 3;
+          const batchInput = JSON.stringify(answer.input);
+          strictEqual(
+            batchInput.split("Fact-check the following forwarded posts")
+              .length - 1,
+            1,
+          );
+          for (let i = 1; i <= count; i++) {
+            ok(
+              batchInput.includes(
+                `Forwarded post #${batchIndex * 10 + i}</content>`,
+              ),
+            );
+          }
+        }
+        deepStrictEqual(replyTargets.slice(-2), [
+          forwards[0].message?.message_id,
+          forwards[10].message?.message_id,
+        ]);
+      }
       // Quoted forwards and the word 'forwarded' are not forward metadata.
       await receive("forwarded post", forwardChat, true, {
         reply_to_message: {
@@ -469,48 +516,74 @@ test("direct invocations bypass Smart replies while other mentions and forwards 
         },
       });
       strictEqual(requests.length, 0);
-      // Ordinary name mentions are independent of the forward cooldown.
+      // Ordinary name mentions still get the direct reply path.
       shouldRespond = true;
       await receive("laylo, answer this", forwardChat);
       deepStrictEqual(
         requests.map((request) => request.model),
-        ["test-small"],
+        ["test-big"],
       );
-      // Automatic forward replies remain blocked by the cooldown.
-      await receive("explain this post, laylo", forwardChat, true, {
-        forward_origin: {
-          type: "hidden_user",
-          sender_user_name: "Hidden",
-          date: 1,
-        },
-      });
-      strictEqual(requests.length, 0);
-      // An explicit prefix still invokes the agent during that cooldown.
+      // An explicit prefix still invokes the agent without batching.
       const sentBeforeDirect = sent;
-      await receive("laylo, explain this post", forwardChat, true, {
-        forward_origin: {
-          type: "hidden_user",
-          sender_user_name: "Hidden",
-          date: 1,
+      const directForward = await receive(
+        "laylo, explain this post",
+        forwardChat,
+        true,
+        {
+          forward_origin: {
+            type: "hidden_user",
+            sender_user_name: "Hidden",
+            date: 1,
+          },
         },
-      });
+      );
+      strictEqual(await isSmartForwardUpdate(directForward, database), false);
       deepStrictEqual(
         requests.map((r) => r.model),
-        ["test-small"],
+        ["test-big"],
       );
       strictEqual(sent, sentBeforeDirect + 1);
     }
+    const topicChat = { ...chat, id: -304 };
+    await persistChatRouterEnabled(database, topicChat.id, true);
+    shouldRespond = false;
+    await receiveForwardBatch(() =>
+      Promise.all(
+        [7, 8, 7].map((topic, index) =>
+          receive(`Forward ${index + 1} in topic ${topic}`, topicChat, true, {
+            message_thread_id: topic,
+            forward_origin: {
+              type: "hidden_user",
+              sender_user_name: "Hidden",
+              date: 1,
+            },
+          }),
+        ),
+      ),
+    );
+    const groupedByTopic = requests
+      .map((request) => JSON.parse(request.input[0].content) as string[])
+      .sort((left, right) => right.length - left.length);
+    deepStrictEqual(
+      groupedByTopic.map((posts) => posts.length),
+      [2, 1],
+    );
+    ok(groupedByTopic[0].every((post) => post.includes("in topic 7")));
+    ok(groupedByTopic[1][0].includes("in topic 8"));
+
     const imageForwardChat = { ...chat, id: -302 };
     await persistChatRouterEnabled(database, imageForwardChat.id, true);
     shouldRespond = false;
-    await receive(undefined, imageForwardChat, true, {
-      forward_origin: {
-        type: "hidden_user",
-        sender_user_name: "Hidden",
-        date: 1,
-      },
-      photo: [{ file_id: "forwarded-photo", width: 10, height: 10 }],
-    });
+    await receiveForwardBatch(() =>
+      receive(undefined, imageForwardChat, true, {
+        forward_origin: {
+          type: "hidden_user",
+          sender_user_name: "Hidden",
+          date: 1,
+        },
+        photo: [{ file_id: "forwarded-photo", width: 10, height: 10 }],
+      }),
+    );
     strictEqual(requests.length, 1);
     ok(requests[0].instructions.includes("forwarded_post=true"));
     ok(
@@ -518,30 +591,36 @@ test("direct invocations bypass Smart replies while other mentions and forwards 
         "<content></content>",
       ),
     );
-    await receive("Another forwarded post", imageForwardChat, true, {
-      forward_origin: {
-        type: "hidden_user",
-        sender_user_name: "Hidden",
-        date: 1,
-      },
-    });
-    strictEqual(requests.length, 0);
+    await receiveForwardBatch(() =>
+      receive("Another forwarded post", imageForwardChat, true, {
+        forward_origin: {
+          type: "hidden_user",
+          sender_user_name: "Hidden",
+          date: 1,
+        },
+      }),
+    );
+    strictEqual(requests.length, 1);
     shouldRespond = true;
     const albumForwardChat = { ...chat, id: -303 };
     await persistChatRouterEnabled(database, albumForwardChat.id, true);
     shouldRespond = false;
-    await Promise.all(
-      Array.from({ length: 10 }, (_, index) =>
-        receive(undefined, albumForwardChat, true, {
-          media_group_id: "forwarded-album",
-          ...(index === 9 ? { caption: "Caption of the forwarded post" } : {}),
-          forward_origin: {
-            type: "hidden_user",
-            sender_user_name: "Hidden",
-            date: 1,
-          },
-          photo: [{ file_id: `album-${index}`, width: 10, height: 10 }],
-        }),
+    await receiveForwardBatch(() =>
+      Promise.all(
+        Array.from({ length: 10 }, (_, index) =>
+          receive(undefined, albumForwardChat, true, {
+            media_group_id: "forwarded-album",
+            ...(index === 9
+              ? { caption: "Caption of the forwarded post" }
+              : {}),
+            forward_origin: {
+              type: "hidden_user",
+              sender_user_name: "Hidden",
+              date: 1,
+            },
+            photo: [{ file_id: `album-${index}`, width: 10, height: 10 }],
+          }),
+        ),
       ),
     );
     strictEqual(requests.length, 1);
@@ -571,7 +650,7 @@ test("direct invocations bypass Smart replies while other mentions and forwards 
     await receive("laylo hello");
     deepStrictEqual(
       requests.map((r) => r.model),
-      ["test-small"],
+      ["test-big"],
     );
     await receive(`${trollAgent.name[0]} hello`);
     deepStrictEqual(
@@ -581,7 +660,7 @@ test("direct invocations bypass Smart replies while other mentions and forwards 
     await receive("laylo, explain this", chat, false);
     deepStrictEqual(
       requests.map((r) => r.model),
-      ["test-small"],
+      ["test-big"],
     );
   } finally {
     globalThis.fetch = originalFetch;
@@ -620,6 +699,7 @@ test("routing goals preserve ordinary answers and prepend the exact fact-check r
     serial = 0,
     sent = 0,
     downloads = 0;
+  let batchReplyTarget: number | undefined;
   const requests: Array<{
     model: string;
     instructions: string;
@@ -632,7 +712,10 @@ test("routing goals preserve ordinary answers and prepend the exact fact-check r
   }> = [];
   api.sendChatAction = async () => true;
   api.sendRichMessage = async (chatId, _content, options) => {
-    strictEqual(options?.reply_parameters?.message_id, 100 + serial);
+    strictEqual(
+      options?.reply_parameters?.message_id,
+      batchReplyTarget ?? 100 + serial,
+    );
     return {
       message_id: 1000 + ++sent,
       date: 1,
@@ -741,9 +824,11 @@ test("routing goals preserve ordinary answers and prepend the exact fact-check r
           ) as Context;
           ctx.database = database;
           ctx.telemetry = { event: () => {} } as Context["telemetry"];
-          await chatComposer.middleware()(ctx, async () => {
-            throw new Error("Forward should be handled");
-          });
+          await receiveForwardBatch(() =>
+            chatComposer.middleware()(ctx, async () => {
+              throw new Error("Forward should be handled");
+            }),
+          );
           deepStrictEqual(
             requests.map((request) => request.model),
             ["goal-router", "goal-answer"],
@@ -846,9 +931,83 @@ test("routing goals preserve ordinary answers and prepend the exact fact-check r
     ) as Context;
     ctx.database = database;
     ctx.telemetry = { event: () => {} } as Context["telemetry"];
-    await chatComposer.middleware()(ctx, async () => {});
+    await receiveForwardBatch(() =>
+      chatComposer.middleware()(ctx, async () => {}),
+    );
     strictEqual(requests.length, 1);
     strictEqual(sent, 8);
+
+    respond = true;
+    goal = "answer";
+    requests.length = 0;
+    downloads = 0;
+    batchReplyTarget = 202;
+    await receiveForwardBatch(() =>
+      Promise.all(
+        [false, true, false].map(async (textOnly, index) => {
+          const messageId = 201 + index;
+          const ctx = new GrammyContext(
+            {
+              update_id: messageId,
+              message: {
+                chat,
+                message_id: messageId,
+                date: 1,
+                from: { ...sender, id: index + 1 },
+                forward_origin: {
+                  type: "hidden_user",
+                  sender_user_name: "Hidden",
+                  date: 1,
+                },
+                ...(textOnly
+                  ? { text: `post ${messageId}` }
+                  : {
+                      caption: `post ${messageId}`,
+                      photo: [
+                        {
+                          file_id: `photo-${messageId}`,
+                          file_unique_id: `unique-photo-${messageId}`,
+                          width: 10,
+                          height: 10,
+                        },
+                      ],
+                    }),
+              },
+            },
+            api,
+            bot,
+          ) as Context;
+          ctx.database = database;
+          ctx.telemetry = { event: () => {} } as Context["telemetry"];
+          await chatComposer.middleware()(ctx, async () => {
+            throw new Error("Forward should be handled");
+          });
+        }),
+      ),
+    );
+    strictEqual(sent, 9);
+    strictEqual(downloads, 2);
+    strictEqual(requests.length, 2);
+    const userMessages = requests[1].input.filter(
+      (item) => item.role === "user",
+    );
+    const [instruction, ...posts] = userMessages.slice(-4);
+    ok(
+      JSON.stringify(instruction.content).includes(
+        "Fact-check the following forwarded posts",
+      ),
+    );
+    deepStrictEqual(
+      posts.map((post) =>
+        typeof post.content === "string"
+          ? 0
+          : post.content.filter((part) => part.type === "input_image").length,
+      ),
+      [1, 0, 1],
+    );
+    for (const [index, post] of posts.entries()) {
+      ok(JSON.stringify(post.content).includes(`post ${201 + index}`));
+    }
   } finally {
     globalThis.fetch = originalFetch;
     setLlmDeploymentName("router", previous.router);

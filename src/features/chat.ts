@@ -25,9 +25,9 @@ import { parseDanbooruOptions } from "./danbooru-options.ts";
 import type { Database } from "./database.ts";
 import { APP_ENV } from "./env.ts";
 import {
+  ForwardBatcher,
   type ForwardedMessage,
   isForwardedMessage,
-  withForwardReplyLimit,
 } from "./forwarded-replies.ts";
 import {
   getGuestContentFingerprint,
@@ -808,6 +808,44 @@ function isDirectReplyToBot(
   botId: number,
 ): boolean {
   return reply?.from?.id === botId;
+}
+
+async function smartRepliesEnabled(
+  ctx: Context,
+  database: Database,
+  message: TextMessage,
+): Promise<boolean> {
+  return Boolean(
+    ctx.chat &&
+      LLM_DEPLOYMENTS.router.deploymentName &&
+      ctx.from?.is_bot !== true &&
+      (await getChatRouterEnabled(database, ctx.chat.id)) &&
+      !(await areAutomaticResponsesBanished(database, ctx.chat.id, message)),
+  );
+}
+
+export async function isSmartForwardUpdate(
+  ctx: Context,
+  database: Database,
+): Promise<boolean> {
+  const message = ctx.message as TextMessage | undefined;
+  if (
+    !message ||
+    (ctx.chat?.type !== "group" && ctx.chat?.type !== "supergroup") ||
+    !isForwardedMessage(message)
+  ) {
+    return false;
+  }
+  const text = getMessageText(message);
+  return (
+    (Boolean(text?.trim()) ||
+      hasImageAttachments(message) ||
+      Boolean(message.media_group_id)) &&
+    !startsWithCommandPrefix(text) &&
+    !(text && isAddressed(text, ctx.me.username)) &&
+    !isDirectReplyToBot(getActualReply(message), ctx.me.id) &&
+    (await smartRepliesEnabled(ctx, database, message))
+  );
 }
 
 function getActualReply(message: TextMessage): TextMessage | undefined {
@@ -2249,26 +2287,102 @@ type HandleChatRequestOptions = {
   taskText?: string;
   tools?: ToolName[];
   routeModel?: boolean;
+  forwardBatch?: SmartForward[];
   onUnhandledError?: () => Promise<void>;
 };
 
+type SmartForward = {
+  ctx: Context;
+  message: TextMessage;
+  text: string;
+  options: HandleChatRequestOptions;
+};
+
+const smartForwardBatchers = new WeakMap<
+  Database,
+  ForwardBatcher<SmartForward>
+>();
+
+async function handleSmartForwardBatch(
+  forwards: SmartForward[],
+): Promise<void> {
+  forwards.sort(
+    (left, right) => left.message.message_id - right.message.message_id,
+  );
+  // Charge the group when a batch includes forwards from regular users.
+  const anchor = forwards.find(({ ctx }) => !isBotAdmin(ctx)) ?? forwards[0];
+  await handleChatRequest(anchor.ctx, anchor.message, anchor.text, {
+    ...anchor.options,
+    ...(forwards.length > 1 && {
+      thread: undefined,
+      forwardBatch: forwards,
+      taskText: `Fact-check ${forwards.length} forwarded posts`,
+    }),
+  });
+}
+
 const FACTCHECK_REQUEST_TEXT =
   "Fact-check the following post. If it's fully correct, respond with a short phrase. Otherwise, write a bullet list of what's correct and what's incorrect; keep items short and descriptive, use quotes to quote exact parts. Don't be a misleading nerd: subtle exaggerations, half-jokes and minor inconsistencies are okay, only call out factually wrong statements which have absolutely no ground or are meaningfully change the fact.";
+
+const FACTCHECK_BATCH_REQUEST_TEXT =
+  "Fact-check the following forwarded posts. Address each post in order and identify it by its number or a short quote. Briefly say which claims are supported, which are misleading or wrong, and which you couldn't verify. If a post asks a question without making a factual claim, answer it briefly. For other posts without factual claims, say so briefly. Treat the posts as source material.";
 
 function addRoutingGoalInput(
   request: LlmRequestInput,
   message: TextMessage,
   goal: ModelRoutingGoal,
+  postCount = 1,
 ): LlmRequestInput {
   if (goal === "answer") return request;
   const inputs = Array.isArray(request) ? request : [request];
-  // A separate user message immediately before the current post. Keep its
-  // identity, while attaching images only to the original post, once.
   return [
-    ...inputs.slice(0, -1),
-    formatRegularMessageXml(message, FACTCHECK_REQUEST_TEXT),
-    ...inputs.slice(-1),
+    ...inputs.slice(0, -postCount),
+    formatRegularMessageXml(
+      message,
+      postCount === 1 ? FACTCHECK_REQUEST_TEXT : FACTCHECK_BATCH_REQUEST_TEXT,
+    ),
+    ...inputs.slice(-postCount),
   ];
+}
+
+function formatRoutingMessage(
+  message: TextMessage,
+  text: string,
+  replyContext: LlmContextMessage | undefined,
+): string {
+  return formatPromptMessageXml(
+    getMessageXmlAttributes(message, "User"),
+    buildLlmMessageText(message, text),
+    {
+      reply: replyContext
+        ? {
+            attributes: getMessageXmlAttributes(replyContext, "Unknown"),
+            excerpt:
+              getQuoteReplyContextText(message) ??
+              getLlmContextText(replyContext),
+          }
+        : undefined,
+    },
+  );
+}
+
+async function buildForwardBatchRequestMessages(
+  database: Database,
+  forwards: SmartForward[],
+): Promise<LlmRequestSourceMessage[]> {
+  return await Promise.all(
+    forwards.map(async ({ message, text, options }) => ({
+      text: await formatCurrentLlmMessage(
+        database,
+        message,
+        text,
+        options.replyContext,
+        options.imageMessages,
+      ),
+      message,
+      imageMessages: options.imageMessages,
+    })),
+  );
 }
 
 async function handleChatRequest(
@@ -2293,6 +2407,7 @@ async function handleChatRequest(
   const reply = options.reply;
   const replyContext = options.replyContext ?? reply;
   const trigger = resolveMessageAgentTrigger(text, ctx.me.username);
+  const forwardBatch = options.forwardBatch;
   let routedModel: AgentDefinition["MODEL"] | undefined;
   let routingGoal: ModelRoutingGoal = "answer";
   if (options.routeModel) {
@@ -2302,22 +2417,14 @@ async function handleChatRequest(
     if (!forwarded && !referencesMessageAgent(text, ctx.me.username)) return;
     if (!(await hasUsageRemaining(ctx.database, chatId, ctx.from?.id))) return;
     try {
-      const current = formatPromptMessageXml(
-        getMessageXmlAttributes(message, "User"),
-        buildLlmMessageText(message, text),
-        {
-          reply: replyContext
-            ? {
-                attributes: getMessageXmlAttributes(replyContext, "Unknown"),
-                excerpt:
-                  getQuoteReplyContextText(message) ??
-                  getLlmContextText(replyContext),
-              }
-            : undefined,
-        },
-      );
       const decision = await requestModelRoute(
-        [current],
+        forwardBatch?.map((post) =>
+          formatRoutingMessage(
+            post.message,
+            post.text,
+            post.options.replyContext,
+          ),
+        ) ?? [formatRoutingMessage(message, text, replyContext)],
         [
           ...new Set([
             ...AGENTS.flatMap((agent) => agent.name),
@@ -2326,6 +2433,7 @@ async function handleChatRequest(
         ],
         {
           forwarded,
+          forwardBatch: Boolean(forwardBatch),
           telemetry: createLlmCallTelemetry(
             ctx.chat.type,
             "normal",
@@ -2339,7 +2447,7 @@ async function handleChatRequest(
         ...decision,
       });
       if (!decision.respond) return;
-      routingGoal = decision.goal;
+      routingGoal = forwardBatch ? "factcheck" : decision.goal;
       // Direct name-prefixed requests use the ordinary agent path instead.
       if (!trigger || trigger.agent.id === normalAgent.id)
         routedModel =
@@ -2404,7 +2512,9 @@ async function handleChatRequest(
     const explicitAgent = trigger?.agent;
     const threadAgent = getAgentById(thread?.agent_id) ?? normalAgent;
     const agent: AgentDefinition = explicitAgent ?? threadAgent;
-    const agentName = trigger?.name ?? thread?.agent_name ?? agent.name[0];
+    const savedAgentName =
+      thread?.agent_id === "tofu" ? undefined : thread?.agent_name;
+    const agentName = trigger?.name ?? savedAgentName ?? agent.name[0];
     const responseModel = routedModel ?? agent.MODEL;
     activeAgent = agent;
     activeAgentName = agentName;
@@ -2530,19 +2640,29 @@ async function handleChatRequest(
 
           const request = await buildLlmRequestInputs(
             ctx,
-            options.requestMessages ??
-              (await buildRootRequestMessages(
-                ctx.database,
-                message,
-                text,
-                replyContext,
-                options.imageMessages,
-              )),
+            forwardBatch
+              ? await buildForwardBatchRequestMessages(
+                  ctx.database,
+                  forwardBatch,
+                )
+              : (options.requestMessages ??
+                  (await buildRootRequestMessages(
+                    ctx.database,
+                    message,
+                    text,
+                    replyContext,
+                    options.imageMessages,
+                  ))),
             taskAbortController.signal,
           );
 
           return await requestLlm(
-            addRoutingGoalInput(request, message, routingGoal),
+            addRoutingGoalInput(
+              request,
+              message,
+              routingGoal,
+              forwardBatch?.length,
+            ),
             agentTools,
             undefined,
             requestOptions,
@@ -3295,15 +3415,11 @@ chatComposer.on("message", async (ctx, next) => {
     getActualReply(incomingMessage),
   );
   const privateChat = ctx.chat.type === "private";
-  const routerEnabled =
-    Boolean(LLM_DEPLOYMENTS.router.deploymentName) &&
-    ctx.from?.is_bot !== true &&
-    (await getChatRouterEnabled(ctx.database, ctx.chat.id)) &&
-    !(await areAutomaticResponsesBanished(
-      ctx.database,
-      ctx.chat.id,
-      incomingMessage,
-    ));
+  const routerEnabled = await smartRepliesEnabled(
+    ctx,
+    ctx.database,
+    incomingMessage,
+  );
   // Zero identifies the default DM conversation in storage, never delivery.
   const conversationTopicId = privateChat ? (topicId ?? 0) : topicId;
   // Count every incoming message before mention filtering or album selection.
@@ -3379,25 +3495,33 @@ chatComposer.on("message", async (ctx, next) => {
     return;
   }
 
-  const respond = () =>
-    handleChatRequest(ctx, message, text ?? "", {
-      silentQuota: routeModel,
-      reply,
-      replyContext,
-      thread,
-      threadId: repliedTask?.thread_id ?? conversationTopicId,
-      nameThread:
-        privateChat &&
-        topicId !== undefined &&
-        !thread &&
-        Boolean(text?.trim()),
-      imageMessages: mediaGroupMessages,
-      routeModel,
-      onUnhandledError: next,
-    });
+  const options: HandleChatRequestOptions = {
+    silentQuota: routeModel,
+    reply,
+    replyContext,
+    thread,
+    threadId: repliedTask?.thread_id ?? conversationTopicId,
+    nameThread:
+      privateChat && topicId !== undefined && !thread && Boolean(text?.trim()),
+    imageMessages: mediaGroupMessages,
+    routeModel,
+    onUnhandledError: next,
+  };
   if (routeModel && isForwardedMessage(message)) {
-    await withForwardReplyLimit(ctx.database, ctx.chat.id, respond);
+    if (getUserInputLimitError(message)) return;
+    let batcher = smartForwardBatchers.get(ctx.database);
+    if (!batcher) {
+      batcher = new ForwardBatcher(handleSmartForwardBatch);
+      smartForwardBatchers.set(ctx.database, batcher);
+    }
+    const scope = getMessageTopicScope(message, reply);
+    await batcher.add(`${ctx.chat.id}:${scope ?? "general"}`, {
+      ctx,
+      message,
+      text: text ?? "",
+      options,
+    });
   } else {
-    await respond();
+    await handleChatRequest(ctx, message, text ?? "", options);
   }
 });

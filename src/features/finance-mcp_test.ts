@@ -143,7 +143,7 @@ test("Finance MCP opt-in discovers reports, binds user identity and persists too
       usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
     });
   }) as typeof fetch;
-  setLlmDeploymentName("small", "test");
+  setLlmDeploymentName("big", "test");
   const run = (userId?: number, chatId = -100, previousResponseId?: string) =>
     requestLlm("My portfolio", [], previousResponseId, {
       database,
@@ -244,7 +244,7 @@ test("Finance MCP opt-in discovers reports, binds user identity and persists too
     );
   } finally {
     globalThis.fetch = originalFetch;
-    setLlmDeploymentName("small", "");
+    setLlmDeploymentName("big", "");
     await database.destroy();
     await http.stop(true);
   }

@@ -153,7 +153,7 @@ function budgetTestAnswer(id: string) {
 
 test("image input with no caption never invents a user request", async () => {
   const originalFetch = globalThis.fetch;
-  setLlmDeploymentName("small", "test-model");
+  setLlmDeploymentName("big", "test-model");
   globalThis.fetch = (async (_url, init) => {
     const body = JSON.parse(String(init?.body));
     deepStrictEqual(body.input[0].content, [
@@ -179,12 +179,12 @@ test("image input with no caption never invents a user request", async () => {
     );
   } finally {
     globalThis.fetch = originalFetch;
-    setLlmDeploymentName("small", "");
+    setLlmDeploymentName("big", "");
   }
 });
 
 test("large instructions and replayed thread context are not rejected by an application token cap", async () => {
-  setLlmDeploymentName("small", "budget-test");
+  setLlmDeploymentName("big", "budget-test");
   const { saveLlmResponseInputItems } = await import("./llm-chat-responses.ts");
   const database = await initDatabase()();
   await saveLlmResponseInputItems(database, {
@@ -229,7 +229,7 @@ test("large instructions and replayed thread context are not rejected by an appl
 });
 
 test("provider input and reasoning usage do not impose an application generation cap", async () => {
-  setLlmDeploymentName("small", "budget-test");
+  setLlmDeploymentName("big", "budget-test");
   const originalFetch = globalThis.fetch;
   let requests = 0;
   globalThis.fetch = (async (_url, init) => {
@@ -252,7 +252,7 @@ test("provider input and reasoning usage do not impose an application generation
 });
 
 test("tool exhaustion produces a final answer with tools disabled instead of a user error", async () => {
-  setLlmDeploymentName("small", "budget-test");
+  setLlmDeploymentName("big", "budget-test");
   const originalFetch = globalThis.fetch;
   try {
     for (const batchSize of [1, 13])
@@ -308,7 +308,7 @@ test("tool exhaustion produces a final answer with tools disabled instead of a u
 });
 
 test("the tool allowance resets for each response in the same thread", async () => {
-  setLlmDeploymentName("small", "budget-test");
+  setLlmDeploymentName("big", "budget-test");
   const originalFetch = globalThis.fetch;
   let phase: "first" | "second" = "first";
   let requests = 0;
@@ -387,7 +387,7 @@ test("the tool allowance resets for each response in the same thread", async () 
 });
 
 test("a provider ignoring tools-disabled cannot start another tool loop and partial text is retained", async () => {
-  setLlmDeploymentName("small", "budget-test");
+  setLlmDeploymentName("big", "budget-test");
   const originalFetch = globalThis.fetch;
   let requests = 0;
   let executions = 0;
@@ -432,7 +432,7 @@ test("a provider ignoring tools-disabled cannot start another tool loop and part
 });
 
 test("provider output exhaustion preserves partial text without retries, even after a tool round", async () => {
-  setLlmDeploymentName("small", "budget-test");
+  setLlmDeploymentName("big", "budget-test");
   const originalFetch = globalThis.fetch;
   try {
     for (const afterTool of [false, true])
@@ -481,7 +481,7 @@ test("provider output exhaustion preserves partial text without retries, even af
 });
 
 test("large retrieved pages are bounded before being sent to the model", async () => {
-  setLlmDeploymentName("small", "budget-test");
+  setLlmDeploymentName("big", "budget-test");
   const originalFetch = globalThis.fetch;
   let requests = 0;
   globalThis.fetch = (async (url, init) => {
@@ -591,7 +591,7 @@ Respond with a name for this thread. Don't use formatting, don't add anything el
 });
 
 test("non-streamed model calls time out after three minutes without a response or retry", async () => {
-  setLlmDeploymentName("small", "test-model");
+  setLlmDeploymentName("big", "test-model");
   const originalFetch = globalThis.fetch;
   const originalSetTimeout = globalThis.setTimeout;
   let calls = 0;
@@ -643,7 +643,7 @@ test("non-streamed model calls time out after three minutes without a response o
   } finally {
     globalThis.fetch = originalFetch;
     globalThis.setTimeout = originalSetTimeout;
-    setLlmDeploymentName("small", "");
+    setLlmDeploymentName("big", "");
   }
 });
 
@@ -712,7 +712,7 @@ test("legacy Chat Completions history is converted to Responses items", () => {
 });
 
 test("requestLlm uses Responses items through a function-call round", async () => {
-  setLlmDeploymentName("small", "test-model");
+  setLlmDeploymentName("big", "test-model");
   const requests: Array<Record<string, unknown>> = [];
   const telemetryEvents: LlmCallTelemetryPayload[] = [];
   const originalFetch = globalThis.fetch;
@@ -867,7 +867,7 @@ test("requestLlm uses Responses items through a function-call round", async () =
 });
 
 test("native compaction prunes checkpoints and survives tool rounds, restarts and branches", async () => {
-  setLlmDeploymentName("small", "test-model");
+  setLlmDeploymentName("big", "test-model");
   const database = await initDatabase()();
   const { getLlmResponseInputItems, saveLlmResponseInputItems } = await import(
     "./llm-chat-responses.ts"
@@ -959,7 +959,7 @@ test("native compaction prunes checkpoints and survives tool rounds, restarts an
 });
 
 test("successive rejected encrypted reasoning items recover a persisted thread without discarding conversation or tool results", async () => {
-  setLlmDeploymentName("small", "test-model");
+  setLlmDeploymentName("big", "test-model");
   const database = await initDatabase()();
   const { saveLlmResponseInputItems, getLlmResponseInputItems } = await import(
     "./llm-chat-responses.ts"
@@ -1089,7 +1089,7 @@ test("successive rejected encrypted reasoning items recover a persisted thread w
 });
 
 test("encrypted reasoning recovery retries only the failed model step after a tool call", async () => {
-  setLlmDeploymentName("small", "test-model");
+  setLlmDeploymentName("big", "test-model");
   const originalFetch = globalThis.fetch;
   const requests: Array<{ input: Array<Record<string, unknown>> }> = [];
   globalThis.fetch = (async (input, init) => {
@@ -1153,7 +1153,7 @@ test("encrypted reasoning recovery retries only the failed model step after a to
 });
 
 test("encrypted reasoning recovery is bounded and never drops compaction or repairs unrelated 400s", async () => {
-  setLlmDeploymentName("small", "test-model");
+  setLlmDeploymentName("big", "test-model");
   const database = await initDatabase()();
   const { saveLlmResponseInputItems } = await import("./llm-chat-responses.ts");
   const originalFetch = globalThis.fetch;
@@ -1213,7 +1213,7 @@ test("encrypted reasoning recovery is bounded and never drops compaction or repa
 });
 
 test("retrieval outputs are retained during tools and restart continuation", async () => {
-  setLlmDeploymentName("small", "test-model");
+  setLlmDeploymentName("big", "test-model");
   const database = await initDatabase()();
   const { getLlmResponseInputItems, saveLlmResponseInputItems } = await import(
     "./llm-chat-responses.ts"
@@ -1346,7 +1346,7 @@ test("retrieval outputs are retained during tools and restart continuation", asy
 });
 
 test("failed model steps preserve retrieval results alongside compaction state", async () => {
-  setLlmDeploymentName("small", "test-model");
+  setLlmDeploymentName("big", "test-model");
   const database = await initDatabase()();
   const { getLlmResponseInputItems, saveLlmResponseInputItems } = await import(
     "./llm-chat-responses.ts"
@@ -1426,7 +1426,7 @@ test("failed model steps preserve retrieval results alongside compaction state",
 });
 
 test("tool rounds continue past four and credit exhaustion is a normal tool failure", async () => {
-  setLlmDeploymentName("small", "test-model");
+  setLlmDeploymentName("big", "test-model");
   const originalFetch = globalThis.fetch;
   try {
     for (const exhaustCredits of [false, true]) {
@@ -1536,7 +1536,7 @@ test("tool rounds continue past four and credit exhaustion is a normal tool fail
 });
 
 test("search retries expose only the final result or exhausted error to the agent", async () => {
-  setLlmDeploymentName("small", "test-model");
+  setLlmDeploymentName("big", "test-model");
   const originalFetch = globalThis.fetch;
   try {
     for (const recover of [true, false]) {
@@ -1622,7 +1622,7 @@ test("search retries expose only the final result or exhausted error to the agen
 });
 
 test("requestLlm telemetry repeats tool names and reports tool errors", async () => {
-  setLlmDeploymentName("small", "test-model");
+  setLlmDeploymentName("big", "test-model");
   const telemetryEvents: LlmCallTelemetryPayload[] = [];
   const originalFetch = globalThis.fetch;
   let requestCount = 0;
@@ -1694,7 +1694,7 @@ test("requestLlm telemetry repeats tool names and reports tool errors", async ()
 });
 
 test("requestLlm telemetry defaults missing cached usage to zero", async () => {
-  setLlmDeploymentName("small", "test-model");
+  setLlmDeploymentName("big", "test-model");
   const response = createApiResponse("resp_no_cached_usage", [
     {
       id: "msg_final",
@@ -1749,7 +1749,7 @@ test("requestLlm telemetry defaults missing cached usage to zero", async () => {
 });
 
 test("read_image persists inline data and reuses it on later replies without downloading again", async () => {
-  setLlmDeploymentName("small", "test-model");
+  setLlmDeploymentName("big", "test-model");
   const database = await initDatabase()();
   const { getLlmResponseInputItems } = await import("./llm-chat-responses.ts");
   const requests: Array<Record<string, unknown>> = [];
@@ -1871,7 +1871,7 @@ test("read_image persists inline data and reuses it on later replies without dow
 });
 
 test("read_image download failure is reported to the agent as unavailable", async () => {
-  setLlmDeploymentName("small", "test-model");
+  setLlmDeploymentName("big", "test-model");
   const requests: Array<Record<string, unknown>> = [];
   const originalFetch = globalThis.fetch;
 
@@ -1956,7 +1956,7 @@ test("read_image download failure is reported to the agent as unavailable", asyn
 });
 
 test("resuming an old persisted checkpoint repairs remote image outputs and persists the repair", async () => {
-  setLlmDeploymentName("small", "test-model");
+  setLlmDeploymentName("big", "test-model");
   const database = await initDatabase()();
   const { getLlmResponseInputItems, saveLlmResponseInputItems } = await import(
     "./llm-chat-responses.ts"
@@ -2108,7 +2108,7 @@ test("resuming an old persisted checkpoint repairs remote image outputs and pers
 });
 
 test("corrupted request images are removed before retrying", async () => {
-  setLlmDeploymentName("small", "test-model");
+  setLlmDeploymentName("big", "test-model");
   const requests: Array<Record<string, unknown>> = [];
   const originalFetch = globalThis.fetch;
 
@@ -2194,7 +2194,7 @@ test("corrupted request images are removed before retrying", async () => {
 });
 
 test("corrupted images are removed from conversation history", async () => {
-  setLlmDeploymentName("small", "test-model");
+  setLlmDeploymentName("big", "test-model");
   const requests: Array<Record<string, unknown>> = [];
   const originalFetch = globalThis.fetch;
 
@@ -2271,7 +2271,7 @@ test("corrupted images are removed from conversation history", async () => {
 });
 
 test("requestLlm retries empty responses twice before succeeding", async () => {
-  setLlmDeploymentName("small", "test-model");
+  setLlmDeploymentName("big", "test-model");
   let requestCount = 0;
   const originalFetch = globalThis.fetch;
 
@@ -2312,7 +2312,7 @@ test("requestLlm retries empty responses twice before succeeding", async () => {
 });
 
 test("requestLlm stops after three empty response attempts", async () => {
-  setLlmDeploymentName("small", "test-model");
+  setLlmDeploymentName("big", "test-model");
   let requestCount = 0;
   const telemetryEvents: LlmCallTelemetryPayload[] = [];
   const originalFetch = globalThis.fetch;
@@ -2361,7 +2361,7 @@ test("requestLlm stops after three empty response attempts", async () => {
 });
 
 test("failed tool follow-up preserves the complete context for the next turn", async () => {
-  setLlmDeploymentName("small", "test-model");
+  setLlmDeploymentName("big", "test-model");
   const requests: Array<Record<string, unknown>> = [];
   const originalFetch = globalThis.fetch;
   let resumeFromCheckpoint = false;
@@ -2485,7 +2485,7 @@ test("failed tool follow-up preserves the complete context for the next turn", a
 });
 
 test("generate_image caches media and returns reusable rich Markdown", async () => {
-  setLlmDeploymentName("small", "test-model");
+  setLlmDeploymentName("big", "test-model");
   const creditCharges: string[] = [];
   const database = await initDatabase()();
   setLlmDeploymentName("image_small", "test-image");
@@ -2632,7 +2632,7 @@ test("generate_image caches media and returns reusable rich Markdown", async () 
 });
 
 test("memory snapshots and memo events preserve replay prefixes across tools and restarts", async () => {
-  setLlmDeploymentName("small", "test-model");
+  setLlmDeploymentName("big", "test-model");
   const database = await initDatabase()();
   const { saveMemo, forgetMemo } = await import("./memos.ts");
   const {
@@ -2813,7 +2813,7 @@ test("memo events deactivate another speaker's memories and restore their scope 
 });
 
 test("web search adds a surcharge and denied tools never execute", async () => {
-  setLlmDeploymentName("small", "test-model");
+  setLlmDeploymentName("big", "test-model");
   const originalFetch = globalThis.fetch;
   try {
     for (const denied of [false, true]) {

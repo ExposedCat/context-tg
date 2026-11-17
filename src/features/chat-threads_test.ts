@@ -112,7 +112,7 @@ async function fixture() {
       ],
     });
   }) as typeof fetch;
-  setLlmDeploymentName("small", "test-model");
+  setLlmDeploymentName("big", "test-model");
   return {
     database,
     requests,
@@ -169,7 +169,7 @@ async function fixture() {
     },
     async close() {
       globalThis.fetch = originalFetch;
-      setLlmDeploymentName("small", "");
+      setLlmDeploymentName("big", "");
       await database.destroy();
     },
   };

@@ -2,6 +2,7 @@ import { test } from "bun:test";
 import { deepStrictEqual, ok, strictEqual } from "node:assert";
 import { I18n } from "@grammyjs/i18n";
 import { Api, Context as GrammyContext } from "grammy";
+import { sql } from "kysely";
 import type { Context } from "../bot.ts";
 
 const TEST_ENV = {
@@ -115,7 +116,7 @@ test("raw model newlines survive chat delivery and Telegram HTTP serialization",
     })) as unknown as typeof fetch;
 
   try {
-    setLlmDeploymentName("small", "test-model");
+    setLlmDeploymentName("big", "test-model");
     for (const [index, fixture] of fixtures.entries()) {
       responseText = fixture;
       const ctx = new GrammyContext(
@@ -142,7 +143,7 @@ test("raw model newlines survive chat delivery and Telegram HTTP serialization",
     }
   } finally {
     globalThis.fetch = originalFetch;
-    setLlmDeploymentName("small", "");
+    setLlmDeploymentName("big", "");
     await database.destroy();
   }
 });
@@ -244,7 +245,7 @@ test("Danbooru suffixes are hidden in chat history and override searches for onl
   }) as typeof fetch;
 
   try {
-    setLlmDeploymentName("small", "test-model");
+    setLlmDeploymentName("big", "test-model");
     const cases = [
       { text: "find pigeon art /rating:Unknown:Value /order:score" },
       { caption: "find more art /order:rank", video: {} },
@@ -328,7 +329,7 @@ test("Danbooru suffixes are hidden in chat history and override searches for onl
     );
   } finally {
     globalThis.fetch = originalFetch;
-    setLlmDeploymentName("small", "");
+    setLlmDeploymentName("big", "");
     await database.destroy();
   }
 });
@@ -439,13 +440,12 @@ test("trigger aliases persist through replies and update on explicit triggers", 
       .execute();
     await migrateThreads(database);
     await migrateThreads(database);
-    setLlmDeploymentName("small", "test-model");
+    setLlmDeploymentName("big", "test-model");
     const cases = [
       { text: "ЛЕЙЛО: hello", name: "лейло", agent: "normal" },
       { text: "continue", name: "лейло", agent: "normal" },
       { text: "laylo hello", name: "laylo", agent: "normal" },
-      { text: "тофу лейло hello", name: "тофу лейло", agent: "tofu" },
-      { text: "continue", name: "тофу лейло", agent: "tofu" },
+      { text: "continue old thread", name: "laylo", agent: "normal" },
       { text: "@test_bot hello", name: "laylo", agent: "normal" },
     ];
     for (const [index, { text, name, agent }] of cases.entries()) {
@@ -494,10 +494,27 @@ test("trigger aliases persist through replies and update on explicit triggers", 
         strictEqual(thread?.agent_name, name);
         strictEqual(thread?.agent_id, agent);
       }
+      if (text === "laylo hello") {
+        // Simulate replying to a message saved before Tofu was removed.
+        await database
+          .updateTable("threads")
+          .set({ agent_id: sql`'tofu'`, agent_name: "tofu laylo" })
+          .where("chat_id", "=", chat.id)
+          .where("message_id", "=", sentMessageId)
+          .execute();
+      }
+      if (text === "continue old thread") {
+        const history = await database
+          .selectFrom("llm_chat_responses")
+          .select("previous_response_id")
+          .where("response_id", "=", `resp_alias_${index + 1}`)
+          .executeTakeFirstOrThrow();
+        strictEqual(history.previous_response_id, `resp_alias_${index}`);
+      }
     }
   } finally {
     globalThis.fetch = originalFetch;
-    setLlmDeploymentName("small", "");
+    setLlmDeploymentName("big", "");
     await database.destroy();
   }
 });
@@ -605,7 +622,7 @@ test("group replies retain their parent and history scope with Smart replies ena
   }) as typeof fetch;
 
   try {
-    setLlmDeploymentName("small", "test-model");
+    setLlmDeploymentName("big", "test-model");
     setLlmDeploymentName("router", "must-not-be-called");
     await persistChatRouterEnabled(database, chat.id, true);
     const cases = [
@@ -764,7 +781,7 @@ test("group replies retain their parent and history scope with Smart replies ena
     }
   } finally {
     globalThis.fetch = originalFetch;
-    setLlmDeploymentName("small", "");
+    setLlmDeploymentName("big", "");
     setLlmDeploymentName("router", "");
     await database.destroy();
   }
@@ -779,7 +796,11 @@ test("DMs preserve normal continuation, topics, photos, and reply branches with 
   const { persistChatRouterEnabled } = await import("./llm-models.ts");
   const database = await initDatabase()();
   const originalFetch = globalThis.fetch;
-  const requests: Array<{ input: unknown; instructions: string }> = [];
+  const requests: Array<{
+    model: string;
+    input: unknown;
+    instructions: string;
+  }> = [];
   const deliveries: unknown[] = [];
   const typing: unknown[] = [];
   const names: unknown[] = [];
@@ -900,7 +921,7 @@ test("DMs preserve normal continuation, topics, photos, and reply branches with 
   }) as typeof fetch;
 
   try {
-    setLlmDeploymentName("small", "test-model");
+    setLlmDeploymentName("big", "test-model");
     setLlmDeploymentName("openminded", "test-troll-model");
     setLlmDeploymentName("router", "must-not-be-called");
     await persistChatRouterEnabled(database, chat.id, true);
@@ -908,11 +929,11 @@ test("DMs preserve normal continuation, topics, photos, and reply branches with 
       {
         id: 10,
         topic: 7,
-        text: "тофу лейло alpha secret",
+        text: "laylo alpha secret",
         implicitCreation: true,
         previous: null,
-        agent: "tofu",
-        name: "тофу лейло",
+        agent: "normal",
+        name: "laylo",
       },
       {
         id: 20,
@@ -929,8 +950,8 @@ test("DMs preserve normal continuation, topics, photos, and reply branches with 
         topic: 7,
         text: "continue alpha",
         previous: "resp_dm_1",
-        agent: "tofu",
-        name: "тофу лейло",
+        agent: "normal",
+        name: "laylo",
         rootReply: true,
       },
       {
@@ -938,8 +959,8 @@ test("DMs preserve normal continuation, topics, photos, and reply branches with 
         topic: 7,
         text: "branch alpha",
         previous: "resp_dm_1",
-        agent: "tofu",
-        name: "тофу лейло",
+        agent: "normal",
+        name: "laylo",
         replyId: 11,
       },
       {
@@ -947,16 +968,16 @@ test("DMs preserve normal continuation, topics, photos, and reply branches with 
         topic: 7,
         text: "follow branch",
         previous: "resp_dm_5",
-        agent: "tofu",
-        name: "тофу лейло",
+        agent: "normal",
+        name: "laylo",
       },
       {
         id: 60,
         topic: 7,
-        text: "laylo switch agent",
+        text: "guest laylo switch agent",
         previous: null,
-        agent: "normal",
-        name: "laylo",
+        agent: "guest",
+        name: "guest laylo",
       },
       {
         id: 70,
@@ -1107,6 +1128,10 @@ test("DMs preserve normal continuation, topics, photos, and reply branches with 
         .where("response_id", "=", `resp_dm_${requestIndex + 1}`)
         .executeTakeFirstOrThrow();
       strictEqual(history.previous_response_id, test.previous);
+      strictEqual(
+        requests[requestIndex].model,
+        test.agent === "troll" ? "test-troll-model" : "test-model",
+      );
       const input = JSON.stringify(requests[requestIndex].input);
       if ("photo" in test) ok(input.includes("data:image/jpeg;base64,"));
       if (test.topic === 8) ok(!input.includes("alpha secret"));
@@ -1160,7 +1185,7 @@ test("DMs preserve normal continuation, topics, photos, and reply branches with 
     );
   } finally {
     globalThis.fetch = originalFetch;
-    setLlmDeploymentName("small", "");
+    setLlmDeploymentName("big", "");
     setLlmDeploymentName("openminded", "");
     setLlmDeploymentName("router", "");
     await database.destroy();
@@ -1335,7 +1360,7 @@ test("initial 401 failures show only the code in normal and guest chats", async 
     );
   }) as typeof fetch;
   try {
-    setLlmDeploymentName("small", "test-model");
+    setLlmDeploymentName("big", "test-model");
     for (const mode of ["normal", "guest"] as const) {
       sent.length = 0;
       calls = 0;
@@ -1369,7 +1394,7 @@ test("initial 401 failures show only the code in normal and guest chats", async 
     }
   } finally {
     globalThis.fetch = originalFetch;
-    setLlmDeploymentName("small", "");
+    setLlmDeploymentName("big", "");
     await database.destroy();
   }
 });
@@ -1465,7 +1490,7 @@ test("failed model follow-ups retain activity and suppress resume for 401", asyn
   }) as typeof fetch;
 
   try {
-    setLlmDeploymentName("small", "test-model");
+    setLlmDeploymentName("big", "test-model");
     for (const [index, [status, progressEnabled]] of (
       [
         [400, true],
@@ -1521,7 +1546,7 @@ test("failed model follow-ups retain activity and suppress resume for 401", asyn
     }
   } finally {
     globalThis.fetch = originalFetch;
-    setLlmDeploymentName("small", "");
+    setLlmDeploymentName("big", "");
     await database.destroy();
   }
 });
@@ -1698,7 +1723,7 @@ test("normal and guest requests send every rich-message image to the model", asy
   } as Context["me"];
 
   try {
-    setLlmDeploymentName("small", "rich-image-test");
+    setLlmDeploymentName("big", "rich-image-test");
     for (const guest of [false, true]) {
       for (const source of [
         "current",
@@ -1926,7 +1951,7 @@ test("normal and guest requests send every rich-message image to the model", asy
     }
   } finally {
     globalThis.fetch = originalFetch;
-    setLlmDeploymentName("small", "");
+    setLlmDeploymentName("big", "");
   }
 });
 
@@ -1943,7 +1968,7 @@ test("normal and guest replies expand remembered albums in roots and continuatio
   } as Context["me"];
 
   try {
-    setLlmDeploymentName("small", "album-reply-test");
+    setLlmDeploymentName("big", "album-reply-test");
     for (const guest of [false, true]) {
       for (const scenario of [
         "root",
@@ -2169,7 +2194,7 @@ test("normal and guest replies expand remembered albums in roots and continuatio
     }
   } finally {
     globalThis.fetch = originalFetch;
-    setLlmDeploymentName("small", "");
+    setLlmDeploymentName("big", "");
   }
 });
 
@@ -2337,7 +2362,7 @@ test("chat progress sends one message per tick in the originating topic and resp
   } as Context["me"];
   let nextMessageId = 100;
   try {
-    setLlmDeploymentName("small", "progress-chat-test");
+    setLlmDeploymentName("big", "progress-chat-test");
     for (const enabled of [true, false]) {
       await persistChatProgressEnabled(database, chat.id, enabled);
       tick = undefined;
@@ -2478,7 +2503,7 @@ test("chat progress sends one message per tick in the originating topic and resp
   } finally {
     globalThis.fetch = originalFetch;
     globalThis.setTimeout = originalSetTimeout;
-    setLlmDeploymentName("small", "");
+    setLlmDeploymentName("big", "");
     await database.destroy();
   }
 });

@@ -15,7 +15,7 @@ const configuredNames = Bun.env.NAMES?.split(",")
 export const name = configuredNames?.length
   ? configuredNames
   : ["laylo", "лейло"];
-export const MODEL = LLM_DEPLOYMENTS.small;
+export const MODEL = LLM_DEPLOYMENTS.big;
 export const tools = [
   "web_search",
   "read_web_page",

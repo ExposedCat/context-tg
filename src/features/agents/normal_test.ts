@@ -14,7 +14,7 @@ test("NAMES configures normal triggers and identity at startup", async () => {
     // Isolate startup configuration from modules already imported by other tests.
     const script = `
       import { deepStrictEqual, ok, strictEqual } from "node:assert";
-      import { normalAgent, guestAgent, tofuAgent, trollAgent, resolveMessageAgentTrigger, stripMessageAgentName } from ${JSON.stringify(indexUrl)};
+      import { normalAgent, guestAgent, trollAgent, getAgentById, resolveMessageAgentTrigger, stripMessageAgentName } from ${JSON.stringify(indexUrl)};
       const expected = ${JSON.stringify(expected)};
       deepStrictEqual(normalAgent.name, expected);
       for (const name of expected) {
@@ -27,7 +27,9 @@ test("NAMES configures normal triggers and identity at startup", async () => {
       }
       strictEqual(resolveMessageAgentTrigger("@test_bot hello", "test_bot")?.name, expected[0]);
       deepStrictEqual(guestAgent.name, ["guest laylo"]);
-      deepStrictEqual(tofuAgent.name, ["tofu laylo", "тофу лейло"]);
+      strictEqual(getAgentById("tofu"), undefined);
+      strictEqual(resolveMessageAgentTrigger("tofu laylo hello", "test_bot"), undefined);
+      strictEqual(resolveMessageAgentTrigger("тофу лейло привет", "test_bot"), undefined);
       strictEqual(trollAgent.name[0], "troll laylo");
     `;
     const child = Bun.spawn({

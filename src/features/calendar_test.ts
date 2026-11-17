@@ -939,7 +939,7 @@ test("Calendar tools survive model follow-ups, obey the shared tool budget and s
     mock.state.events = [verificationEvent(challenge)];
     await verifyCalendarSetup(database, -100, 2, challenge.token, api);
     await setCalendarMcpEnabled(database, -100, true);
-    setLlmDeploymentName("small", "test");
+    setLlmDeploymentName("big", "test");
     const requests: Record<string, unknown>[] = [];
     let callCalendar = true;
     let disableDuringCall = false;

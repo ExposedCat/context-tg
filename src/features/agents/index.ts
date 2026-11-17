@@ -1,15 +1,13 @@
 import { guestAgent } from "./guest.ts";
 import { normalAgent } from "./normal.ts";
-import { tofuAgent } from "./tofu.ts";
 import { trollAgent } from "./troll.ts";
 import type { AgentDefinition, AgentId } from "./types.ts";
 
 export type { AgentDefinition, AgentId, AgentModel } from "./types.ts";
-export { guestAgent, normalAgent, tofuAgent, trollAgent };
+export { guestAgent, normalAgent, trollAgent };
 
 export const AGENTS = [
   normalAgent,
-  tofuAgent,
   guestAgent,
   trollAgent,
 ] satisfies AgentDefinition[];

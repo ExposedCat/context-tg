@@ -20,7 +20,7 @@ an optional read-only `./secrets` directory for credentials.
 
 ## Recurring reminders
 
-The normal and tofu agents create recurring Telegram reminders with `cron_message`.
+The normal agent creates recurring Telegram reminders with `cron_message`.
 It accepts one RFC5545 `rrule`, a minute-precision local `starts_at` (`YYYY-MM-DD HH:mm`),
 and an explicit IANA `timezone`. The `rrule` library parses recurrence and provides
 natural-language descriptions. `/schedule` shows the description, local time zone,
@@ -57,16 +57,17 @@ five-hour reminders retain their original clock-hour slots.
 
 ## Automatic model routing
 
-Configure a routing deployment with `/model router DEPLOYMENT_NAME`, alongside
-the existing `small` and `big` deployments. No model name is hardcoded. The router
-always uses reasoning `none`, independently of the chat's effort settings.
+Configure a routing deployment with `/model router DEPLOYMENT_NAME`. The normal
+and guest agents default to the `big` deployment. Text replies use `small` only
+when the router selects it. The router always uses reasoning `none`,
+independently of the chat's effort settings.
 
 In `/settings`, **Smart replies (automatic relevance and model selection)** is off
 by default. Chat administrators can enable it in groups; users can enable it in
 their private chat. Smart replies add response triggers to the normal conversation
 flow. Messages starting with a configured agent name or the bot username, replies
-to the bot, and private-chat messages always use the normal agent and conversation
-history, without Smart replies relevance checks or automatic-forward cooldowns.
+to the bot, and private-chat messages use the selected agent's default model and
+skip Smart replies relevance checks and forward batching.
 With a router deployment configured, these other group messages are eligible for
 Smart replies:
 
@@ -78,13 +79,13 @@ For this additional flow, names in earlier messages or a reply parent do not cou
 Commands keep their existing handlers. When Smart replies is off or no router is
 configured, ordinary triggering retains its existing behavior.
 
-Forwards share one persisted cooldown per chat, across all senders and topics.
-The first forward reserves the slot **before** routing; the rest of a burst are
-dropped, never queued. The slot stays occupied throughout processing and for
-60 seconds after completion, including declined or failed attempts. Ten forwards
-at once therefore produce zero or one automatic response. A forwarded post
-mentioning an agent name away from the start still uses this limit. Direct
-invocations, bot replies, private chats, and ordinary name mentions do not consume it.
+Smart forwards are batched per group or forum topic, across senders. The first
+forward starts a **two-second** window, and each further forward restarts the
+window. A batch closes immediately at **ten forwards** or after two seconds of
+silence. A Telegram album counts as one forward. Overflow starts a new batch
+while earlier batches are processed in order. For example, 13 forwards in one
+burst produce requests for batches of 10 and 3. The input limit applies to each
+forward. The queue lives in memory.
 
 Eligibility does not guarantee a reply. For ordinary name mentions, the router
 requires an unambiguous request directed to the agent. For forwarded posts, it
@@ -100,30 +101,28 @@ or ask for clarification. Comparison and uncertain domain questions use the larg
 model. Router decisions log the chat/message IDs, response decision, and selected
 model and goal without logging message text.
 
-Each routing call receives only the current message, its reply metadata/excerpt,
-and the configured agent names and bot username. Earlier messages cannot supply
-a trigger. Generation may read history to understand the current message, but
-answers only that message and keeps it as the reply target. The router returns
-`respond=false, model=null`, or `respond=true` with `small` or `large` (`large`
-uses the `big` deployment). Every verdict also includes `goal`, either `answer`
-or `factcheck`; it is ignored when declining. `answer` uses the ordinary agent
-instructions and message input unchanged. For `factcheck`, the exact fact-check
-request is inserted as a separate user message immediately before the post,
-with the same sender, message ID, and date/time. This message is retained in the
-model conversation history. Post images remain attached only to the post.
-The request asks for a short phrase when fully correct, otherwise short bullets
-quoting correct and incorrect parts, while accepting minor exaggerations,
-half-jokes, and insignificant inconsistencies. Declined messages create no
-response task and spend no request or answer credits. A failed or invalid verdict produces no reply.
-Existing quotas and cancellation still apply. Periodic proactive and trolling
-responses are suppressed while Smart replies is active.
+Each routing call receives the current message or forward batch, the associated
+reply metadata and excerpts, and the configured agent names and bot username.
+The router accepts a batch when any post merits a reply. One fact-check request
+then includes every post in order, with images attached to their own post. The
+reply targets the first forward from a regular user, or the first forward if all
+came from the bot admin. The group's normal credit rules apply to mixed batches.
+
+The router returns `respond=false, model=null`, or `respond=true` with `small`
+or `large` (`large` uses the `big` deployment). For a single post the router can
+choose an ordinary answer or a fact-check. Fact-check instructions are saved in
+conversation history as a separate user message immediately before the post or
+batch. Declined forwards create no response task and spend no request or answer
+credits. A failed or invalid verdict produces no reply. Existing quotas and
+cancellation still apply. Periodic proactive and trolling responses are
+suppressed while Smart replies is active.
 
 Run the opt-in relevance evaluation against a configured endpoint with
 `bun src/scripts/evaluate-model-router.ts DEPLOYMENT_NAME [REPETITIONS]`.
 It makes live model calls using `.env`, reports false positives separately from
-missed requests, and never contacts Telegram or writes to the database. Unit
-tests cover concurrent forward bursts, declined attempts, slow processing,
-minute boundaries, per-chat isolation, and persistence across restarts offline.
+missed requests, and never contacts Telegram or writes to the database. Tests
+cover the idle window, overflow, forum topic isolation, and continued processing
+after a failed batch.
 
 The ephemeral `/banish` command permanently suppresses proactive, automatic troll,
 and unsolicited Smart replies in the current forum topic (including General),

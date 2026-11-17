@@ -13,7 +13,7 @@ import { safelyMaybeSendAutomaticResponse } from "./features/automatic-responses
 import { banishComposer } from "./features/banish.ts";
 import { calendarComposer } from "./features/calendar.ts";
 import { startCalendarWatchDispatcher } from "./features/calendar-watch.ts";
-import { chatComposer } from "./features/chat.ts";
+import { chatComposer, isSmartForwardUpdate } from "./features/chat.ts";
 import type { Database } from "./features/database.ts";
 import {
   createEmojiPackTransformer,
@@ -124,13 +124,15 @@ export function initBot(token: string, database: Database) {
     defaultLocale: "en",
   });
 
-  // Allow album bursts while dropping excess updates before expensive work.
-  bot.use(
-    limit({
-      timeFrame: USER_RATE_LIMIT_TIME_FRAME_MS,
-      limit: USER_RATE_LIMIT_MAX_UPDATES,
-    }),
-  );
+  const limitUserUpdates = limit({
+    timeFrame: USER_RATE_LIMIT_TIME_FRAME_MS,
+    limit: USER_RATE_LIMIT_MAX_UPDATES,
+  });
+  bot.use(async (ctx, next) => {
+    // Smart forwards have their own batching, including bursts over ten updates.
+    if (await isSmartForwardUpdate(ctx, database)) return await next();
+    return await limitUserUpdates(ctx, next);
+  });
   bot.use(createPrivateTopicMiddleware());
   bot.use(telemetryMiddleware);
   bot.use((ctx, next) => {

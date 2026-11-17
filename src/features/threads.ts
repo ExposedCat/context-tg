@@ -16,7 +16,7 @@ export type ThreadsTable = {
     string | null
   >;
   agent_id: ColumnType<
-    AgentId | null,
+    AgentId | "tofu" | null,
     AgentId | null | undefined,
     AgentId | null
   >;
@@ -255,7 +255,7 @@ export async function createThread(
   database: Database,
   thread: CreateThread,
 ): Promise<Thread> {
-  const row: Thread = {
+  const row = {
     ...thread,
     agent_id: thread.agent_id ?? null,
     agent_name: thread.agent_name ?? null,
@@ -271,7 +271,7 @@ export async function saveThread(
   database: Database,
   thread: CreateThread,
 ): Promise<Thread> {
-  const row: Thread = {
+  const row = {
     ...thread,
     agent_id: thread.agent_id ?? null,
     agent_name: thread.agent_name ?? null,

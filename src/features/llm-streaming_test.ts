@@ -42,7 +42,7 @@ function wallet(database: Database, chatId = -1) {
 }
 
 test("exhaustion flushes live usage, preserves progress and requests one final answer without tools", async () => {
-  setLlmDeploymentName("small", "stream-test");
+  setLlmDeploymentName("big", "stream-test");
   const database = await initDatabase()();
   const originalFetch = globalThis.fetch;
   let requests = 0;
@@ -144,7 +144,7 @@ test("exhaustion flushes live usage, preserves progress and requests one final a
 });
 
 test("two active streams publish batches and both finish once a parallel task drains the balance", async () => {
-  setLlmDeploymentName("small", "stream-test");
+  setLlmDeploymentName("big", "stream-test");
   const database = await initDatabase()();
   const originalFetch = globalThis.fetch;
   const chunk = "123".repeat(128);
@@ -238,7 +238,7 @@ test("two active streams publish batches and both finish once a parallel task dr
 });
 
 test("credit exhaustion during a tool batch disables further tools, including a disobedient final turn", async () => {
-  setLlmDeploymentName("small", "stream-test");
+  setLlmDeploymentName("big", "stream-test");
   const database = await initDatabase()();
   const originalFetch = globalThis.fetch;
   const { createCreditCharge } = await import("./usage.ts");
@@ -305,7 +305,7 @@ test("credit exhaustion during a tool batch disables further tools, including a 
 });
 
 test("exhaustion during reasoning before any text still gets a final answer", async () => {
-  setLlmDeploymentName("small", "stream-test");
+  setLlmDeploymentName("big", "stream-test");
   const database = await initDatabase()();
   const originalFetch = globalThis.fetch;
   const originalNow = performance.now;
@@ -370,7 +370,7 @@ test("exhaustion during reasoning before any text still gets a final answer", as
 });
 
 test("small text batches publish after one second before the response completes", async () => {
-  setLlmDeploymentName("small", "stream-test");
+  setLlmDeploymentName("big", "stream-test");
   const database = await initDatabase()();
   const originalFetch = globalThis.fetch;
   const originalNow = performance.now;
@@ -412,7 +412,7 @@ test("small text batches publish after one second before the response completes"
 });
 
 test("non-streaming output can overlap the quota and still gets one final turn", async () => {
-  setLlmDeploymentName("small", "stream-test");
+  setLlmDeploymentName("big", "stream-test");
   const { APP_ENV } = await import("./env.ts");
   const previousStreaming = APP_ENV.LLM_STREAMING;
   const database = await initDatabase()();
@@ -450,7 +450,7 @@ test("non-streaming output can overlap the quota and still gets one final turn",
 });
 
 test("an exhausted task does not retry a failed final response", async () => {
-  setLlmDeploymentName("small", "stream-test");
+  setLlmDeploymentName("big", "stream-test");
   const database = await initDatabase()();
   const originalFetch = globalThis.fetch;
   let requests = 0;
@@ -510,7 +510,7 @@ test("an exhausted task does not retry a failed final response", async () => {
 });
 
 test("text credits count progress and final text, excluding input, reasoning and tool arguments", async () => {
-  setLlmDeploymentName("small", "stream-test");
+  setLlmDeploymentName("big", "stream-test");
   const database = await initDatabase()();
   const originalFetch = globalThis.fetch;
   let requests = 0;
@@ -590,7 +590,7 @@ test("text credits count progress and final text, excluding input, reasoning and
 });
 
 test("canceling streamed text flushes only received text", async () => {
-  setLlmDeploymentName("small", "stream-test");
+  setLlmDeploymentName("big", "stream-test");
   const database = await initDatabase()();
   const originalFetch = globalThis.fetch;
   const abort = new AbortController();
@@ -635,7 +635,7 @@ test("canceling streamed text flushes only received text", async () => {
 });
 
 test("a paused stream leaves credits for a concurrent request and charges long answers in batches", async () => {
-  setLlmDeploymentName("small", "stream-test");
+  setLlmDeploymentName("big", "stream-test");
   const database = await initDatabase()();
   const originalFetch = globalThis.fetch;
   const { createCreditCharge } = await import("./usage.ts");
@@ -768,7 +768,7 @@ function sse(events: object[]) {
 }
 
 test("streamed text deltas arrive before completion and the final response supplies usage", async () => {
-  setLlmDeploymentName("small", "stream-test");
+  setLlmDeploymentName("big", "stream-test");
   const originalFetch = globalThis.fetch;
   const events: string[] = [];
   globalThis.fetch = (async (_url, init) => {
@@ -807,7 +807,7 @@ test("streamed text deltas arrive before completion and the final response suppl
 });
 
 test("streamed tool arguments execute only after a terminal response and follow-up also streams", async () => {
-  setLlmDeploymentName("small", "stream-test");
+  setLlmDeploymentName("big", "stream-test");
   const originalFetch = globalThis.fetch;
   let requests = 0;
   let executions = 0;
@@ -875,7 +875,7 @@ test("streamed tool arguments execute only after a terminal response and follow-
 });
 
 test("canceling an already-started task closes an idle stream without retries or tools", async () => {
-  setLlmDeploymentName("small", "stream-test");
+  setLlmDeploymentName("big", "stream-test");
   const database = await initDatabase()();
   const originalFetch = globalThis.fetch;
   const taskKey = { chat_id: 1, message_id: 123 };
@@ -949,7 +949,7 @@ test("canceling an already-started task closes an idle stream without retries or
 });
 
 test("a dropped stream after partial tool arguments is never retried or executed", async () => {
-  setLlmDeploymentName("small", "stream-test");
+  setLlmDeploymentName("big", "stream-test");
   const originalFetch = globalThis.fetch;
   let requests = 0;
   globalThis.fetch = (async () => {
@@ -990,7 +990,7 @@ test("a dropped stream after partial tool arguments is never retried or executed
 });
 
 test("a streamed provider error preserves its diagnosis and resumes without replaying tools", async () => {
-  setLlmDeploymentName("small", "stream-test");
+  setLlmDeploymentName("big", "stream-test");
   const originalFetch = globalThis.fetch;
   let requests = 0;
   let executions = 0;
@@ -1096,7 +1096,7 @@ test("a streamed provider error preserves its diagnosis and resumes without repl
 });
 
 test("a streamed provider output limit preserves partial text without retrying", async () => {
-  setLlmDeploymentName("small", "stream-test");
+  setLlmDeploymentName("big", "stream-test");
   const originalFetch = globalThis.fetch;
   let requests = 0;
   globalThis.fetch = (async () => {
@@ -1125,7 +1125,7 @@ test("a streamed provider output limit preserves partial text without retrying",
 });
 
 test("an admin stream can exceed 64000 text tokens without an application generation cap", async () => {
-  setLlmDeploymentName("small", "stream-test");
+  setLlmDeploymentName("big", "stream-test");
   const database = await initDatabase()();
   const originalFetch = globalThis.fetch;
   const text = "123".repeat(64001);
@@ -1182,7 +1182,7 @@ test("an admin stream can exceed 64000 text tokens without an application genera
 });
 
 test("three minutes without model events closes silent and stalled streams without retrying", async () => {
-  setLlmDeploymentName("small", "stream-test");
+  setLlmDeploymentName("big", "stream-test");
   const originalFetch = globalThis.fetch;
   const settle = async () => {
     for (let i = 0; i < 100; i++) await Promise.resolve();
@@ -1269,7 +1269,7 @@ test("three minutes without model events closes silent and stalled streams witho
 });
 
 test("reasoning, tool arguments and text keep a long stream alive; local callbacks do not consume idle time", async () => {
-  setLlmDeploymentName("small", "stream-test");
+  setLlmDeploymentName("big", "stream-test");
   const originalFetch = globalThis.fetch;
   const settle = async () => {
     for (let i = 0; i < 100; i++) await Promise.resolve();
@@ -1368,7 +1368,7 @@ test("reasoning, tool arguments and text keep a long stream alive; local callbac
 });
 
 test("an active model stream stops at five minutes without retrying and preserves a checkpoint", async () => {
-  setLlmDeploymentName("small", "stream-test");
+  setLlmDeploymentName("big", "stream-test");
   const originalFetch = globalThis.fetch;
   const settle = async () => {
     for (let i = 0; i < 100; i++) await Promise.resolve();

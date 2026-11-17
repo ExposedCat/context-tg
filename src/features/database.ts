@@ -22,10 +22,6 @@ import {
   migrateEmojiPacks,
 } from "./emoji-packs.ts";
 import { APP_ENV } from "./env.ts";
-import {
-  type ForwardReplyCooldownsTable,
-  migrateForwardReplyCooldowns,
-} from "./forwarded-replies.ts";
 import { type ImagesTable, migrateImages } from "./images.ts";
 import {
   type LlmResponseHistoryTable,
@@ -67,7 +63,6 @@ import {
 } from "./user-settings.ts";
 
 export type DatabaseSchema = {
-  forward_reply_cooldowns: ForwardReplyCooldownsTable;
   banished_automatic_responses: BanishedAutomaticResponsesTable;
   chat_calendars: ChatCalendarTable;
   chat_calendar_links: ChatCalendarTable;
@@ -128,7 +123,6 @@ export function initDatabase() {
     await migrateProactiveResponses(database);
     await migrateTrolling(database);
     await migrateBanishedAutomaticResponses(database);
-    await migrateForwardReplyCooldowns(database);
     await migrateEmojiPacks(database);
     await migrateMemos(database);
     await migrateImages(database);

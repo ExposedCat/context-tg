@@ -1,16 +1,6 @@
-import { test } from "bun:test";
+import { jest, test } from "bun:test";
 import { deepStrictEqual, rejects, strictEqual } from "node:assert";
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { Kysely } from "kysely";
-import { type Database, initDatabase } from "./database.ts";
-import {
-  isForwardedMessage,
-  migrateForwardReplyCooldowns,
-  withForwardReplyLimit,
-} from "./forwarded-replies.ts";
-import { createSqliteDialect, openSqlite } from "./sqlite.ts";
+import { ForwardBatcher, isForwardedMessage } from "./forwarded-replies.ts";
 
 test("forward detection uses Telegram metadata, never ordinary text or reply parents", () => {
   for (const forward of [
@@ -25,192 +15,77 @@ test("forward detection uses Telegram metadata, never ordinary text or reply par
   strictEqual(isForwardedMessage({}), false);
 });
 
-test("ten simultaneous forwards reserve at most one attempt, even when declined", async () => {
-  const database = await initDatabase()();
+test("each new forward restarts the two-second window", async () => {
+  jest.useFakeTimers();
   try {
-    let calls = 0;
-    const results = await Promise.all(
-      Array.from({ length: 10 }, () =>
-        withForwardReplyLimit(
-          database,
-          -100,
-          async () => {
-            calls++;
-          },
-          () => 1000,
-        ),
-      ),
-    );
-    strictEqual(calls, 1);
-    strictEqual(results.filter(Boolean).length, 1);
-    strictEqual(
-      await withForwardReplyLimit(
-        database,
-        -100,
-        async () => {
-          calls++;
-        },
-        () => 60_999,
-      ),
-      false,
-    );
-    strictEqual(
-      await withForwardReplyLimit(
-        database,
-        -100,
-        async () => {
-          calls++;
-        },
-        () => 61_000,
-      ),
-      true,
-    );
-    strictEqual(calls, 2);
+    const batches: number[][] = [];
+    const batcher = new ForwardBatcher<number>(async (posts) => {
+      batches.push(posts);
+    });
+    const first = batcher.add("chat:7", 1);
+    jest.advanceTimersByTime(1_999);
+    const second = batcher.add("chat:7", 2);
+    jest.advanceTimersByTime(1_999);
+    await Promise.resolve();
+    deepStrictEqual(batches, []);
+    jest.advanceTimersByTime(1);
+    await Promise.all([first, second]);
+    deepStrictEqual(batches, [[1, 2]]);
   } finally {
-    await database.destroy();
+    jest.useRealTimers();
   }
 });
 
-test("slow generations stay exclusive and start a fresh minute after completion", async () => {
-  const database = await initDatabase()();
-  let time = 1000;
-  const started = Promise.withResolvers<void>();
-  const finish = Promise.withResolvers<void>();
+test("the tenth forward flushes immediately and overflow waits for the next request", async () => {
+  jest.useFakeTimers();
+  const release = Promise.withResolvers<void>();
   try {
-    const first = withForwardReplyLimit(
-      database,
-      -100,
-      async () => {
-        started.resolve();
-        await finish.promise;
-      },
-      () => time,
-    );
-    await started.promise;
-    time = 121_000;
-    strictEqual(
-      await withForwardReplyLimit(
-        database,
-        -100,
-        async () => {},
-        () => time,
-      ),
-      false,
-    );
-    // Other chats have independent limits; all topics/senders in one chat share it.
-    strictEqual(
-      await withForwardReplyLimit(
-        database,
-        -200,
-        async () => {},
-        () => time,
-      ),
-      true,
-    );
-    finish.resolve();
-    strictEqual(await first, true);
-    time = 180_999;
-    strictEqual(
-      await withForwardReplyLimit(
-        database,
-        -100,
-        async () => {},
-        () => time,
-      ),
-      false,
-    );
-    time = 181_000;
-    strictEqual(
-      await withForwardReplyLimit(
-        database,
-        -100,
-        async () => {},
-        () => time,
-      ),
-      true,
-    );
-  } finally {
-    finish.resolve();
-    await database.destroy();
-  }
-});
-
-test("failed forwards retain their cooldown without queuing a replacement", async () => {
-  const database = await initDatabase()();
-  try {
-    await rejects(
-      () =>
-        withForwardReplyLimit(
-          database,
-          -100,
-          async () => {
-            throw new Error("routing failed");
-          },
-          () => 1000,
-        ),
-      /routing failed/,
-    );
-    strictEqual(
-      await withForwardReplyLimit(
-        database,
-        -100,
-        async () => {},
-        () => 2000,
-      ),
-      false,
-    );
-    strictEqual(
-      await withForwardReplyLimit(
-        database,
-        -100,
-        async () => {},
-        () => 61_000,
-      ),
-      true,
-    );
-  } finally {
-    await database.destroy();
-  }
-});
-
-test("forward cooldowns survive closing and reopening SQLite", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "context-forward-cooldown-"));
-  const path = join(directory, "test.sqlite");
-  const connect = (): Database =>
-    new Kysely({ dialect: createSqliteDialect(openSqlite(path)) });
-  let database = connect();
-  try {
-    await migrateForwardReplyCooldowns(database);
-    strictEqual(
-      await withForwardReplyLimit(
-        database,
-        -100,
-        async () => {},
-        () => 1000,
-      ),
-      true,
-    );
-    await database.destroy();
-    database = connect();
-    await migrateForwardReplyCooldowns(database);
-    strictEqual(
-      await withForwardReplyLimit(
-        database,
-        -100,
-        async () => {},
-        () => 60_999,
-      ),
-      false,
-    );
+    const batches: number[][] = [];
+    const batcher = new ForwardBatcher<number>(async (posts) => {
+      batches.push(posts);
+      if (posts[0] === 1) await release.promise;
+    });
+    const queue = (start: number, count: number) =>
+      Array.from({ length: count }, (_, i) => batcher.add("chat:7", start + i));
+    const first = queue(1, 10);
+    await Promise.resolve();
+    deepStrictEqual(batches, [[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]]);
+    const overflow = queue(11, 12);
+    const otherTopic = batcher.add("chat:8", 23);
+    jest.advanceTimersByTime(2_000);
+    await otherTopic;
     deepStrictEqual(
-      await database
-        .selectFrom("forward_reply_cooldowns")
-        .selectAll()
-        .execute(),
-      [{ chat_id: -100, next_allowed_at: 61_000 }],
+      batches.map((batch) => batch[0]),
+      [1, 23],
     );
+    release.resolve();
+    await Promise.all([...first, ...overflow]);
+    deepStrictEqual(batches.slice(2), [
+      [11, 12, 13, 14, 15, 16, 17, 18, 19, 20],
+      [21, 22],
+    ]);
   } finally {
-    await database.destroy();
-    await rm(directory, { recursive: true, force: true });
+    release.resolve();
+    jest.useRealTimers();
+  }
+});
+
+test("a failed batch leaves subsequent batches eligible for processing", async () => {
+  jest.useFakeTimers();
+  try {
+    const batches: number[][] = [];
+    const batcher = new ForwardBatcher<number>(async (posts) => {
+      batches.push(posts);
+      if (posts[0] === 1) throw new Error("failed batch");
+    });
+    const first = batcher.add("chat:7", 1);
+    const failed = rejects(first, /failed batch/);
+    jest.advanceTimersByTime(2_000);
+    const second = batcher.add("chat:7", 2);
+    jest.advanceTimersByTime(2_000);
+    await Promise.all([failed, second]);
+    deepStrictEqual(batches, [[1], [2]]);
+  } finally {
+    jest.useRealTimers();
   }
 });

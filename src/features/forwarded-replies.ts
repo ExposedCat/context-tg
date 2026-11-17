@@ -1,6 +1,3 @@
-import { sql } from "kysely";
-import type { Database } from "./database.ts";
-
 export type ForwardedMessage = {
   forward_origin?: unknown;
   forward_from?: unknown;
@@ -19,75 +16,60 @@ export function isForwardedMessage(message: ForwardedMessage): boolean {
   );
 }
 
-export type ForwardReplyCooldownsTable = {
-  chat_id: number;
-  next_allowed_at: number;
+const FORWARD_BATCH_IDLE_MS = 2_000;
+const MAX_FORWARDS_PER_BATCH = 10;
+
+type ForwardBatch<T> = {
+  posts: T[];
+  done: PromiseWithResolvers<void>;
+  timer?: ReturnType<typeof setTimeout>;
 };
 
-export const FORWARD_REPLY_COOLDOWN_MS = 60_000;
-const inFlight = new WeakMap<Database, Set<number>>();
+type ForwardQueue<T> = {
+  collecting?: ForwardBatch<T>;
+  processing?: Promise<void>;
+};
 
-export async function migrateForwardReplyCooldowns(database: Database) {
-  await database.schema
-    .createTable("forward_reply_cooldowns")
-    .ifNotExists()
-    .addColumn("chat_id", "integer", (column) => column.primaryKey().notNull())
-    .addColumn("next_allowed_at", "integer", (column) => column.notNull())
-    .execute();
-}
+export class ForwardBatcher<T> {
+  readonly #queues = new Map<string, ForwardQueue<T>>();
 
-// Reserve before routing, including declined/failed attempts. A burst gets
-// zero or one answer; later forwards are dropped, never deferred or retried.
-export async function withForwardReplyLimit(
-  database: Database,
-  chatId: number,
-  processForward: () => Promise<void>,
-  now: () => number = Date.now,
-): Promise<boolean> {
-  let active = inFlight.get(database);
-  if (!active) {
-    active = new Set();
-    inFlight.set(database, active);
-  }
-  if (active.has(chatId)) return false;
-  active.add(chatId);
-  let reserved = false;
-  try {
-    const startedAt = now();
-    const reservation = await database
-      .insertInto("forward_reply_cooldowns")
-      .values({
-        chat_id: chatId,
-        next_allowed_at: startedAt + FORWARD_REPLY_COOLDOWN_MS,
-      })
-      .onConflict((conflict) =>
-        conflict
-          .column("chat_id")
-          .doUpdateSet({
-            next_allowed_at: startedAt + FORWARD_REPLY_COOLDOWN_MS,
-          })
-          .where("next_allowed_at", "<=", startedAt),
-      )
-      .returning("chat_id")
-      .executeTakeFirst();
-    if (!reservation) return false;
-    reserved = true;
-    await processForward();
-    return true;
-  } finally {
-    try {
-      // Keep the chat reserved throughout slow generation/delivery, then wait
-      // a full minute after completion so two delayed answers cannot bunch up.
-      if (reserved)
-        await database
-          .updateTable("forward_reply_cooldowns")
-          .set({
-            next_allowed_at: sql<number>`max(next_allowed_at, ${now() + FORWARD_REPLY_COOLDOWN_MS})`,
-          })
-          .where("chat_id", "=", chatId)
-          .execute();
-    } finally {
-      active.delete(chatId);
+  constructor(private readonly processBatch: (posts: T[]) => Promise<void>) {}
+
+  add(key: string, post: T): Promise<void> {
+    let queue = this.#queues.get(key);
+    if (!queue) {
+      queue = {};
+      this.#queues.set(key, queue);
     }
+    queue.collecting ??= {
+      posts: [],
+      done: Promise.withResolvers<void>(),
+    };
+    const batch = queue.collecting;
+    batch.posts.push(post);
+    clearTimeout(batch.timer);
+
+    if (batch.posts.length === MAX_FORWARDS_PER_BATCH) {
+      this.#flush(key, queue, batch);
+    } else {
+      batch.timer = setTimeout(
+        () => this.#flush(key, queue, batch),
+        FORWARD_BATCH_IDLE_MS,
+      );
+    }
+    return batch.done.promise;
+  }
+
+  #flush(key: string, queue: ForwardQueue<T>, batch: ForwardBatch<T>): void {
+    queue.collecting = undefined;
+    const processing = (queue.processing ?? Promise.resolve())
+      .then(() => this.processBatch(batch.posts))
+      .then(batch.done.resolve, batch.done.reject);
+    queue.processing = processing;
+    void processing.then(() => {
+      if (!queue.collecting && queue.processing === processing) {
+        this.#queues.delete(key);
+      }
+    });
   }
 }
