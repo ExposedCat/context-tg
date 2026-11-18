@@ -434,11 +434,12 @@ test("each request costs one fixed credit plus one credit per 620 generated text
   }
 });
 
-test("ADMIN_ID has unlimited credits in every chat and guest mode without granting other users an exemption", async () => {
+test("ADMIN_ID incurs no charges in normal or guest mode even at an exhausted balance", async () => {
   const db = await database();
   try {
     for (const chatId of [10, -10]) {
       await handleUsageCommand(db, chatId, "-100", true, t);
+      await handleUsageCommand(db, 2, "-20", true, t);
       for (const guest of [false, true]) {
         const events: Record<string, unknown>[] = [];
         const ctx = {
@@ -460,12 +461,11 @@ test("ADMIN_ID has unlimited credits in every chat and guest mode without granti
         ] as const)
           await charge(kind);
         const meter = createTextCreditCharge(ctx, guest);
-        await Promise.all([meter.charge(10000), meter.charge(10000)]);
-        strictEqual(events.length, 6);
-        for (const event of events) {
-          strictEqual(event.usage_limit, "unlimited");
-          strictEqual(event.mode, guest ? "guest" : "normal");
-        }
+        strictEqual(await meter.hasRemaining(), true);
+        deepStrictEqual(
+          await Promise.all([meter.charge(10000), meter.charge(10000)]),
+          [true, true],
+        );
         const regular = { ...ctx, from: { id: 2 } } as Context;
         strictEqual(await hasUsageRemaining(db, chatId, 2), false);
         strictEqual(await hasUsageRemaining(db, chatId), false);
@@ -480,9 +480,12 @@ test("ADMIN_ID has unlimited credits in every chat and guest mode without granti
           false,
         );
         const status = await getUsageStatus(db, chatId);
-        strictEqual(status.quota, 0);
-        strictEqual(status.unlimited, false);
-        strictEqual(status.used > 0, true);
+        deepStrictEqual(status, { used: 0, quota: 0, unlimited: false });
+        deepStrictEqual(events, []);
+        deepStrictEqual(
+          await db.selectFrom("credit_usage").selectAll().execute(),
+          [],
+        );
       }
     }
   } finally {

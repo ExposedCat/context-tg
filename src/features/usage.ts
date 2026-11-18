@@ -115,8 +115,17 @@ export async function hasUsageRemaining(
   return status.unlimited || status.used < status.quota;
 }
 
-function availableTextTokens(chatId: number, date: string, unlimited = false) {
-  if (unlimited) return sql<number>`cast(9007199254740991 as real)`;
+export function getUsageOwner(ctx: Context, guest = false): number {
+  if (!ctx.chat) throw new Error("Credit usage requires a chat.");
+  if (guest && ctx.chat.type === "private") {
+    // In a guest DM the chat can identify the other participant.
+    if (!ctx.from) throw new Error("Credit usage requires a sender.");
+    return ctx.from.id;
+  }
+  return ctx.chat.id;
+}
+
+function availableTextTokens(chatId: number, date: string) {
   const n = TOKENS_PER_CREDIT;
   return sql<number>`cast(case when coalesce((select unlimited from credit_limits where chat_id = ${chatId}), 0) = 1
     then 9007199254740991 else
@@ -128,11 +137,15 @@ export function createTextCreditCharge(
   ctx: Context,
   guest = false,
 ): TextCreditCharge {
-  if (!ctx.chat) throw new Error("Credit usage requires a chat.");
-  const chatId = ctx.chat.id;
-  const unlimited = isBotAdmin(ctx);
+  if (isBotAdmin(ctx)) {
+    return {
+      hasRemaining: async () => true,
+      charge: async () => true,
+    };
+  }
+  const chatId = getUsageOwner(ctx, guest);
   return {
-    hasRemaining: () => hasUsageRemaining(ctx.database, chatId, ctx.from?.id),
+    hasRemaining: () => hasUsageRemaining(ctx.database, chatId),
     charge: async (tokens) => {
       if (!Number.isSafeInteger(tokens) || tokens < 0)
         throw new Error("Invalid token usage.");
@@ -142,14 +155,13 @@ export function createTextCreditCharge(
       const result = await ctx.database.transaction().execute(async (db) => {
         const date = getUsageDate();
         const status = await getUsageStatus(db, chatId, date);
-        const exempt = unlimited || status.unlimited;
         const balance = await sql<{
           remaining: number;
-        }>`select ${availableTextTokens(chatId, date, unlimited)} as remaining`.execute(
+        }>`select ${availableTextTokens(chatId, date)} as remaining`.execute(
           db,
         );
         const remaining = balance.rows[0].remaining;
-        const charged = exempt
+        const charged = status.unlimited
           ? tokens
           : Math.min(tokens, Math.max(0, remaining));
         if (charged > 0) {
@@ -161,8 +173,8 @@ export function createTextCreditCharge(
         }
         return {
           charged,
-          exempt,
-          remaining: exempt || remaining > charged,
+          unlimited: status.unlimited,
+          remaining: status.unlimited || remaining > charged,
         };
       });
       if (result.charged > 0)
@@ -170,7 +182,7 @@ export function createTextCreditCharge(
           credits: result.charged / TOKENS_PER_CREDIT,
           credit_kind: "text",
           usage_owner: chatId,
-          usage_limit: result.exempt ? "unlimited" : "limited",
+          usage_limit: result.unlimited ? "unlimited" : "limited",
           chat_type: ctx.chat?.type === "private" ? "private" : "group",
           mode: guest ? "guest" : "normal",
           tools: [],
@@ -183,14 +195,12 @@ export async function consumeUsage(
   database: Database,
   chatId: number,
   amount = 1,
-  unlimited = false,
 ) {
   if (!Number.isSafeInteger(amount) || amount <= 0)
     throw new Error("Invalid credit amount.");
   const date = getUsageDate();
-  // The exemption belongs to this request; it never changes the chat limit.
   // Conditional UPSERT keeps ordinary parallel calls within the same balance.
-  const remaining = availableTextTokens(chatId, date, unlimited);
+  const remaining = availableTextTokens(chatId, date);
   const result = await sql<{
     used: number;
   }>`insert into credit_usage (chat_id, usage_date, used)
@@ -203,18 +213,17 @@ export async function consumeUsage(
   };
 }
 export function createCreditCharge(ctx: Context, guest = false): CreditCharge {
-  if (!ctx.chat) throw new Error("Credit usage requires a chat.");
-  const owner = ctx.chat.id;
-  const unlimited = isBotAdmin(ctx);
+  if (isBotAdmin(ctx)) return async () => {};
+  const owner = getUsageOwner(ctx, guest);
   return async (kind, tool) => {
     const amount = CREDIT_PRICES[kind];
-    const status = await consumeUsage(ctx.database, owner, amount, unlimited);
+    const status = await consumeUsage(ctx.database, owner, amount);
     if (!status.ok) throw new CreditLimitError(status, amount);
     ctx.telemetry.event("credit_usage", {
       credits: amount,
       credit_kind: kind,
       usage_owner: owner,
-      usage_limit: unlimited || status.unlimited ? "unlimited" : "limited",
+      usage_limit: status.unlimited ? "unlimited" : "limited",
       chat_type: ctx.chat?.type === "private" ? "private" : "group",
       mode: guest ? "guest" : "normal",
       tools: tool ? [tool] : [],
@@ -290,7 +299,9 @@ export async function handleUsageCommand(
       )
       .execute();
   }
-  const s = await getUsageStatus(database, chatId);
+  const s = isBotAdminId(chatId)
+    ? { used: 0, quota: 0, unlimited: true }
+    : await getUsageStatus(database, chatId);
   return [
     translate("settings-usage-title", { date: getUsageDate() }),
     translate("settings-usage-line", {

@@ -1238,10 +1238,11 @@ test("tool errors hide details unless debug is enabled", () => {
 });
 
 test("guest usage commands report and adjust group credits without changing personal credits", async () => {
-  const { createCreditCharge, getUsageStatus } = await import("./usage.ts");
+  const { consumeUsage, getUsageStatus } = await import("./usage.ts");
   const database = await initDatabase()();
   const i18n = new I18n({ directory: "locales", defaultLocale: "en" });
   try {
+    await consumeUsage(database, -1, 7);
     for (const [args, expectedQuota] of [
       ["+10", 60],
       ["-20", 40],
@@ -1269,12 +1270,6 @@ test("guest usage commands report and adjust group credits without changing pers
       ctx.database = database;
       ctx.telemetry = { event: () => {} } as Context["telemetry"];
       ctx.t = (key, values) => i18n.t("en", key, values);
-      if (args === "+10") {
-        const charge = createCreditCharge(ctx, true);
-        await charge("request");
-        await charge("tool", "generate_image");
-        await charge("image_attempt", "generate_image");
-      }
       const responses: Array<Parameters<Context["answerGuestQuery"]>[0]> = [];
       ctx.answerGuestQuery = (result) => {
         responses.push(result);
@@ -1306,6 +1301,61 @@ test("guest usage commands report and adjust group credits without changing pers
           ].map((text) => ({ type: "paragraph", text })),
         },
       });
+    }
+  } finally {
+    await database.destroy();
+  }
+});
+
+test("guest usage in a DM reports the sender's balance", async () => {
+  const { consumeUsage } = await import("./usage.ts");
+  const database = await initDatabase()();
+  const i18n = new I18n({ directory: "locales", defaultLocale: "en" });
+  const admin = { id: 1, is_bot: false, first_name: "Admin" };
+  const user = { id: 2, is_bot: false, first_name: "User" };
+  try {
+    await consumeUsage(database, admin.id, 10);
+    await consumeUsage(database, user.id, 5);
+    for (const [sender, peer, expected] of [
+      [admin, user, /Credits used: 0\.00 \/ ∞/],
+      [user, admin, /Credits used: 5\.00 \/ 20/],
+    ] as const) {
+      const ctx = new GrammyContext(
+        {
+          update_id: 1,
+          guest_message: {
+            message_id: 1,
+            date: 0,
+            from: sender,
+            chat: { ...peer, type: "private" },
+            text: "@test_bot /usage",
+          },
+        },
+        new Api("test"),
+        {
+          id: 42,
+          is_bot: true,
+          first_name: "Test",
+          username: "test_bot",
+        } as Context["me"],
+      ) as Context;
+      ctx.database = database;
+      ctx.telemetry = { event: () => {} } as Context["telemetry"];
+      ctx.t = (key, values) => i18n.t("en", key, values);
+      const responses: Array<Parameters<Context["answerGuestQuery"]>[0]> = [];
+      ctx.answerGuestQuery = async (response) => {
+        responses.push(response);
+        return { inline_message_id: "test" };
+      };
+      await chatComposer.middleware()(ctx, async () => {
+        throw new Error("Guest usage command should be handled");
+      });
+      strictEqual(responses.length, 1);
+      ok(
+        expected.test(
+          JSON.stringify(responses[0]).replace(/[\u2068\u2069]/g, ""),
+        ),
+      );
     }
   } finally {
     await database.destroy();

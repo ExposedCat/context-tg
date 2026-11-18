@@ -118,6 +118,7 @@ import {
 import {
   createCreditCharge,
   createTextCreditCharge,
+  getUsageOwner,
   handleUsageCommand,
   hasUsageRemaining,
   parseGuestUsageCommand,
@@ -3348,7 +3349,11 @@ export async function replyWithResumeTask(
 }
 
 chatComposer.on("guest_message", async (ctx, next) => {
-  if (!ctx.chat || !ctx.guestMessage) {
+  if (
+    !ctx.chat ||
+    !ctx.guestMessage ||
+    (ctx.chat.type === "private" && !ctx.from)
+  ) {
     await next();
     return;
   }
@@ -3381,7 +3386,7 @@ chatComposer.on("guest_message", async (ctx, next) => {
   if (usageArgs !== undefined) {
     const response = await handleUsageCommand(
       ctx.database,
-      ctx.chat.id,
+      getUsageOwner(ctx, true),
       usageArgs,
       isBotAdmin(ctx),
       ctx.t,

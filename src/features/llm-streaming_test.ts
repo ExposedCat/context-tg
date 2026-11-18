@@ -1171,10 +1171,7 @@ test("an admin stream can exceed 64000 text tokens without an application genera
       "Answer the request.",
     );
     strictEqual(answer.response, text);
-    strictEqual(
-      (await getUsageStatus(database, -800)).used,
-      64001 / TOKENS_PER_CREDIT,
-    );
+    strictEqual((await getUsageStatus(database, -800)).used, 0);
   } finally {
     globalThis.fetch = originalFetch;
     await database.destroy();

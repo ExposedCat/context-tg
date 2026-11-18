@@ -367,10 +367,10 @@ reasoning, tool arguments, thread titles and automatic validation verdicts do no
 spend text credits.
 Tool charges remain 1 credit per execution, an extra 1 for web search, and
 5 per image-generation attempt. These charges share the same daily balance.
-Requests from `ADMIN_ID` always bypass credit limits in private chats, groups,
-guest mode and automatic responses, including tool and image charges. Their
-usage is still recorded; the exemption never changes the chat's quota or grants
-unlimited usage to other users.
+Requests from `ADMIN_ID` are unlimited and consume zero credits for requests,
+text, tools and images, including in guest mode and automatic responses. In
+private guest chats, each other sender uses their own daily balance, shared with
+their direct chat with the bot. Groups use a shared balance.
 
 Assistant text is charged while streaming, in batches of 128 tokens or after
 one second when the next stream event arrives. Completion, cancellation and
@@ -383,8 +383,9 @@ and further tool work, preserves received text, and gets one final model turn
 with all tools disabled to summarize the available results. The final turn
 cannot start another tool loop or retry loop. Parallel streams may overlap
 slightly; finite usage saturates at the daily quota, including final wrap-up
-text, rather than showing an overdrawn balance. Unlimited usage is still fully
-recorded. Unknown provider-side reasoning costs never become text credits.
+text, rather than showing an overdrawn balance. Balances set to unlimited with
+`/usage +unlimited` still record spend from other senders. Unknown provider-side
+reasoning costs never become text credits.
 
 The migration preserves existing usage and limits and removes obsolete
 reservation records.

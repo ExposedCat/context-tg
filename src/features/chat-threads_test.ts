@@ -7,7 +7,9 @@ Bun.env.LLM_STREAMING = "false";
 const { chatComposer } = await import("./chat.ts");
 const { initDatabase } = await import("./database.ts");
 const { setLlmDeploymentName } = await import("./llm-deployments.ts");
+const { countTextTokens, TOKENS_PER_CREDIT } = await import("./text-tokens.ts");
 const { migrateThreads, saveThread } = await import("./threads.ts");
+const { getUsageStatus, handleUsageCommand } = await import("./usage.ts");
 
 type Message = NonNullable<Context["message"]>;
 type Reply = NonNullable<Message["reply_to_message"]>;
@@ -188,6 +190,48 @@ test("guest replies use exact IDs even when content is edited and delivery IDs a
     );
     // No incrementing of a trigger ID or matching the identical answer text.
     await f.send({ ...dm(170), reply_to_message: parent(101, "560") }, null);
+  } finally {
+    await f.close();
+  }
+});
+
+test("private guest replies use the current sender's credits in a conversation with the admin", async () => {
+  const f = await fixture();
+  const admin = { id: 1, is_bot: false, first_name: "Admin" };
+  try {
+    await handleUsageCommand(
+      f.database,
+      admin.id,
+      "+unlimited",
+      true,
+      (key) => key,
+    );
+    const first = await f.send(dm(100, admin, alice), null, "Admin answer.");
+    await f.send(
+      {
+        ...dm(102, admin, alice),
+        reply_to_message: parent(101, "Admin answer.", admin),
+      },
+      first,
+      "Admin follow-up.",
+    );
+    strictEqual((await getUsageStatus(f.database, alice.id)).used, 0);
+
+    const answer = "User answer.";
+    await f.send(
+      {
+        ...dm(200, alice, admin),
+        reply_to_message: parent(201, "Admin answer.", admin),
+      },
+      first,
+      answer,
+    );
+    deepStrictEqual(await getUsageStatus(f.database, alice.id), {
+      used: 1 + countTextTokens(answer) / TOKENS_PER_CREDIT,
+      quota: 20,
+      unlimited: false,
+    });
+    strictEqual((await getUsageStatus(f.database, admin.id)).used, 0);
   } finally {
     await f.close();
   }

@@ -21,7 +21,9 @@ for (const [key, value] of Object.entries({
 const { stateComposer } = await import("./state.ts");
 const { createPrivateTopicMiddleware } = await import("./private-topics.ts");
 const { initDatabase } = await import("./database.ts");
-const { getUsageStatus, handleUsageCommand } = await import("./usage.ts");
+const { consumeUsage, getUsageStatus, handleUsageCommand } = await import(
+  "./usage.ts"
+);
 
 test("addressed usage adjustments respond with or without command entities and preserve ephemeral replies", async () => {
   const database = await initDatabase()();
@@ -136,6 +138,7 @@ test("addressed usage adjustments respond with or without command entities and p
       type: "private" as const,
       first_name: "Admin",
     };
+    await consumeUsage(database, privateChat.id, 7);
     await bot.handleUpdate({
       update_id: ++updateId,
       message: {
@@ -168,6 +171,11 @@ test("addressed usage adjustments respond with or without command entities and p
     );
     strictEqual(calls[0]?.method, "sendMessage");
     strictEqual(calls[0].payload.message_thread_id, 2192419);
+    match(
+      String(calls[0].payload.text).replace(/[\u2068\u2069]/g, ""),
+      /Credits used: 0\.00 \/ ∞/,
+    );
+    strictEqual((await getUsageStatus(database, privateChat.id)).used, 7);
     strictEqual((await getUsageStatus(database, chat.id)).quota, 85);
   } finally {
     await database.destroy();
