@@ -93,6 +93,15 @@ test("raw model newlines survive chat delivery and Telegram HTTP serialization",
     "First line\nsecond line\n\nNext paragraph\n\n- First\n- Second",
     "First **line**<br>second line\n\nNext paragraph",
     'Intro\n\n<table bordered striped>\n<tr><th align="left">Item</th><th align="right">Value</th></tr>\n<tr><td align="left">Example</td><td align="right"><b>42</b></td></tr>\n</table>\n\nConclusion',
+    [
+      String.raw`For all <tg-math>x\in D</tg-math>, the mapping stays inside the rectangle.`,
+      "",
+      String.raw`<tg-math-block>p\in D,\quad x\in D`,
+      String.raw`\quad\Longrightarrow\quad`,
+      String.raw`H(x)=(1-s)p+sx\in D.</tg-math-block>`,
+      "",
+      "<blockquote expandable>The fare was $5.<cite>Author</cite></blockquote>",
+    ].join("\n"),
   ];
   let responseText = "";
   globalThis.fetch = (async () =>

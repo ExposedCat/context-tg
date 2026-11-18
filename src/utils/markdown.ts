@@ -1,49 +1,25 @@
-function isEscapedCharacter(text: string, index: number): boolean {
-  let slashCount = 0;
+const MARKDOWN_TOKENS = new RegExp(
+  [
+    // Match escape pairs first so repeating normalization is safe.
+    /\\[\\$`<]/.source,
+    // A closing fence uses the same marker and is at least as long. An open
+    // fence can run to the end of a progress message.
+    /^ {0,3}(?<fence>(?<marker>`|~)\k<marker>{2,})[^\r\n]*(?=\r?$)[\s\S]*?(?:^ {0,3}\k<fence>\k<marker>*[ \t]*(?=\r?$)|(?![\s\S]))/
+      .source,
+    /(?<!`)(?<ticks>`+)(?!`)[\s\S]*?(?<!`)\k<ticks>(?!`)/.source,
+    // Telegram treats these bodies as HTML or verbatim LaTeX. Preserve
+    // incomplete blocks too while a response is streaming.
+    /<(?<tag>table|blockquote|figure|figcaption|pre|code|tg-math-block|tg-math)(?=[\s>])(?:"[^"]*"|'[^']*'|[^'"<>])*>[\s\S]*?(?:<\/\k<tag>\s*>|(?![\s\S]))/
+      .source,
+    /<\/?[a-z][\w-]*(?=[\s/>])(?:"[^"]*"|'[^']*'|[^'"<>])*>/.source,
+    /\$/.source,
+  ].join("|"),
+  "gim",
+);
 
-  for (let cursor = index - 1; cursor >= 0 && text[cursor] === "\\"; cursor--) {
-    slashCount++;
-  }
-
-  return slashCount % 2 === 1;
-}
-
-function escapeSingleDollarSigns(text: string): string {
-  let escaped = "";
-
-  for (let index = 0; index < text.length; index++) {
-    const character = text[index];
-
-    if (character !== "$") {
-      escaped += character;
-      continue;
-    }
-
-    if (text[index + 1] === "$") {
-      escaped += "$$";
-      index++;
-      continue;
-    }
-
-    escaped += isEscapedCharacter(text, index) ? "$" : "\\$";
-  }
-
-  return escaped;
-}
-
-/** Escape currency dollars outside HTML tables; preserve markup and whitespace. */
+/** Escape dollar signs where Telegram parses Markdown text. */
 export function normalizeRichMarkdown(text: string): string {
-  const tables = /<table(?=[\s>])[^>]*>[\s\S]*?(?:<\/table\s*>|$)/gi;
-  let normalized = "";
-  let cursor = 0;
-
-  for (const match of text.matchAll(tables)) {
-    normalized += escapeSingleDollarSigns(text.slice(cursor, match.index));
-    // Telegram does not parse Markdown escapes in HTML tables. Also preserve
-    // unfinished tables while a response is streaming.
-    normalized += match[0];
-    cursor = match.index + match[0].length;
-  }
-
-  return normalized + escapeSingleDollarSigns(text.slice(cursor));
+  return text.includes("$")
+    ? text.replace(MARKDOWN_TOKENS, (token) => (token === "$" ? "\\$" : token))
+    : text;
 }

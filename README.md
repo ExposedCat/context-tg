@@ -703,11 +703,10 @@ breaks inside a paragraph. Tables use `<table bordered striped>` without
 Table cells use HTML inline formatting because Telegram does not parse Markdown
 inside HTML tables.
 
-These rules are part of the shared agent instructions. Delivery preserves source
-whitespace and markup; it does not infer missing line breaks or repair lists and
-tables. Ordinary dollar signs outside HTML tables are escaped so Telegram does
-not parse currency as LaTeX. Dollar signs inside HTML tables remain unescaped
-because Telegram displays Markdown escape backslashes literally in table cells.
+Use `<tg-math>` for inline LaTeX and `<tg-math-block>` or a fenced `math` block for
+display LaTeX, including multiline formulas. Delivery escapes dollar signs in
+Markdown prose, including consecutive dollars, and preserves them inside math,
+code, and HTML blocks such as tables, quotes, and media captions.
 
 ## Saved images
 
