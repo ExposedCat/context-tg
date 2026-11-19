@@ -758,7 +758,7 @@ test("routing goals preserve ordinary answers and prepend the exact fact-check r
     router: LLM_DEPLOYMENTS.router.deploymentName,
   };
   const factcheckText =
-    "Fact-check the following post. If it's fully correct, respond with a short phrase. Otherwise, write a bullet list of what's correct and what's incorrect; keep items short and descriptive, use quotes to quote exact parts. Don't be a misleading nerd: subtle exaggerations, half-jokes and minor inconsistencies are okay, only call out factually wrong statements which have absolutely no ground or are meaningfully change the fact.";
+    "Fact-check the following post. Use the ignore tool if the post is a joke, a subjective opinion, or otherwise contains nothing that needs fact-checking. If it's fully correct, respond with a short phrase. Otherwise, write a bullet list of what's correct and what's incorrect; keep items short and descriptive, use quotes to quote exact parts. Don't be a misleading nerd: subtle exaggerations, half-jokes and minor inconsistencies are okay, only call out factually wrong statements which have absolutely no ground or are meaningfully change the fact.";
   const sender = {
     id: 1,
     is_bot: false,
@@ -1072,7 +1072,7 @@ test("routing goals preserve ordinary answers and prepend the exact fact-check r
     const [instruction, ...posts] = userMessages.slice(-4);
     ok(
       JSON.stringify(instruction.content).includes(
-        "Fact-check the following forwarded posts",
+        "Fact-check the following forwarded posts. Use the ignore tool if every post",
       ),
     );
     deepStrictEqual(
@@ -1090,6 +1090,146 @@ test("routing goals preserve ordinary answers and prepend the exact fact-check r
     globalThis.fetch = originalFetch;
     setLlmDeploymentName("router", previous.router);
     setLlmDeploymentName("small", previous.small);
+    await database.destroy();
+  }
+});
+
+test("ignore ends the turn and reacts to the trigger even if thinking is in flight", async () => {
+  const { getLlmResponseInputItems } = await import("./llm-chat-responses.ts");
+  const { getTask } = await import("./tasks.ts");
+  const database = await initDatabase()();
+  const originalFetch = globalThis.fetch;
+  const previousBig = LLM_DEPLOYMENTS.big.deploymentName;
+  const api = new Api("test");
+  const chat = { id: -100, type: "supergroup", title: "Test" } as const;
+  const bot = {
+    id: 42,
+    is_bot: true,
+    first_name: "Bot",
+    username: "test_bot",
+  } as Context["me"];
+  const reactions: Array<[number, unknown]> = [];
+  const thinking = Promise.withResolvers<true>();
+  let modelCalls = 0;
+  let sentMessages = 0;
+  api.sendChatAction = async () => true;
+  api.setMessageReaction = async (chatId, messageId, reaction) => {
+    strictEqual(chatId, chat.id);
+    reactions.push([messageId, reaction]);
+    return reaction?.[0]?.type === "emoji" && reaction[0].emoji === "🤔"
+      ? thinking.promise
+      : true;
+  };
+  api.sendRichMessage = async () => {
+    sentMessages++;
+    return {
+      message_id: 1000,
+      date: 1,
+      chat,
+      from: bot,
+      rich_message: { blocks: [] },
+    };
+  };
+
+  jest.useFakeTimers();
+  try {
+    setLlmDeploymentName("big", "ignore-answer");
+    for (const [messageId, mode] of [
+      [1, "fast"],
+      [2, "slow"],
+      [3, "guest"],
+    ] as const) {
+      const requested = Promise.withResolvers<void>();
+      const finishModel = Promise.withResolvers<void>();
+      globalThis.fetch = (async (input, init) => {
+        const request = new Request(input, init);
+        strictEqual(request.url, "https://llm.test/v1/responses");
+        strictEqual(++modelCalls, messageId);
+        const body = await request.json();
+        ok(body.tools.some((tool: { name: string }) => tool.name === "ignore"));
+        requested.resolve();
+        await finishModel.promise;
+        const result = await response(
+          "Do not send this text",
+          3000 + messageId,
+        ).json();
+        result.output.push({
+          type: "function_call",
+          name: "ignore",
+          call_id: `call_ignore_${messageId}`,
+          arguments: "{}",
+          status: "completed",
+        });
+        return Response.json(result);
+      }) as typeof fetch;
+      const message = {
+        message_id: messageId,
+        date: 1,
+        chat,
+        from: { id: 1, is_bot: false, first_name: "User" },
+        text: "laylo, don't respond",
+      };
+      const ctx = new GrammyContext(
+        mode === "guest"
+          ? { update_id: messageId, guest_message: message }
+          : { update_id: messageId, message },
+        api,
+        bot,
+      ) as Context;
+      ctx.database = database;
+      ctx.telemetry = { event: () => {} } as Context["telemetry"];
+      ctx.answerGuestQuery = async () => {
+        sentMessages++;
+        return { inline_message_id: "test" };
+      };
+      const pending = chatComposer.middleware()(ctx, async () => {
+        throw new Error("The invocation should be handled");
+      });
+      await requested.promise;
+      if (mode === "slow") {
+        jest.advanceTimersByTime(5_000);
+        deepStrictEqual(reactions.splice(0), [
+          [messageId, [{ type: "emoji", emoji: "🤔" }]],
+        ]);
+      }
+      finishModel.resolve();
+      if (mode === "slow") {
+        await new Promise<void>((resolve) => realSetImmediate(resolve));
+        deepStrictEqual(reactions, []);
+        thinking.resolve(true);
+      }
+      await pending;
+      deepStrictEqual(reactions.splice(0), [
+        [messageId, [{ type: "emoji", emoji: "👌" }]],
+      ]);
+      if (mode !== "guest") {
+        const task = await getTask(database, {
+          chat_id: chat.id,
+          message_id: messageId,
+        });
+        strictEqual(task?.status, "finished");
+      }
+      const history = await getLlmResponseInputItems(
+        database,
+        `resp_router_${3000 + messageId}`,
+      );
+      ok(
+        history?.some(
+          (item) =>
+            item.type === "function_call_output" &&
+            item.call_id === `call_ignore_${messageId}` &&
+            String(item.output).includes('"ignored"'),
+        ),
+      );
+      ok(!JSON.stringify(history).includes("Do not send this text"));
+    }
+    strictEqual(sentMessages, 0);
+    strictEqual(modelCalls, 3);
+  } finally {
+    thinking.resolve(true);
+    jest.useRealTimers();
+    globalThis.fetch = originalFetch;
+    setLlmDeploymentName("big", previousBig);
     await database.destroy();
   }
 });

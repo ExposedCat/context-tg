@@ -3336,13 +3336,21 @@ test("periodic trolling delivers to the selected context message or without a re
   const originalModel = getLlmDeployment("openminded").deploymentName;
   const candidate = "A specific topical quip.";
   const sent: Array<{ text: string; options: Record<string, unknown> }> = [];
+  const reactions: unknown[][] = [];
   let selectedId: number | null | undefined;
+  let ignore = false;
   let approved = true;
   let validations = 0;
   const ctx = {
     database,
     chat: { id: -100, type: "supergroup" },
     telemetry: { event: () => {} },
+    api: {
+      setMessageReaction: (...args: unknown[]) => {
+        reactions.push(args);
+        return Promise.resolve(true);
+      },
+    },
     reply: (text: string, options: Record<string, unknown>) => {
       sent.push({ text, options });
       return Promise.resolve();
@@ -3395,8 +3403,20 @@ test("periodic trolling delivers to the selected context message or without a re
     if (body.model === "test-troll-reply-model") {
       deepStrictEqual(
         body.tools.map((tool: { name: string }) => tool.name),
-        ["set_reply_message_id"],
+        ["set_reply_message_id", "ignore"],
       );
+      if (ignore) {
+        return respond("resp_troll_ignore", [
+          {
+            id: "tool_troll_ignore",
+            type: "function_call",
+            call_id: "call_troll_ignore",
+            name: "ignore",
+            arguments: "{}",
+            status: "completed",
+          },
+        ]);
+      }
       const result = body.input.find(
         (item: { type: string }) => item.type === "function_call_output",
       );
@@ -3443,10 +3463,12 @@ test("periodic trolling delivers to the selected context message or without a re
       { name: "default trigger", id: undefined, replyId: 2 },
       { name: "shared situation", id: null, replyId: null },
       { name: "unknown message is not sent", id: 99, skip: true },
+      { name: "ignored turn only reacts", id: undefined, ignore: true },
       { name: "rejected earlier reply is not sent", id: 1, rejected: true },
     ]) {
       await step(test.name, async () => {
         selectedId = test.id;
+        ignore = test.ignore === true;
         approved = !test.rejected;
         validations = 0;
         sent.length = 0;
@@ -3462,8 +3484,12 @@ test("periodic trolling delivers to the selected context message or without a re
           { id: 2, first_name: "Trigger user" },
           -100,
         );
-        strictEqual(validations, test.skip ? 0 : 1);
-        if (test.skip || test.rejected) {
+        deepStrictEqual(
+          reactions.splice(0),
+          ignore ? [[-100, 2, [{ type: "emoji", emoji: "👌" }]]] : [],
+        );
+        strictEqual(validations, test.skip || ignore ? 0 : 1);
+        if (test.skip || test.rejected || ignore) {
           deepStrictEqual(sent, []);
           return;
         }

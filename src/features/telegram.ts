@@ -1,3 +1,28 @@
+import { createDebug } from "@grammyjs/debug";
+import type { Api } from "grammy";
+
+const logError = createDebug("app:telegram:error");
+
+export async function submitMessageReaction(
+  api: Api,
+  chatId: number,
+  messageId: number,
+  reaction: "🤔" | "👌",
+): Promise<void> {
+  try {
+    await api.setMessageReaction(chatId, messageId, [
+      { type: "emoji", emoji: reaction },
+    ]);
+  } catch (error) {
+    logError("Failed to submit reaction:", {
+      chatId,
+      messageId,
+      reaction,
+      error,
+    });
+  }
+}
+
 export const disabledLinkPreviewOptions = {
   link_preview_options: {
     is_disabled: true,

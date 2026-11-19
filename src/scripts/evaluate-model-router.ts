@@ -38,6 +38,12 @@ const cases: EvaluationCase[] = [
     respond: false,
   },
   {
+    name: "forwarded playful praise with a screenshot label",
+    current: "Nova has the best CoT lol. Look at this raw CoT 😭",
+    forwarded: true,
+    respond: false,
+  },
+  {
     name: "forwarded discussion prompt",
     current: "Народ, а вам тоже больше нравится старый дизайн?",
     forwarded: true,
@@ -57,6 +63,21 @@ const cases: EvaluationCase[] = [
       "This is the prettiest game ever. https://x.com/example/status/123",
     linkedBotPost: true,
     respond: false,
+  },
+  {
+    name: "linked bot post with playful praise and a screenshot label",
+    current:
+      "Nova has the best CoT lol. Look at this raw CoT 😭 https://x.com/example/status/123",
+    linkedBotPost: true,
+    respond: false,
+  },
+  {
+    name: "linked bot post with playful praise and a concrete product claim",
+    current:
+      "Nova has the best CoT lol. The API now includes the full reasoning transcript in every response. https://x.com/example/status/123",
+    linkedBotPost: true,
+    respond: true,
+    goal: "factcheck",
   },
   {
     name: "forwarded advertisement",

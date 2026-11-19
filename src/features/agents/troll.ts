@@ -26,6 +26,7 @@ export const tools = [
   "search_danbooru_tags",
   "generate_image",
   "set_reply_message_id",
+  "ignore",
 ] satisfies ToolName[];
 
 export function buildInstructions(

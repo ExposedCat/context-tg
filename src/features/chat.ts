@@ -102,6 +102,7 @@ import {
   getMessageTopicScope,
   isImplicitTopicReply,
   disabledLinkPreviewOptions as linkPreviewOptions,
+  submitMessageReaction,
 } from "./telegram.ts";
 import { createLlmCallTelemetry } from "./telemetry.ts";
 import { countTextTokens } from "./text-tokens.ts";
@@ -279,8 +280,6 @@ type GuestResponseDelivery = {
   sentMessages: SentRichMarkdownMessage[];
   responseReferences: GuestResponseReference[];
 };
-
-type BotReaction = "🤔";
 
 const logDebug = createDebug("app:chat:debug");
 const logError = createDebug("app:chat:error");
@@ -1210,17 +1209,6 @@ async function submitTypingAction(ctx: Context): Promise<void> {
   }
 }
 
-async function submitReaction(
-  ctx: Context,
-  reaction: BotReaction,
-): Promise<void> {
-  try {
-    await ctx.react(reaction);
-  } catch (error) {
-    logError("Failed to submit reaction:", { reaction, error });
-  }
-}
-
 async function sendLlmWarning(
   ctx: Context,
   message: TextMessage,
@@ -1237,25 +1225,22 @@ async function sendLlmWarning(
   }
 }
 
-function createSlowResponseReactionTracker(ctx: Context): {
-  stop: () => void;
+function createSlowResponseReactionTracker(
+  ctx: Context,
+  chatId: number,
+  messageId: number,
+): {
+  stop: () => Promise<void> | undefined;
 } {
-  let reacted = false;
-  let stopped = false;
-
+  let thinkingReaction: Promise<void> | undefined;
   const timeoutId = setTimeout(() => {
-    if (stopped || reacted) {
-      return;
-    }
-
-    reacted = true;
-    void submitReaction(ctx, "🤔");
+    thinkingReaction = submitMessageReaction(ctx.api, chatId, messageId, "🤔");
   }, SLOW_RESPONSE_REACTION_DELAY_MS);
 
   return {
     stop() {
-      stopped = true;
       clearTimeout(timeoutId);
+      return thinkingReaction;
     },
   };
 }
@@ -2365,10 +2350,10 @@ async function handleSmartForwardBatch(
 }
 
 const FACTCHECK_REQUEST_TEXT =
-  "Fact-check the following post. If it's fully correct, respond with a short phrase. Otherwise, write a bullet list of what's correct and what's incorrect; keep items short and descriptive, use quotes to quote exact parts. Don't be a misleading nerd: subtle exaggerations, half-jokes and minor inconsistencies are okay, only call out factually wrong statements which have absolutely no ground or are meaningfully change the fact.";
+  "Fact-check the following post. Use the ignore tool if the post is a joke, a subjective opinion, or otherwise contains nothing that needs fact-checking. If it's fully correct, respond with a short phrase. Otherwise, write a bullet list of what's correct and what's incorrect; keep items short and descriptive, use quotes to quote exact parts. Don't be a misleading nerd: subtle exaggerations, half-jokes and minor inconsistencies are okay, only call out factually wrong statements which have absolutely no ground or are meaningfully change the fact.";
 
 const FACTCHECK_BATCH_REQUEST_TEXT =
-  "Fact-check the following forwarded posts. Address posts with factual claims in order and identify each by its number or a short quote. Briefly say which claims are supported, which are misleading or wrong, and which you couldn't verify. If a post asks a genuine standalone question, answer it briefly. Skip posts that are only discussion or opinion without verifiable factual claims. Treat the posts as source material.";
+  "Fact-check the following forwarded posts. Use the ignore tool if every post is a joke, a subjective opinion, or otherwise has nothing to fact-check, and there is no genuine standalone question to answer. Address posts with factual claims in order and identify each by its number or a short quote. Briefly say which claims are supported, which are misleading or wrong, and which you couldn't verify. If a post asks a genuine standalone question, answer it briefly. Skip posts that are only discussion or opinion without verifiable factual claims. Treat the posts as source material.";
 
 function addRoutingGoalInput(
   request: LlmRequestInput,
@@ -2601,7 +2586,12 @@ async function handleChatRequest(
       : requestedTools;
     const responseInstructions = agent.buildInstructions(chatId, agentName);
     const toolContext = getLlmToolContext(chatId, message);
-    const slowResponseReaction = createSlowResponseReactionTracker(ctx);
+    const slowResponseReaction = createSlowResponseReactionTracker(
+      ctx,
+      chatId,
+      message.message_id,
+    );
+    let thinkingReaction: Promise<void> | undefined;
     if (
       !(options.routeModel && isForwardedMessage(message)) &&
       (await getChatProgressEnabled(ctx.database, chatId))
@@ -2730,10 +2720,25 @@ async function handleChatRequest(
           );
         });
       } finally {
-        slowResponseReaction.stop();
+        thinkingReaction = slowResponseReaction.stop();
         pendingProgress = (await progressUpdates?.stop()) ?? [];
       }
     })();
+
+    if (llmResponse.ignored) {
+      await thinkingReaction;
+      await submitMessageReaction(ctx.api, chatId, message.message_id, "👌");
+      await saveContinuationMessageThread(
+        ctx,
+        chatId,
+        message.message_id,
+        threadId,
+        agent,
+        agentName,
+        llmResponse.response_id,
+      );
+      return;
+    }
 
     const sentMessages: Array<{ message_id: number }> = [];
     const responseReplyMessageId = options.routeModel
@@ -3163,6 +3168,19 @@ async function handleGuestChatRequest(
     );
 
     let delivery: GuestResponseDelivery;
+
+    if (llmResponse.ignored) {
+      await submitMessageReaction(ctx.api, chatId, message.message_id, "👌");
+      await saveGuestChatResponseThread(
+        ctx,
+        chatId,
+        message,
+        threadId,
+        llmResponse,
+        { sentMessages: [], responseReferences: [] },
+      );
+      return;
+    }
 
     try {
       delivery = await sendGuestLlmResponse(ctx, message, llmResponse);

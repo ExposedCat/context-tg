@@ -12,7 +12,7 @@ import {
   getPromptDateTimeFromEpochSeconds,
 } from "./llm-prompt.ts";
 import type { MessageMetadata } from "./messages.ts";
-import { getMessageTopicScope } from "./telegram.ts";
+import { getMessageTopicScope, submitMessageReaction } from "./telegram.ts";
 import { createLlmCallTelemetry } from "./telemetry.ts";
 import {
   DEFAULT_TROLLING_MODE,
@@ -382,7 +382,7 @@ async function sendPeriodicTroll(
   const toolBudget = new LlmToolBudget();
   const response = await requestLlm(
     buildTrollingRequest(formatSenderName(sender), messages),
-    ["set_reply_message_id"],
+    ["set_reply_message_id", "ignore"],
     undefined,
     {
       toolBudget,
@@ -400,6 +400,11 @@ async function sendPeriodicTroll(
     trollAgent.buildInstructions(chatId),
     trollAgent.MODEL,
   );
+
+  if (response.ignored) {
+    await submitMessageReaction(ctx.api, chatId, message.message_id, "👌");
+    return;
+  }
 
   const text = response.response?.trim();
 

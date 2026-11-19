@@ -37,6 +37,7 @@ const TOOL_PROGRESS_LABELS = {
     "selected reply target",
     "selected reply target {count} times",
   ],
+  ignore: ["skipped response", "skipped {count} responses"],
   send_report: ["prepared report", "prepared {count} reports"],
   send_trading_report: [
     "prepared trading report",
