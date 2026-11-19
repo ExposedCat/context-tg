@@ -89,12 +89,15 @@ import {
   shouldTriggerProactiveResponse,
 } from "./proactive.ts";
 import {
+  AGENT_STOP_REASON,
   completeTask,
   createTask,
   createTaskAbortController,
   deleteTaskAbortController,
   getTask,
   hasResumableTask,
+  notifyAgentStoppedTask,
+  stopPendingThreads,
   type TaskStatus,
 } from "./tasks.ts";
 import {
@@ -303,6 +306,7 @@ const incomingMediaGroups = new MediaGroupCollector<TextMessage>({
   maxItemsPerGroup: MEDIA_GROUP_MAX_ITEMS,
 });
 const PROACTIVE_DISABLED_TOOLS = new Set<ToolName>([
+  "stop_pending_threads",
   "generate_image",
   "schedule_message",
   "cron_message",
@@ -1230,9 +1234,11 @@ function createSlowResponseReactionTracker(
   chatId: number,
   messageId: number,
 ): {
-  stop: () => Promise<void> | undefined;
+  stop: () => void;
+  acknowledge: () => Promise<void>;
 } {
   let thinkingReaction: Promise<void> | undefined;
+  let acknowledgement: Promise<void> | undefined;
   const timeoutId = setTimeout(() => {
     thinkingReaction = submitMessageReaction(ctx.api, chatId, messageId, "🤔");
   }, SLOW_RESPONSE_REACTION_DELAY_MS);
@@ -1240,7 +1246,13 @@ function createSlowResponseReactionTracker(
   return {
     stop() {
       clearTimeout(timeoutId);
-      return thinkingReaction;
+    },
+    acknowledge() {
+      clearTimeout(timeoutId);
+      acknowledgement ??= Promise.resolve(thinkingReaction).then(() =>
+        submitMessageReaction(ctx.api, chatId, messageId, "👌"),
+      );
+      return acknowledgement;
     },
   };
 }
@@ -1439,6 +1451,7 @@ const TOOL_USAGE_EMOJIS: Partial<
   search_chat: { id: "5874960879434338403", fallback: "🔎" },
   get_message_context: { id: "5886330010054168711", fallback: "💬" },
   read_last_messages: { id: "5891169510483823323", fallback: "💬" },
+  stop_pending_threads: { id: "6269316311172518259", fallback: "❌" },
   set_reply_message_id: { id: "5877468380125990242", fallback: "↩️" },
   send_report: { id: "5877597667231534929", fallback: "📄" },
   send_trading_report: { id: "5877597667231534929", fallback: "📄" },
@@ -1835,12 +1848,15 @@ function getReplyDeliveryOptions(
   };
 }
 
+type TelegramAbortSignal = Parameters<Context["api"]["sendRichMessage"]>[3];
+
 async function sendReportResponse(
   ctx: Context,
   message: TextMessage,
   report: LlmReport,
   formattedResponse: ReturnType<typeof formatLlmResponse>,
   replyMessageId?: number | null,
+  signal?: AbortSignal,
 ): Promise<Array<{ message_id: number }>> {
   const filename = normalizeHtmlFilename(report.filename);
   const sentMessages = [];
@@ -1849,6 +1865,7 @@ async function sendReportResponse(
   const sentDocument = await ctx.replyWithDocument(
     new InputFile(new TextEncoder().encode(report.documentHtml), filename),
     getReplyDeliveryOptions(message, replyMessageId),
+    signal as unknown as TelegramAbortSignal,
   );
   sentMessages.push(sentDocument);
 
@@ -1858,6 +1875,7 @@ async function sendReportResponse(
       message,
       formattedResponse.richMarkdown || "Report attached.",
       replyMessageId,
+      signal,
     )),
   );
 
@@ -1869,6 +1887,7 @@ async function sendRichMarkdownResponse(
   message: TextMessage,
   richMarkdown: string,
   replyMessageId?: number | null,
+  signal?: AbortSignal,
 ): Promise<SentRichMarkdownMessage[]> {
   if (!ctx.chat) {
     return [];
@@ -1881,6 +1900,7 @@ async function sendRichMarkdownResponse(
 
   for (const chunk of splitRichMarkdownMessage(content)) {
     const media = await resolveRichMessageImageMedia(ctx.database, chunk);
+    signal?.throwIfAborted();
     const sentMessage = await ctx.api.sendRichMessage(
       ctx.chat.id,
       {
@@ -1890,6 +1910,7 @@ async function sendRichMarkdownResponse(
       {
         ...getReplyDeliveryOptions(message, replyMessageId),
       },
+      signal as unknown as TelegramAbortSignal,
     );
 
     sentMessages.push({
@@ -2245,6 +2266,8 @@ async function sendRecoveredErrorResponse(
       ctx,
       message,
       formattedResponse.richMarkdown,
+      undefined,
+      signal,
     );
   } catch (deliveryError) {
     if (!isUnavailableRichMessagePhotoError(deliveryError)) {
@@ -2259,6 +2282,8 @@ async function sendRecoveredErrorResponse(
       message,
       stripRichMessageImages(formattedResponse.richMarkdown) ||
         "I couldn't send that image.",
+      undefined,
+      signal,
     );
   }
 
@@ -2591,7 +2616,15 @@ async function handleChatRequest(
       chatId,
       message.message_id,
     );
-    let thinkingReaction: Promise<void> | undefined;
+    if (agentTools.includes("stop_pending_threads")) {
+      toolContext.stopPendingThreads = async () => {
+        const [stopped] = await Promise.all([
+          stopPendingThreads(ctx.database, ctx.api, taskKey),
+          slowResponseReaction.acknowledge(),
+        ]);
+        return stopped;
+      };
+    }
     if (
       !(options.routeModel && isForwardedMessage(message)) &&
       (await getChatProgressEnabled(ctx.database, chatId))
@@ -2618,9 +2651,7 @@ async function handleChatRequest(
               markdown: normalizeRichMarkdown(formatProgressSegments(segments)),
             },
             getReplyDeliveryOptions(message, undefined),
-            taskAbortController.signal as unknown as Parameters<
-              Context["api"]["sendRichMessage"]
-            >[3],
+            taskAbortController.signal as unknown as TelegramAbortSignal,
           );
           await saveContinuationMessageThread(
             ctx,
@@ -2720,14 +2751,14 @@ async function handleChatRequest(
           );
         });
       } finally {
-        thinkingReaction = slowResponseReaction.stop();
+        slowResponseReaction.stop();
         pendingProgress = (await progressUpdates?.stop()) ?? [];
       }
     })();
 
+    taskAbortController.signal.throwIfAborted();
     if (llmResponse.ignored) {
-      await thinkingReaction;
-      await submitMessageReaction(ctx.api, chatId, message.message_id, "👌");
+      await slowResponseReaction.acknowledge();
       await saveContinuationMessageThread(
         ctx,
         chatId,
@@ -2766,6 +2797,7 @@ async function handleChatRequest(
           llmResponse.report,
           formattedResponse,
           responseReplyMessageId,
+          taskAbortController.signal,
         )),
       );
     } else {
@@ -2775,6 +2807,7 @@ async function handleChatRequest(
           message,
           formattedResponse.richMarkdown,
           responseReplyMessageId,
+          taskAbortController.signal,
         )),
       );
     }
@@ -2810,10 +2843,8 @@ async function handleChatRequest(
         ? "canceled"
         : "failed";
     logError("Error handling message:", error);
-    const resumableResponseId = getResumableResponseId(
-      error,
-      progressResponseId,
-    );
+    progressResponseId = getResumableResponseId(error, progressResponseId);
+    if (taskAbortController.signal.reason === AGENT_STOP_REASON) return;
     const resumable = await saveResumableTaskThread(
       ctx,
       chatId,
@@ -2821,7 +2852,7 @@ async function handleChatRequest(
       threadId,
       activeAgent,
       activeAgentName,
-      resumableResponseId,
+      progressResponseId,
       taskCreated,
     );
 
@@ -2841,7 +2872,7 @@ async function handleChatRequest(
         threadId,
         activeAgent,
         activeAgentName,
-        resumableResponseId,
+        progressResponseId,
       );
       return;
     }
@@ -2861,7 +2892,7 @@ async function handleChatRequest(
           activeAgent,
           activeAgentName,
           error,
-          resumableResponseId,
+          progressResponseId,
           taskAbortController.signal,
           !resumable || unavailableRichMessagePhoto,
           toolBudget,
@@ -2874,6 +2905,13 @@ async function handleChatRequest(
         responseSent = true;
         return;
       } catch (recoveryError) {
+        if (taskAbortController.signal.reason === AGENT_STOP_REASON) {
+          progressResponseId = getResumableResponseId(
+            recoveryError,
+            progressResponseId,
+          );
+          return;
+        }
         responseError = recoveryError;
         logError("Failed to recover from non-model error:", {
           originalError: error,
@@ -2901,19 +2939,32 @@ async function handleChatRequest(
         threadId,
         activeAgent,
         activeAgentName,
-        resumableResponseId,
+        progressResponseId,
       );
     }
     await options.onUnhandledError?.();
   } finally {
     await progressUpdates?.stop();
-    deleteTaskAbortController(taskKey);
     if (taskCreated) {
       try {
         await completeTask(ctx.database, taskKey, taskStatus);
       } catch (error) {
         logError("Failed to finish task:", { error });
       }
+    }
+    deleteTaskAbortController(taskKey);
+    if (taskAbortController.signal.reason === AGENT_STOP_REASON) {
+      await notifyAgentStoppedTask(
+        ctx.database,
+        ctx.api,
+        { ...taskKey, thread_id: threadId, task_text: taskText },
+        {
+          agent_id: activeAgent.id,
+          agent_name: activeAgentName,
+          response_id: progressResponseId,
+        },
+        getMessageTopicId(message, reply),
+      );
     }
     await threadNaming;
   }

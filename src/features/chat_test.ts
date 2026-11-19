@@ -2747,3 +2747,176 @@ test("automatic response checks allow ADMIN_ID even when the group has no credit
     await database.destroy();
   }
 });
+
+test("stop_pending_threads interrupts the chat, leaves a working resume command, and can precede ignore", async () => {
+  const { setLlmDeploymentName } = await import("./llm-deployments.ts");
+  const { createTask, getTask } = await import("./tasks.ts");
+  const { replyWithResumeTask } = await import("./chat.ts");
+  const database = await initDatabase()();
+  const originalFetch = globalThis.fetch;
+  const chat = {
+    id: -500,
+    type: "supergroup",
+    title: "Test",
+    is_forum: true,
+  } as const;
+  const bot = {
+    id: 42,
+    is_bot: true,
+    username: "test_bot",
+    first_name: "Test",
+  } as Context["me"];
+  const sent: string[] = [];
+  const reactions: number[] = [];
+  const api = new Api("test");
+  api.sendChatAction = async () => true;
+  api.setMessageReaction = async (chatId, messageId, reaction) => {
+    strictEqual(chatId, chat.id);
+    deepStrictEqual(reaction, [{ type: "emoji", emoji: "👌" }]);
+    reactions.push(messageId);
+    return true;
+  };
+  api.sendMessage = async (_, text, options) => {
+    const target = options?.reply_parameters?.message_id;
+    if (target === 10) strictEqual(options?.message_thread_id, 1);
+    strictEqual(text, `Thread was stopped by agent\n\n/resume_${target}`);
+    sent.push(text);
+    return { message_id: 100 + sent.length, date: 0, chat, text };
+  };
+  api.sendRichMessage = async (_, { markdown }) => {
+    sent.push(markdown ?? "");
+    return {
+      message_id: 100 + sent.length,
+      date: 0,
+      chat,
+      rich_message: { blocks: [] },
+    };
+  };
+  const context = (id: number, topic: number, text: string) => {
+    const ctx = new GrammyContext(
+      {
+        update_id: id,
+        message: {
+          message_id: id,
+          message_thread_id: topic,
+          is_topic_message: true,
+          date: 0,
+          chat,
+          text,
+          from: { id: 1, is_bot: false, first_name: "User" },
+        },
+      },
+      api,
+      bot,
+    ) as Context;
+    ctx.database = database;
+    ctx.telemetry = { event: () => {} } as Context["telemetry"];
+    return ctx;
+  };
+  const handle = (ctx: Context) =>
+    chatComposer.middleware()(ctx, async () => {});
+  const started = Promise.withResolvers<void>();
+  let calls = 0;
+  globalThis.fetch = (async (url, init) => {
+    const request = new Request(url, init);
+    const body = await request.json();
+    calls++;
+    if (calls === 1) {
+      started.resolve();
+      return new Promise<Response>((_, reject) =>
+        request.signal.addEventListener(
+          "abort",
+          () => reject(request.signal.reason),
+          { once: true },
+        ),
+      );
+    }
+    const tool = (name: string) => ({
+      type: "function_call",
+      id: `fc_${calls}_${name}`,
+      call_id: `call_${calls}_${name}`,
+      name,
+      arguments: "{}",
+      status: "completed",
+    });
+    const output = [];
+    if (calls === 2 || calls === 5 || calls === 7) {
+      ok(
+        body.tools.some(
+          (item: { name: string }) => item.name === "stop_pending_threads",
+        ),
+      );
+      output.push(tool("stop_pending_threads"));
+      if (calls === 7) output.push(tool("ignore"));
+    } else if (calls === 3) {
+      ok(body.input.at(-1).output.includes('"stopped":2'));
+      output.push(tool("ignore"));
+    } else {
+      if (calls === 4)
+        ok(JSON.stringify(body.input).includes("original question"));
+      if (calls === 6) ok(body.input.at(-1).output.includes('"stopped":0'));
+      output.push({
+        type: "message",
+        role: "assistant",
+        status: "completed",
+        content: [{ type: "output_text", text: "Answer", annotations: [] }],
+      });
+    }
+    return Response.json({
+      id: `resp_stop_threads_${calls}`,
+      object: "response",
+      status: "completed",
+      created_at: 1,
+      usage: { input_tokens: 5, output_tokens: 5, total_tokens: 10 },
+      output,
+    });
+  }) as typeof fetch;
+  try {
+    setLlmDeploymentName("big", "test-model");
+    // A persisted task without a live controller also needs a resume command.
+    for (const [chat_id, message_id, status] of [
+      [chat.id, 11, "working"],
+      [chat.id, 12, "finished"],
+      [-501, 10, "working"],
+    ] as const) {
+      await createTask(database, {
+        chat_id,
+        message_id,
+        thread_id: 2,
+        task_text: "Earlier task",
+        status,
+      });
+    }
+    const pending = handle(context(10, 1, "laylo original question"));
+    await started.promise;
+    await Promise.all([pending, handle(context(20, 3, "laylo shut up"))]);
+    deepStrictEqual(
+      sent.sort(),
+      [10, 11].map((id) => `Thread was stopped by agent\n\n/resume_${id}`),
+    );
+    for (const [chat_id, message_id, status] of [
+      [chat.id, 10, "canceled"],
+      [chat.id, 11, "canceled"],
+      [chat.id, 12, "finished"],
+      [chat.id, 20, "finished"],
+      [-501, 10, "working"],
+    ] as const)
+      strictEqual(
+        (await getTask(database, { chat_id, message_id }))?.status,
+        status,
+      );
+    await replyWithResumeTask(context(21, 1, "/resume_10"), 10);
+    await handle(
+      context(22, 3, "laylo stop pending threads and answer my question"),
+    );
+    await handle(context(23, 3, "laylo stop responding"));
+    deepStrictEqual(reactions, [20, 22, 23]);
+    strictEqual(calls, 7);
+    strictEqual(sent.length, 4);
+    ok(sent.slice(-2).every((text) => text.includes("Answer")));
+  } finally {
+    globalThis.fetch = originalFetch;
+    setLlmDeploymentName("big", "");
+    await database.destroy();
+  }
+});

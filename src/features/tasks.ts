@@ -1,3 +1,4 @@
+import type { Api } from "grammy";
 import { type ColumnType, type Insertable, type Selectable, sql } from "kysely";
 import type { Context } from "../bot.ts";
 import { padDatePart } from "../utils/date.ts";
@@ -8,7 +9,9 @@ import {
   truncateCodePoints,
 } from "../utils/text.ts";
 import type { Database } from "./database.ts";
+import { saveLlmResponseInputItems } from "./llm-chat-responses.ts";
 import { disabledLinkPreviewOptions as linkPreviewOptions } from "./telegram.ts";
+import { type CreateThread, getThread, saveThread } from "./threads.ts";
 
 export type TasksTable = {
   chat_id: number;
@@ -211,6 +214,73 @@ export async function cancelTask(
   return controller ? "canceled" : "canceled_without_controller";
 }
 
+export const AGENT_STOP_REASON = new DOMException(
+  "Thread was stopped by agent",
+  "AbortError",
+);
+
+export async function notifyAgentStoppedTask(
+  database: Database,
+  api: Api,
+  task: Pick<Task, "chat_id" | "message_id" | "thread_id" | "task_text">,
+  currentThread?: Pick<CreateThread, "response_id" | "agent_id" | "agent_name">,
+  topicId?: number,
+) {
+  const saved = currentThread ?? (await getThread(database, task));
+  let responseId = saved?.response_id;
+  if (!responseId) {
+    // An interrupted task may only have its original request in storage.
+    responseId = `resp-local-${crypto.randomUUID()}`;
+    await saveLlmResponseInputItems(database, {
+      responseId,
+      inputItems: [{ type: "message", role: "user", content: task.task_text }],
+    });
+  }
+  const thread = {
+    chat_id: task.chat_id,
+    thread_id: task.thread_id,
+    agent_id: saved?.agent_id === "tofu" ? null : saved?.agent_id,
+    agent_name: saved?.agent_name,
+    response_id: responseId,
+  };
+  await saveThread(database, { ...thread, message_id: task.message_id });
+  const sent = await api.sendMessage(
+    task.chat_id,
+    [AGENT_STOP_REASON.message, getResumeCommand(task)].join("\n\n"),
+    {
+      message_thread_id: topicId,
+      reply_parameters: {
+        message_id: task.message_id,
+        allow_sending_without_reply: true,
+      },
+    },
+  );
+  await saveThread(database, { ...thread, message_id: sent.message_id });
+}
+
+export async function stopPendingThreads(
+  database: Database,
+  api: Api,
+  caller: TaskKey,
+): Promise<number> {
+  const tasks = await database
+    .updateTable("tasks")
+    .set({ status: "canceled", finished_at: sql`datetime('now', 'localtime')` })
+    .where("chat_id", "=", caller.chat_id)
+    .where("message_id", "!=", caller.message_id)
+    .where("status", "=", "working")
+    .returningAll()
+    .execute();
+  const notices = [];
+  for (const task of tasks) {
+    const controller = activeTaskControllers.get(getTaskKey(task));
+    if (controller) controller.abort(AGENT_STOP_REASON);
+    else notices.push(notifyAgentStoppedTask(database, api, task));
+  }
+  await Promise.all(notices);
+  return tasks.length;
+}
+
 export async function listRecentTasks(
   database: Database,
   chatId: number,
@@ -311,7 +381,7 @@ function getCancelCommand(task: Task): string {
   return `/cancel_${task.message_id}`;
 }
 
-function getResumeCommand(task: Task): string {
+function getResumeCommand(task: Pick<Task, "message_id">): string {
   return `/resume_${task.message_id}`;
 }
 

@@ -29,6 +29,7 @@ export const tools = [
   "read_youtube_video",
   "generate_image",
   "set_reply_message_id",
+  "stop_pending_threads",
   "ignore",
   "schedule_message",
   "cron_message",

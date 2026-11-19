@@ -20,6 +20,24 @@ import {
   getOptionalDate,
 } from "./utils.ts";
 
+export const stopPendingThreadsToolDefinition = {
+  type: "function",
+  name: "stop_pending_threads",
+  description:
+    "Stop all other pending threads across this Telegram chat and react 👌 to the current message. Use this when someone tells you to shut up or stop responding. If the user did not ask for anything else to respond to, call this before ignore. Otherwise continue with their remaining request.",
+  parameters: { type: "object", properties: {}, additionalProperties: false },
+  strict: true,
+} as const;
+
+export const executeStopPendingThreads: FunctionToolRunner = async (
+  _,
+  context,
+) => {
+  if (!context?.stopPendingThreads)
+    throw new Error("Stopping threads is unavailable for this request.");
+  return JSON.stringify({ stopped: await context.stopPendingThreads() });
+};
+
 export const searchChatToolDefinition = {
   type: "function",
   name: "search_chat",
