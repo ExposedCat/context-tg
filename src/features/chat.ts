@@ -2619,7 +2619,7 @@ async function handleChatRequest(
     if (agentTools.includes("stop_pending_threads")) {
       toolContext.stopPendingThreads = async () => {
         const [stopped] = await Promise.all([
-          stopPendingThreads(ctx.database, ctx.api, taskKey),
+          stopPendingThreads(ctx.database, taskKey),
           slowResponseReaction.acknowledge(),
         ]);
         return stopped;

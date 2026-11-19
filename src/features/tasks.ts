@@ -219,12 +219,19 @@ export const AGENT_STOP_REASON = new DOMException(
   "AbortError",
 );
 
-export async function notifyAgentStoppedTask(
+type StoppedTask = Pick<
+  Task,
+  "chat_id" | "message_id" | "thread_id" | "task_text"
+>;
+type StoppedThread = Pick<
+  CreateThread,
+  "response_id" | "agent_id" | "agent_name"
+>;
+
+async function saveStoppedTaskThread(
   database: Database,
-  api: Api,
-  task: Pick<Task, "chat_id" | "message_id" | "thread_id" | "task_text">,
-  currentThread?: Pick<CreateThread, "response_id" | "agent_id" | "agent_name">,
-  topicId?: number,
+  task: StoppedTask,
+  currentThread?: StoppedThread,
 ) {
   const saved = currentThread ?? (await getThread(database, task));
   let responseId = saved?.response_id;
@@ -244,6 +251,17 @@ export async function notifyAgentStoppedTask(
     response_id: responseId,
   };
   await saveThread(database, { ...thread, message_id: task.message_id });
+  return thread;
+}
+
+export async function notifyAgentStoppedTask(
+  database: Database,
+  api: Api,
+  task: StoppedTask,
+  currentThread: StoppedThread,
+  topicId?: number,
+) {
+  const thread = await saveStoppedTaskThread(database, task, currentThread);
   const sent = await api.sendMessage(
     task.chat_id,
     [AGENT_STOP_REASON.message, getResumeCommand(task)].join("\n\n"),
@@ -260,7 +278,6 @@ export async function notifyAgentStoppedTask(
 
 export async function stopPendingThreads(
   database: Database,
-  api: Api,
   caller: TaskKey,
 ): Promise<number> {
   const tasks = await database
@@ -271,14 +288,20 @@ export async function stopPendingThreads(
     .where("status", "=", "working")
     .returningAll()
     .execute();
-  const notices = [];
+  let stopped = 0;
+  const orphaned = [];
   for (const task of tasks) {
     const controller = activeTaskControllers.get(getTaskKey(task));
-    if (controller) controller.abort(AGENT_STOP_REASON);
-    else notices.push(notifyAgentStoppedTask(database, api, task));
+    if (!controller) {
+      orphaned.push(task);
+    } else if (!controller.signal.aborted) {
+      controller.abort(AGENT_STOP_REASON);
+      stopped++;
+    }
   }
-  await Promise.all(notices);
-  return tasks.length;
+  // Rows left working by an earlier process stay resumable without posting to old messages.
+  for (const task of orphaned) await saveStoppedTaskThread(database, task);
+  return stopped;
 }
 
 export async function listRecentTasks(

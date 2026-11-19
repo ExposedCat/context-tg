@@ -2750,7 +2750,7 @@ test("automatic response checks allow ADMIN_ID even when the group has no credit
 
 test("stop_pending_threads interrupts the chat, leaves a working resume command, and can precede ignore", async () => {
   const { setLlmDeploymentName } = await import("./llm-deployments.ts");
-  const { createTask, getTask } = await import("./tasks.ts");
+  const { createTask, getTask, hasResumableTask } = await import("./tasks.ts");
   const { replyWithResumeTask } = await import("./chat.ts");
   const database = await initDatabase()();
   const originalFetch = globalThis.fetch;
@@ -2849,7 +2849,7 @@ test("stop_pending_threads interrupts the chat, leaves a working resume command,
       output.push(tool("stop_pending_threads"));
       if (calls === 7) output.push(tool("ignore"));
     } else if (calls === 3) {
-      ok(body.input.at(-1).output.includes('"stopped":2'));
+      ok(body.input.at(-1).output.includes('"stopped":1'));
       output.push(tool("ignore"));
     } else {
       if (calls === 4)
@@ -2873,7 +2873,7 @@ test("stop_pending_threads interrupts the chat, leaves a working resume command,
   }) as typeof fetch;
   try {
     setLlmDeploymentName("big", "test-model");
-    // A persisted task without a live controller also needs a resume command.
+    // A persisted task without a live controller stays resumable silently.
     for (const [chat_id, message_id, status] of [
       [chat.id, 11, "working"],
       [chat.id, 12, "finished"],
@@ -2890,10 +2890,8 @@ test("stop_pending_threads interrupts the chat, leaves a working resume command,
     const pending = handle(context(10, 1, "laylo original question"));
     await started.promise;
     await Promise.all([pending, handle(context(20, 3, "laylo shut up"))]);
-    deepStrictEqual(
-      sent.sort(),
-      [10, 11].map((id) => `Thread was stopped by agent\n\n/resume_${id}`),
-    );
+    deepStrictEqual(sent, ["Thread was stopped by agent\n\n/resume_10"]);
+    ok(await hasResumableTask(database, { chat_id: chat.id, message_id: 11 }));
     for (const [chat_id, message_id, status] of [
       [chat.id, 10, "canceled"],
       [chat.id, 11, "canceled"],
@@ -2912,7 +2910,7 @@ test("stop_pending_threads interrupts the chat, leaves a working resume command,
     await handle(context(23, 3, "laylo stop responding"));
     deepStrictEqual(reactions, [20, 22, 23]);
     strictEqual(calls, 7);
-    strictEqual(sent.length, 4);
+    strictEqual(sent.length, 3);
     ok(sent.slice(-2).every((text) => text.includes("Answer")));
   } finally {
     globalThis.fetch = originalFetch;
