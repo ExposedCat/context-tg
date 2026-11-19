@@ -73,7 +73,11 @@ Smart replies:
 
 - The current message's text or caption mentions a configured agent name or the
   bot username anywhere (case-insensitive, whole-name matching).
-- Telegram identifies the current message as a forwarded post.
+- Telegram identifies the current message as a forwarded post. The Smart replies
+  trigger skips forwards of the sender's own messages and forwards of this bot's
+  messages.
+- Bot `6361268755` sends a non-forwarded rich message containing an `x.com` link.
+  Receiving these posts requires [Bot-to-Bot Communication Mode and group message access](https://core.telegram.org/bots/features#bot-to-bot-communication).
 
 For this additional flow, names in earlier messages or a reply parent do not count.
 Commands keep their existing handlers. When Smart replies is off or no router is
@@ -81,17 +85,17 @@ configured, ordinary triggering retains its existing behavior.
 
 Smart forwards are batched per group or forum topic, across senders. The first
 forward starts a **two-second** window, and each further forward restarts the
-window. A batch closes immediately at **ten forwards** or after two seconds of
-silence. A Telegram album counts as one forward. Overflow starts a new batch
-while earlier batches are processed in order. For example, 13 forwards in one
-burst produce requests for batches of 10 and 3. The input limit applies to each
-forward. The queue lives in memory.
+window. The batch closes after two seconds of silence. A Telegram album counts
+as one forward. A burst of **11 or more forwards** is discarded before routing.
+The input limit applies to each forward. The queue lives in memory.
 
 Eligibility does not guarantee a reply. For ordinary name mentions, the router
 requires an unambiguous request directed to the agent. For forwarded posts, it
-may answer a question or contribute a substantive explanation or fact-check
-without an explicit request; empty content, memes, ads, and posts without a useful contribution are
-skipped. Uncertainty means silence for Smart replies. Normal conversation triggers
+may answer a standalone question or contribute a substantive explanation or
+fact-check. It skips discussion and opinions without verifiable claims, as well
+as empty content, memes, ads, and posts without a useful contribution. Posts from
+bot `6361268755` qualify only when the router chooses to verify a factual claim.
+Uncertainty means silence for Smart replies. Normal conversation triggers
 bypass this check, including specialized agents. Missing captions
 remain empty in all modes; the application never invents an image-analysis request.
 Short conversational questions also qualify: an addressed "X or Y in this game"
@@ -103,14 +107,14 @@ model and goal without logging message text.
 
 Each routing call receives the current message or forward batch, the associated
 reply metadata and excerpts, and the configured agent names and bot username.
-The router accepts a batch when any post merits a reply. One fact-check request
-then includes every post in order, with images attached to their own post. The
+The router accepts a batch when any post merits a reply. The request includes
+the posts in order, with images attached to their own post. The
 reply targets the first forward from a regular user, or the first forward if all
 came from the bot admin. The group's normal credit rules apply to mixed batches.
 
 The router returns `respond=false, model=null`, or `respond=true` with `small`
-or `large` (`large` uses the `big` deployment). For a single post the router can
-choose an ordinary answer or a fact-check. Fact-check instructions are saved in
+or `large` (`large` uses the `big` deployment). The router chooses an ordinary
+answer or a fact-check for a single forward or a batch. Fact-check instructions are saved in
 conversation history as a separate user message immediately before the post or
 batch. Declined forwards create no response task and spend no request or answer
 credits. A failed or invalid verdict produces no reply. Existing quotas and

@@ -9,6 +9,7 @@ type EvaluationCase = {
   earlier?: string[];
   reply?: { sender: string; text: string };
   forwarded?: boolean;
+  linkedBotPost?: boolean;
   respond: boolean;
   model?: "small" | "large";
   goal?: ModelRoutingGoal;
@@ -29,6 +30,33 @@ const cases: EvaluationCase[] = [
     forwarded: true,
     respond: true,
     goal: "answer",
+  },
+  {
+    name: "forwarded opinion",
+    current: "Мне кажется, что старый дизайн намного красивее нового.",
+    forwarded: true,
+    respond: false,
+  },
+  {
+    name: "forwarded discussion prompt",
+    current: "Народ, а вам тоже больше нравится старый дизайн?",
+    forwarded: true,
+    respond: false,
+  },
+  {
+    name: "linked bot post with a factual claim",
+    current:
+      "Sega invested $5 million in NVIDIA in the 1990s. https://x.com/example/status/123",
+    linkedBotPost: true,
+    respond: true,
+    goal: "factcheck",
+  },
+  {
+    name: "linked bot post without a factual claim",
+    current:
+      "This is the prettiest game ever. https://x.com/example/status/123",
+    linkedBotPost: true,
+    respond: false,
   },
   {
     name: "forwarded advertisement",
@@ -260,7 +288,10 @@ const checks = cases.flatMap((scenario) =>
       const verdict = await requestModelRoute(
         [...earlier, current],
         ["laylo", "лейло", "@test_bot"],
-        { forwarded: scenario.forwarded },
+        {
+          forwarded: scenario.forwarded,
+          linkedBotPost: scenario.linkedBotPost,
+        },
       );
       const relevancePassed = verdict.respond === scenario.respond;
       const modelPassed =

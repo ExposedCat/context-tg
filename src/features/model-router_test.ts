@@ -99,6 +99,7 @@ test("direct invocations bypass Smart replies while other mentions and forwards 
     serial = 0,
     responseSerial = 0,
     route = "large",
+    goal = "answer",
     shouldRespond = true;
   const requests: Array<{
     model: string;
@@ -158,7 +159,7 @@ test("direct invocations bypass Smart replies while other mentions and forwards 
         ? JSON.stringify({
             respond: shouldRespond,
             model: shouldRespond ? route : null,
-            goal: "answer",
+            goal,
           })
         : "Answer",
       ++responseSerial,
@@ -440,23 +441,30 @@ test("direct invocations bypass Smart replies while other mentions and forwards 
       ["test-big"],
     );
 
-    // Overflow gets its own routing attempt whether the first batch answers or declines.
-    for (const allow of [false, true]) {
-      const forwardChat = { ...chat, id: allow ? -301 : -300 };
+    for (const count of [10, 11, 13]) {
+      const forwardChat = { ...chat, id: -300 - count };
       await persistChatRouterEnabled(database, forwardChat.id, true);
-      shouldRespond = allow;
+      shouldRespond = true;
       const sentBeforeBurst = sent;
+      const usageBeforeBurst = await getUsageStatus(database, forwardChat.id);
       const forwards = await receiveForwardBatch(() =>
         Promise.all(
-          Array.from({ length: 13 }, (_, index) =>
-            receive(`Forwarded post #${index + 1}`, forwardChat, true, {
-              forward_origin: {
-                type: "channel",
-                chat: { id: -900, type: "channel", title: "News" },
-                message_id: index + 1,
-                date: 1,
+          Array.from({ length: count }, (_, index) =>
+            receive(
+              count === 11 && index === 10
+                ? undefined
+                : `Forwarded post #${index + 1}`,
+              forwardChat,
+              true,
+              {
+                forward_origin: {
+                  type: "channel",
+                  chat: { id: -900, type: "channel", title: "News" },
+                  message_id: index + 1,
+                  date: 1,
+                },
               },
-            }),
+            ),
           ),
         ),
       );
@@ -470,36 +478,27 @@ test("direct invocations bypass Smart replies while other mentions and forwards 
       const routeRequests = requests.filter((r) => r.model === "test-router");
       deepStrictEqual(
         routeRequests.map((r) => JSON.parse(r.input[0].content).length),
-        [10, 3],
+        count === 10 ? [10] : [],
       );
       ok(
         routeRequests.every((r) =>
           r.instructions.includes("forwarded_batch=true"),
         ),
       );
-      strictEqual(sent - sentBeforeBurst, allow ? 2 : 0);
-      if (allow) {
-        const answers = requests.filter((r) => r.model !== "test-router");
-        for (const [batchIndex, answer] of answers.entries()) {
-          const count = batchIndex === 0 ? 10 : 3;
-          const batchInput = JSON.stringify(answer.input);
-          strictEqual(
-            batchInput.split("Fact-check the following forwarded posts")
-              .length - 1,
-            1,
-          );
-          for (let i = 1; i <= count; i++) {
-            ok(
-              batchInput.includes(
-                `Forwarded post #${batchIndex * 10 + i}</content>`,
-              ),
-            );
-          }
+      strictEqual(sent - sentBeforeBurst, count === 10 ? 1 : 0);
+      if (count === 10) {
+        const batchInput = JSON.stringify(requests[1].input);
+        ok(!batchInput.includes("Fact-check the following forwarded posts"));
+        for (let i = 1; i <= count; i++) {
+          ok(batchInput.includes(`Forwarded post #${i}</content>`));
         }
-        deepStrictEqual(replyTargets.slice(-2), [
-          forwards[0].message?.message_id,
-          forwards[10].message?.message_id,
-        ]);
+        strictEqual(replyTargets.at(-1), forwards[0].message?.message_id);
+      } else {
+        strictEqual(requests.length, 0);
+        deepStrictEqual(
+          await getUsageStatus(database, forwardChat.id),
+          usageBeforeBurst,
+        );
       }
       // Quoted forwards and the word 'forwarded' are not forward metadata.
       await receive("forwarded post", forwardChat, true, {
@@ -573,6 +572,85 @@ test("direct invocations bypass Smart replies while other mentions and forwards 
 
     const imageForwardChat = { ...chat, id: -302 };
     await persistChatRouterEnabled(database, imageForwardChat.id, true);
+    for (const origin of [
+      { forward_origin: { type: "user", sender_user: sender, date: 1 } },
+      { forward_origin: { type: "user", sender_user: bot, date: 1 } },
+      { forward_from: sender, forward_date: 1 },
+    ]) {
+      const selfForward = await receiveForwardBatch(() =>
+        receive(
+          "A forwarded post that mentions laylo",
+          imageForwardChat,
+          true,
+          origin,
+        ),
+      );
+      strictEqual(await isSmartForwardUpdate(selfForward, database), false);
+      strictEqual(requests.length, 0);
+    }
+
+    const xBot = { ...sender, id: 6361268755, is_bot: true };
+    const xLink = "https://x.com/news/status/123";
+    const richPost = (url: string) => ({
+      blocks: [
+        {
+          type: "paragraph",
+          text: [
+            "A claim appeared today. ",
+            { type: "url", text: "Source", url },
+          ],
+        },
+      ],
+    });
+    for (const overrides of [
+      { from: { ...xBot, id: 6361268756 }, rich_message: richPost(xLink) },
+      { from: xBot, text: xLink },
+      {
+        from: xBot,
+        rich_message: richPost("https://x.com.example.com/status/123"),
+      },
+      {
+        from: xBot,
+        rich_message: richPost(xLink),
+        forward_origin: { type: "user", sender_user: xBot, date: 1 },
+      },
+    ]) {
+      await receive(undefined, imageForwardChat, true, overrides);
+      strictEqual(requests.length, 0);
+    }
+    const sentBeforeBotPost = sent;
+    const botPost = { from: xBot, rich_message: richPost(xLink) };
+    shouldRespond = false;
+    await receive(undefined, imageForwardChat, true, botPost);
+    deepStrictEqual(
+      requests.map((request) => request.model),
+      ["test-router"],
+    );
+    ok(requests[0].instructions.includes("forwarded_post=false"));
+    ok(requests[0].instructions.includes("linked_bot_post=true"));
+    ok(JSON.stringify(requests[0].input).includes(xLink));
+    strictEqual(sent, sentBeforeBotPost);
+    shouldRespond = true;
+    await receive(undefined, imageForwardChat, true, botPost);
+    deepStrictEqual(
+      requests.map((request) => request.model),
+      ["test-router"],
+    );
+    strictEqual(sent, sentBeforeBotPost);
+    goal = "factcheck";
+    await receive(undefined, imageForwardChat, true, botPost);
+    deepStrictEqual(
+      requests.map((request) => request.model),
+      ["test-router", "test-small"],
+    );
+    ok(
+      JSON.stringify(requests[1].input).includes(
+        "Fact-check the following post",
+      ),
+    );
+    ok(JSON.stringify(requests[1].input).includes(xLink));
+    strictEqual(sent, sentBeforeBotPost + 1);
+    goal = "answer";
     shouldRespond = false;
     await receiveForwardBatch(() =>
       receive(undefined, imageForwardChat, true, {
@@ -938,7 +1016,7 @@ test("routing goals preserve ordinary answers and prepend the exact fact-check r
     strictEqual(sent, 8);
 
     respond = true;
-    goal = "answer";
+    goal = "factcheck";
     requests.length = 0;
     downloads = 0;
     batchReplyTarget = 202;

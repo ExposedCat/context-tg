@@ -1,6 +1,6 @@
 export type ForwardedMessage = {
-  forward_origin?: unknown;
-  forward_from?: unknown;
+  forward_origin?: { type: string; sender_user?: { id: number } };
+  forward_from?: { id: number };
   forward_from_chat?: unknown;
   forward_sender_name?: string;
   forward_date?: number;
@@ -16,11 +16,24 @@ export function isForwardedMessage(message: ForwardedMessage): boolean {
   );
 }
 
+export function isSelfForward(
+  message: ForwardedMessage & { from?: { id: number } },
+  botId: number,
+): boolean {
+  const origin = message.forward_origin;
+  const authorId =
+    origin?.type === "user" ? origin.sender_user?.id : message.forward_from?.id;
+  return (
+    authorId !== undefined &&
+    (authorId === botId || authorId === message.from?.id)
+  );
+}
+
 const FORWARD_BATCH_IDLE_MS = 2_000;
 const MAX_FORWARDS_PER_BATCH = 10;
 
 type ForwardBatch<T> = {
-  posts: T[];
+  posts: T[] | undefined;
   done: PromiseWithResolvers<void>;
   timer?: ReturnType<typeof setTimeout>;
 };
@@ -46,30 +59,36 @@ export class ForwardBatcher<T> {
       done: Promise.withResolvers<void>(),
     };
     const batch = queue.collecting;
-    batch.posts.push(post);
-    clearTimeout(batch.timer);
-
-    if (batch.posts.length === MAX_FORWARDS_PER_BATCH) {
-      this.#flush(key, queue, batch);
+    if (batch.posts?.length === MAX_FORWARDS_PER_BATCH) {
+      // Discard the posts and keep the burst open until the chat goes quiet.
+      batch.posts = undefined;
+      batch.done.resolve();
     } else {
-      batch.timer = setTimeout(
-        () => this.#flush(key, queue, batch),
-        FORWARD_BATCH_IDLE_MS,
-      );
+      batch.posts?.push(post);
     }
+    clearTimeout(batch.timer);
+    batch.timer = setTimeout(
+      () => this.#flush(key, queue, batch),
+      FORWARD_BATCH_IDLE_MS,
+    );
     return batch.done.promise;
   }
 
   #flush(key: string, queue: ForwardQueue<T>, batch: ForwardBatch<T>): void {
     queue.collecting = undefined;
+    const posts = batch.posts;
+    if (!posts) {
+      if (!queue.processing) this.#queues.delete(key);
+      return;
+    }
     const processing = (queue.processing ?? Promise.resolve())
-      .then(() => this.processBatch(batch.posts))
+      .then(() => this.processBatch(posts))
       .then(batch.done.resolve, batch.done.reject);
     queue.processing = processing;
     void processing.then(() => {
-      if (!queue.collecting && queue.processing === processing) {
-        this.#queues.delete(key);
-      }
+      if (queue.processing !== processing) return;
+      queue.processing = undefined;
+      if (!queue.collecting) this.#queues.delete(key);
     });
   }
 }

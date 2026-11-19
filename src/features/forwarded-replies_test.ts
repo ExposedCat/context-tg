@@ -36,7 +36,7 @@ test("each new forward restarts the two-second window", async () => {
   }
 });
 
-test("the tenth forward flushes immediately and overflow waits for the next request", async () => {
+test("ten forwards wait for silence and an oversized burst is discarded until silence", async () => {
   jest.useFakeTimers();
   const release = Promise.withResolvers<void>();
   try {
@@ -48,9 +48,18 @@ test("the tenth forward flushes immediately and overflow waits for the next requ
     const queue = (start: number, count: number) =>
       Array.from({ length: count }, (_, i) => batcher.add("chat:7", start + i));
     const first = queue(1, 10);
+    jest.advanceTimersByTime(1_999);
+    await Promise.resolve();
+    deepStrictEqual(batches, []);
+    jest.advanceTimersByTime(1);
     await Promise.resolve();
     deepStrictEqual(batches, [[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]]);
-    const overflow = queue(11, 12);
+    const overflow = queue(11, 10);
+    jest.advanceTimersByTime(1_999);
+    overflow.push(batcher.add("chat:7", 21));
+    await Promise.all(overflow);
+    jest.advanceTimersByTime(1_999);
+    await batcher.add("chat:7", 22);
     const otherTopic = batcher.add("chat:8", 23);
     jest.advanceTimersByTime(2_000);
     await otherTopic;
@@ -58,12 +67,11 @@ test("the tenth forward flushes immediately and overflow waits for the next requ
       batches.map((batch) => batch[0]),
       [1, 23],
     );
+    const next = batcher.add("chat:7", 24);
+    jest.advanceTimersByTime(2_000);
     release.resolve();
-    await Promise.all([...first, ...overflow]);
-    deepStrictEqual(batches.slice(2), [
-      [11, 12, 13, 14, 15, 16, 17, 18, 19, 20],
-      [21, 22],
-    ]);
+    await Promise.all([...first, next]);
+    deepStrictEqual(batches.slice(2), [[24]]);
   } finally {
     release.resolve();
     jest.useRealTimers();

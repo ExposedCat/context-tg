@@ -28,6 +28,7 @@ import {
   ForwardBatcher,
   type ForwardedMessage,
   isForwardedMessage,
+  isSelfForward,
 } from "./forwarded-replies.ts";
 import {
   getGuestContentFingerprint,
@@ -291,6 +292,7 @@ const GUEST_RESULT_DESCRIPTION_LENGTH = 120;
 const SLOW_RESPONSE_REACTION_DELAY_MS = 5_000;
 const PROACTIVE_CONTEXT_MESSAGE_COUNT = 10;
 const PROACTIVE_TASK_TEXT = "Proactive response";
+const X_POST_BOT_ID = 6361268755;
 const MEDIA_GROUP_IDLE_MS = 1_000;
 const MEDIA_GROUP_MAX_AGE_MS = 30_000;
 const MEDIA_GROUP_MAX_PENDING_GROUPS = 1_000;
@@ -459,6 +461,38 @@ function getRichMessageText(
   }
 
   return richMessage.markdown ?? richMessage.html;
+}
+
+function collectRichMessageXLinks(value: unknown, links: Set<string>): void {
+  if (typeof value === "string") {
+    for (const match of value.matchAll(/https?:\/\/[^\s<>"'()[\]]+/gi)) {
+      const url = URL.parse(match[0]);
+      if (url?.hostname === "x.com" || url?.hostname === "www.x.com") {
+        links.add(match[0]);
+      }
+    }
+  } else if (Array.isArray(value)) {
+    for (const item of value) collectRichMessageXLinks(item, links);
+  } else if (isRecord(value)) {
+    for (const item of Object.values(value)) {
+      collectRichMessageXLinks(item, links);
+    }
+  }
+}
+
+function getBotPostXLinks(ctx: Context, message: TextMessage) {
+  if (
+    ctx.from?.id !== X_POST_BOT_ID ||
+    !ctx.from.is_bot ||
+    ctx.me.id === X_POST_BOT_ID ||
+    !message.rich_message ||
+    isForwardedMessage(message)
+  ) {
+    return undefined;
+  }
+  const links = new Set<string>();
+  collectRichMessageXLinks(message.rich_message, links);
+  return links.size ? links : undefined;
 }
 
 function formatStickerMarker(emoji: string | undefined): string {
@@ -790,13 +824,15 @@ function selectNormalMediaGroupMessage(
     const text = getMessageText(message);
     return (
       !startsWithCommandPrefix(text) &&
-      ((text && referencesMessageAgent(text, ownUsername)) ||
-        isForwardedMessage(message))
+      (isForwardedMessage(message)
+        ? !isSelfForward(message, botId)
+        : text && referencesMessageAgent(text, ownUsername))
     );
   });
   return (
     eligible.find((message) => getMessageText(message)?.trim()) ??
-    eligible.find(hasImageAttachments)
+    eligible.find(hasImageAttachments) ??
+    eligible[0]
   );
 }
 
@@ -815,11 +851,12 @@ async function smartRepliesEnabled(
   ctx: Context,
   database: Database,
   message: TextMessage,
+  linkedBotPost = false,
 ): Promise<boolean> {
   return Boolean(
     ctx.chat &&
       LLM_DEPLOYMENTS.router.deploymentName &&
-      ctx.from?.is_bot !== true &&
+      (ctx.from?.is_bot !== true || linkedBotPost) &&
       (await getChatRouterEnabled(database, ctx.chat.id)) &&
       !(await areAutomaticResponsesBanished(database, ctx.chat.id, message)),
   );
@@ -833,15 +870,13 @@ export async function isSmartForwardUpdate(
   if (
     !message ||
     (ctx.chat?.type !== "group" && ctx.chat?.type !== "supergroup") ||
-    !isForwardedMessage(message)
+    !isForwardedMessage(message) ||
+    isSelfForward(message, ctx.me.id)
   ) {
     return false;
   }
   const text = getMessageText(message);
   return (
-    (Boolean(text?.trim()) ||
-      hasImageAttachments(message) ||
-      Boolean(message.media_group_id)) &&
     !startsWithCommandPrefix(text) &&
     !(text && isAddressed(text, ctx.me.username)) &&
     !isDirectReplyToBot(getActualReply(message), ctx.me.id) &&
@@ -2289,6 +2324,7 @@ type HandleChatRequestOptions = {
   tools?: ToolName[];
   routeModel?: boolean;
   forwardBatch?: SmartForward[];
+  linkedBotPost?: boolean;
   onUnhandledError?: () => Promise<void>;
 };
 
@@ -2307,17 +2343,23 @@ const smartForwardBatchers = new WeakMap<
 async function handleSmartForwardBatch(
   forwards: SmartForward[],
 ): Promise<void> {
-  forwards.sort(
+  const posts = forwards.filter(
+    ({ message, text, options }) =>
+      (text.trim() ||
+        hasMessagesImageAttachments(options.imageMessages ?? [])) &&
+      !getUserInputLimitError(message),
+  );
+  if (!posts.length) return;
+  posts.sort(
     (left, right) => left.message.message_id - right.message.message_id,
   );
   // Charge the group when a batch includes forwards from regular users.
-  const anchor = forwards.find(({ ctx }) => !isBotAdmin(ctx)) ?? forwards[0];
+  const anchor = posts.find(({ ctx }) => !isBotAdmin(ctx)) ?? posts[0];
   await handleChatRequest(anchor.ctx, anchor.message, anchor.text, {
     ...anchor.options,
-    ...(forwards.length > 1 && {
+    ...(posts.length > 1 && {
       thread: undefined,
-      forwardBatch: forwards,
-      taskText: `Fact-check ${forwards.length} forwarded posts`,
+      forwardBatch: posts,
     }),
   });
 }
@@ -2326,7 +2368,7 @@ const FACTCHECK_REQUEST_TEXT =
   "Fact-check the following post. If it's fully correct, respond with a short phrase. Otherwise, write a bullet list of what's correct and what's incorrect; keep items short and descriptive, use quotes to quote exact parts. Don't be a misleading nerd: subtle exaggerations, half-jokes and minor inconsistencies are okay, only call out factually wrong statements which have absolutely no ground or are meaningfully change the fact.";
 
 const FACTCHECK_BATCH_REQUEST_TEXT =
-  "Fact-check the following forwarded posts. Address each post in order and identify it by its number or a short quote. Briefly say which claims are supported, which are misleading or wrong, and which you couldn't verify. If a post asks a question without making a factual claim, answer it briefly. For other posts without factual claims, say so briefly. Treat the posts as source material.";
+  "Fact-check the following forwarded posts. Address posts with factual claims in order and identify each by its number or a short quote. Briefly say which claims are supported, which are misleading or wrong, and which you couldn't verify. If a post asks a genuine standalone question, answer it briefly. Skip posts that are only discussion or opinion without verifiable factual claims. Treat the posts as source material.";
 
 function addRoutingGoalInput(
   request: LlmRequestInput,
@@ -2407,7 +2449,9 @@ async function handleChatRequest(
   const toolBudget = new LlmToolBudget();
   const reply = options.reply;
   const replyContext = options.replyContext ?? reply;
-  const trigger = resolveMessageAgentTrigger(text, ctx.me.username);
+  const trigger = options.linkedBotPost
+    ? undefined
+    : resolveMessageAgentTrigger(text, ctx.me.username);
   const forwardBatch = options.forwardBatch;
   let routedModel: AgentDefinition["MODEL"] | undefined;
   let routingGoal: ModelRoutingGoal = "answer";
@@ -2415,7 +2459,12 @@ async function handleChatRequest(
     const forwarded = isForwardedMessage(message);
     // Context and attachments cannot supply an address or request missing
     // from the triggering message. Reject these before any model call.
-    if (!forwarded && !referencesMessageAgent(text, ctx.me.username)) return;
+    if (
+      !forwarded &&
+      !options.linkedBotPost &&
+      !referencesMessageAgent(text, ctx.me.username)
+    )
+      return;
     if (!(await hasUsageRemaining(ctx.database, chatId, ctx.from?.id))) return;
     try {
       const decision = await requestModelRoute(
@@ -2435,6 +2484,7 @@ async function handleChatRequest(
         {
           forwarded,
           forwardBatch: Boolean(forwardBatch),
+          linkedBotPost: options.linkedBotPost,
           telemetry: createLlmCallTelemetry(
             ctx.chat.type,
             "normal",
@@ -2447,8 +2497,12 @@ async function handleChatRequest(
         messageId: message.message_id,
         ...decision,
       });
-      if (!decision.respond) return;
-      routingGoal = forwardBatch ? "factcheck" : decision.goal;
+      if (
+        !decision.respond ||
+        (options.linkedBotPost && decision.goal !== "factcheck")
+      )
+        return;
+      routingGoal = decision.goal;
       // Direct name-prefixed requests use the ordinary agent path instead.
       if (!trigger || trigger.agent.id === normalAgent.id)
         routedModel =
@@ -2465,6 +2519,11 @@ async function handleChatRequest(
     }
   }
   const thread = options.thread;
+  const taskText =
+    options.taskText ??
+    (forwardBatch
+      ? `${routingGoal === "factcheck" ? "Fact-check" : "Review"} ${forwardBatch.length} forwarded posts`
+      : stripMessageAgentName(text, ctx.me.username));
   const threadId =
     thread?.thread_id ??
     options.threadId ??
@@ -2501,8 +2560,7 @@ async function handleChatRequest(
     await createTask(ctx.database, {
       ...taskKey,
       thread_id: threadId,
-      task_text:
-        options.taskText ?? stripMessageAgentName(text, ctx.me.username),
+      task_text: taskText,
     });
     taskCreated = true;
   } catch (error) {
@@ -2793,7 +2851,7 @@ async function handleChatRequest(
           ctx,
           chatId,
           message,
-          options.taskText ?? stripMessageAgentName(text, ctx.me.username),
+          taskText,
           threadId,
           activeAgent,
           activeAgentName,
@@ -3420,11 +3478,17 @@ chatComposer.on("message", async (ctx, next) => {
     getActualReply(incomingMessage),
   );
   const privateChat = ctx.chat.type === "private";
+  const botPostLinks = privateChat
+    ? undefined
+    : getBotPostXLinks(ctx, incomingMessage);
   const routerEnabled = await smartRepliesEnabled(
     ctx,
     ctx.database,
     incomingMessage,
+    Boolean(botPostLinks),
   );
+  const xLinks = routerEnabled ? botPostLinks : undefined;
+  const linkedBotPost = xLinks !== undefined;
   // Zero identifies the default DM conversation in storage, never delivery.
   const conversationTopicId = privateChat ? (topicId ?? 0) : topicId;
   // Count every incoming message before mention filtering or album selection.
@@ -3439,27 +3503,40 @@ chatComposer.on("message", async (ctx, next) => {
     ctx.chat.id,
     incomingMessage,
   );
-  const message = selectNormalMediaGroupMessage(
-    mediaGroupMessages,
-    ctx.me.username,
-    ctx.me.id,
-    privateChat,
-    routerEnabled,
-  );
+  const message = linkedBotPost
+    ? incomingMessage
+    : selectNormalMediaGroupMessage(
+        mediaGroupMessages,
+        ctx.me.username,
+        ctx.me.id,
+        privateChat,
+        routerEnabled,
+      );
 
   if (!message || message.message_id !== incomingMessage.message_id) {
     await next();
     return;
   }
 
-  const text = getMessageText(message);
+  const messageText = getMessageText(message);
+  const text = xLinks
+    ? joinTextParts(
+        [
+          messageText,
+          ...[...xLinks].filter((link) => !messageText?.includes(link)),
+        ],
+        "\n",
+      )
+    : messageText;
   const reply = getActualReply(message);
   const replyContext = getReplyContext(message, reply);
   const isDirectBotReply = isDirectReplyToBot(reply, ctx.me.id);
   const addressed = text ? isAddressed(text, ctx.me.username) : false;
   // Smart replies supplement name invocations, bot replies, and private chats.
   const routeModel =
-    routerEnabled && !addressed && !isDirectBotReply && !privateChat;
+    linkedBotPost ||
+    (routerEnabled && !addressed && !isDirectBotReply && !privateChat);
+  const smartForward = routeModel && isForwardedMessage(message);
   let thread = reply
     ? ctx.chat.type !== "private" &&
       (reply.guest_bot_caller_user || reply.guest_bot_caller_chat)
@@ -3487,13 +3564,12 @@ chatComposer.on("message", async (ctx, next) => {
       : undefined;
   if (
     (!text?.trim() &&
+      !smartForward &&
       !(
         hasMessagesImageAttachments(mediaGroupMessages) &&
-        (isDirectBotReply ||
-          privateChat ||
-          (routeModel && isForwardedMessage(message)))
+        (isDirectBotReply || privateChat)
       )) ||
-    startsWithCommandPrefix(text) ||
+    (!linkedBotPost && startsWithCommandPrefix(text)) ||
     (!addressed && !isDirectBotReply && !privateChat && !routerEnabled)
   ) {
     await next();
@@ -3510,10 +3586,10 @@ chatComposer.on("message", async (ctx, next) => {
       privateChat && topicId !== undefined && !thread && Boolean(text?.trim()),
     imageMessages: mediaGroupMessages,
     routeModel,
+    linkedBotPost,
     onUnhandledError: next,
   };
-  if (routeModel && isForwardedMessage(message)) {
-    if (getUserInputLimitError(message)) return;
+  if (smartForward) {
     let batcher = smartForwardBatchers.get(ctx.database);
     if (!batcher) {
       batcher = new ForwardBatcher(handleSmartForwardBatch);
