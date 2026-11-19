@@ -1,5 +1,8 @@
 import { test } from "bun:test";
-import { strictEqual } from "node:assert";
+import { deepStrictEqual, ok, strictEqual } from "node:assert";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { sql } from "kysely";
 
 for (const [key, value] of Object.entries({
@@ -17,6 +20,59 @@ for (const [key, value] of Object.entries({
   Bun.env[key] = value;
 
 const { initDatabase } = await import("./database.ts");
+
+test("startup fails interrupted tasks across chats and preserves completed history", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "context-tg-restart-"));
+  try {
+    const connect = initDatabase(join(directory, "tasks.sqlite"));
+    const first = await connect();
+    const timestamp = "2026-01-01 12:00:00";
+    const statuses = [
+      "working",
+      "working",
+      "finished",
+      "failed",
+      "canceled",
+    ] as const;
+    try {
+      await first
+        .insertInto("tasks")
+        .values(
+          statuses.map((status, index) => ({
+            chat_id: -index - 1,
+            message_id: 1,
+            thread_id: 1,
+            task_text: "request",
+            started_at: timestamp,
+            status,
+            finished_at: status === "working" ? null : timestamp,
+          })),
+        )
+        .execute();
+    } finally {
+      await first.destroy();
+    }
+
+    const restarted = await connect();
+    try {
+      const rows = await restarted
+        .selectFrom("tasks")
+        .select(["status", "finished_at"])
+        .orderBy("chat_id", "desc")
+        .execute();
+      deepStrictEqual(
+        rows.map((row) => row.status),
+        ["failed", "failed", "finished", "failed", "canceled"],
+      );
+      ok(rows.slice(0, 2).every((row) => row.finished_at));
+      ok(rows.slice(2).every((row) => row.finished_at === timestamp));
+    } finally {
+      await restarted.destroy();
+    }
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
 
 test("integers beyond 32 bits read back exactly as numbers", async () => {
   const database = await initDatabase()();

@@ -98,22 +98,31 @@ export async function migrateTasks(database: Database) {
     .where("thread_id", "is", null)
     .execute();
 
-  try {
-    await database.schema
-      .alterTable("tasks")
-      .addColumn("status", "text", (column) =>
-        column.notNull().defaultTo("working"),
-      )
-      .execute();
-  } catch {
-    // Column already exists on fresh or previously migrated databases.
+  const taskColumns = (await database.introspection.getTables()).find(
+    (table) => table.name === "tasks",
+  )?.columns;
+  if (!taskColumns?.some((column) => column.name === "status")) {
+    await database.transaction().execute(async (transaction) => {
+      await transaction.schema
+        .alterTable("tasks")
+        .addColumn("status", "text", (column) =>
+          column.notNull().defaultTo("working"),
+        )
+        .execute();
+      // Older databases recorded completion using only finished_at.
+      await transaction
+        .updateTable("tasks")
+        .set({ status: "finished" })
+        .where("finished_at", "is not", null)
+        .execute();
+    });
   }
 
+  // Startup runs before polling. Any persisted working task lost its worker.
   await database
     .updateTable("tasks")
-    .set({ status: "finished" })
+    .set({ status: "failed", finished_at: sql`datetime('now', 'localtime')` })
     .where("status", "=", "working")
-    .where("finished_at", "is not", null)
     .execute();
 
   await database.schema

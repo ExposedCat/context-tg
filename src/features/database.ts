@@ -101,9 +101,7 @@ async function ensureDatabaseDirectory(databasePath: string) {
   await mkdir(dirname(databasePath), { recursive: true });
 }
 
-export function initDatabase() {
-  const databasePath = APP_ENV.SQLITE_PATH;
-
+export function initDatabase(databasePath = APP_ENV.SQLITE_PATH) {
   const connect = async (): Promise<Database> => {
     await ensureDatabaseDirectory(databasePath);
 
