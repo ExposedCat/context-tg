@@ -42,6 +42,7 @@ const TOOL_PROGRESS_LABELS = {
     "stopped pending threads {count} times",
   ],
   ignore: ["skipped response", "skipped {count} responses"],
+  like: ["liked message", "liked message {count} times"],
   send_report: ["prepared report", "prepared {count} reports"],
   send_trading_report: [
     "prepared trading report",

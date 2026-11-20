@@ -496,7 +496,7 @@ test("direct invocations bypass Smart replies while other mentions and forwards 
           ),
         );
         const batchInput = JSON.stringify(requests[1].input);
-        ok(!batchInput.includes("Fact-check the following forwarded posts"));
+        ok(!batchInput.includes("Fact-check the following post(s)."));
         ok(
           requests[1].input.some(({ content }) =>
             content.includes('<forwarded_from sender="News" sender_id="-900"'),
@@ -683,7 +683,7 @@ test("direct invocations bypass Smart replies while other mentions and forwards 
     );
     ok(
       JSON.stringify(requests[1].input).includes(
-        "Fact-check the following post",
+        "Fact-check the following post(s).",
       ),
     );
     ok(JSON.stringify(requests[1].input).includes(xLink));
@@ -796,7 +796,7 @@ test("routing goals preserve ordinary answers and prepend the exact fact-check r
     router: LLM_DEPLOYMENTS.router.deploymentName,
   };
   const factcheckText =
-    "Fact-check the following post. Use the ignore tool if the post is a joke, a subjective opinion, or otherwise contains nothing that needs fact-checking. If it's fully correct, respond with a short phrase. Otherwise, write a bullet list of what's correct and what's incorrect; keep items short and descriptive, use quotes to quote exact parts. Don't be a misleading nerd: subtle exaggerations, half-jokes and minor inconsistencies are okay, only call out factually wrong statements which have absolutely no ground or are meaningfully change the fact.";
+    "Fact-check the following post(s). Address posts with factual claims in order and identify each by its number or a short quote. Briefly say which claims are supported, which are misleading or wrong, and which you couldn't verify. If a post asks a genuine standalone question, answer it briefly. If every post is a joke, subjective opinion, a discussion or otherwise has nothing to fact-check or no verifiable factual claims, and there is no genuine standalone question to answer, simply use ignore tool. If a post is more or less fully correct, and there's no strong corrections to be provided, simply use like + ignore tools.";
   const sender = {
     id: 1,
     is_bot: false,
@@ -1108,10 +1108,10 @@ test("routing goals preserve ordinary answers and prepend the exact fact-check r
       (item) => item.role === "user",
     );
     const [instruction, ...posts] = userMessages.slice(-4);
-    ok(
-      JSON.stringify(instruction.content).includes(
-        "Fact-check the following forwarded posts. Use the ignore tool if every post",
-      ),
+    ok(typeof instruction.content === "string");
+    strictEqual(
+      instruction.content.match(/<content>([\s\S]*?)<\/content>/)?.[1],
+      factcheckText,
     );
     deepStrictEqual(
       posts.map((post) =>
@@ -1132,7 +1132,7 @@ test("routing goals preserve ordinary answers and prepend the exact fact-check r
   }
 });
 
-test("ignore ends the turn and reacts to the trigger even if thinking is in flight", async () => {
+test("ignore ends the turn and preserves a like even if thinking is in flight", async () => {
   const { getLlmResponseInputItems } = await import("./llm-chat-responses.ts");
   const { getTask } = await import("./tasks.ts");
   const database = await initDatabase()();
@@ -1147,7 +1147,7 @@ test("ignore ends the turn and reacts to the trigger even if thinking is in flig
     username: "test_bot",
   } as Context["me"];
   const reactions: Array<[number, unknown]> = [];
-  const thinking = Promise.withResolvers<true>();
+  let thinking = Promise.withResolvers<true>();
   let modelCalls = 0;
   let sentMessages = 0;
   api.sendChatAction = async () => true;
@@ -1172,11 +1172,14 @@ test("ignore ends the turn and reacts to the trigger even if thinking is in flig
   jest.useFakeTimers();
   try {
     setLlmDeploymentName("big", "ignore-answer");
-    for (const [messageId, mode] of [
-      [1, "fast"],
-      [2, "slow"],
-      [3, "guest"],
+    for (const [messageId, mode, like] of [
+      [1, "fast", false],
+      [2, "slow", false],
+      [3, "guest", false],
+      [4, "slow", true],
+      [5, "guest", true],
     ] as const) {
+      thinking = Promise.withResolvers<true>();
       const requested = Promise.withResolvers<void>();
       const finishModel = Promise.withResolvers<void>();
       globalThis.fetch = (async (input, init) => {
@@ -1185,19 +1188,23 @@ test("ignore ends the turn and reacts to the trigger even if thinking is in flig
         strictEqual(++modelCalls, messageId);
         const body = await request.json();
         ok(body.tools.some((tool: { name: string }) => tool.name === "ignore"));
+        ok(body.tools.some((tool: { name: string }) => tool.name === "like"));
+        ok(body.instructions.includes("call like together with ignore"));
         requested.resolve();
         await finishModel.promise;
         const result = await response(
           "Do not send this text",
           3000 + messageId,
         ).json();
-        result.output.push({
-          type: "function_call",
-          name: "ignore",
-          call_id: `call_ignore_${messageId}`,
-          arguments: "{}",
-          status: "completed",
-        });
+        for (const name of like ? ["ignore", "like"] : ["ignore"]) {
+          result.output.push({
+            type: "function_call",
+            name,
+            call_id: `call_${name}_${messageId}`,
+            arguments: "{}",
+            status: "completed",
+          });
+        }
         return Response.json(result);
       }) as typeof fetch;
       const message = {
@@ -1205,7 +1212,7 @@ test("ignore ends the turn and reacts to the trigger even if thinking is in flig
         date: 1,
         chat,
         from: { id: 1, is_bot: false, first_name: "User" },
-        text: "laylo, don't respond",
+        text: like ? "laylo, just like this" : "laylo, don't respond",
       };
       const ctx = new GrammyContext(
         mode === "guest"
@@ -1238,7 +1245,7 @@ test("ignore ends the turn and reacts to the trigger even if thinking is in flig
       }
       await pending;
       deepStrictEqual(reactions.splice(0), [
-        [messageId, [{ type: "emoji", emoji: "👌" }]],
+        [messageId, [{ type: "emoji", emoji: like ? "👍" : "👌" }]],
       ]);
       if (mode !== "guest") {
         const task = await getTask(database, {
@@ -1260,9 +1267,19 @@ test("ignore ends the turn and reacts to the trigger even if thinking is in flig
         ),
       );
       ok(!JSON.stringify(history).includes("Do not send this text"));
+      if (like) {
+        ok(
+          history?.some(
+            (item) =>
+              item.type === "function_call_output" &&
+              item.call_id === `call_like_${messageId}` &&
+              String(item.output).includes('"liked":true'),
+          ),
+        );
+      }
     }
     strictEqual(sentMessages, 0);
-    strictEqual(modelCalls, 3);
+    strictEqual(modelCalls, 5);
   } finally {
     thinking.resolve(true);
     jest.useRealTimers();

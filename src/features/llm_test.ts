@@ -3339,6 +3339,7 @@ test("periodic trolling delivers to the selected context message or without a re
   const reactions: unknown[][] = [];
   let selectedId: number | null | undefined;
   let ignore = false;
+  let like = false;
   let approved = true;
   let validations = 0;
   const ctx = {
@@ -3403,9 +3404,25 @@ test("periodic trolling delivers to the selected context message or without a re
     if (body.model === "test-troll-reply-model") {
       deepStrictEqual(
         body.tools.map((tool: { name: string }) => tool.name),
-        ["set_reply_message_id", "ignore"],
+        ["set_reply_message_id", "like", "ignore"],
       );
+      const result = body.input.find(
+        (item: { type: string }) => item.type === "function_call_output",
+      );
+      if (like && !result) {
+        return respond("resp_troll_like", [
+          {
+            id: "tool_troll_like",
+            type: "function_call",
+            call_id: "call_troll_like",
+            name: "like",
+            arguments: "{}",
+            status: "completed",
+          },
+        ]);
+      }
       if (ignore) {
+        if (like) ok(result.output.includes('{"liked":true}'));
         return respond("resp_troll_ignore", [
           {
             id: "tool_troll_ignore",
@@ -3417,9 +3434,6 @@ test("periodic trolling delivers to the selected context message or without a re
           },
         ]);
       }
-      const result = body.input.find(
-        (item: { type: string }) => item.type === "function_call_output",
-      );
       if (selectedId !== undefined && !result) {
         return respond("resp_select", [
           {
@@ -3464,11 +3478,18 @@ test("periodic trolling delivers to the selected context message or without a re
       { name: "shared situation", id: null, replyId: null },
       { name: "unknown message is not sent", id: 99, skip: true },
       { name: "ignored turn only reacts", id: undefined, ignore: true },
+      {
+        name: "like followed by ignore only gives a thumbs-up",
+        id: undefined,
+        like: true,
+        ignore: true,
+      },
       { name: "rejected earlier reply is not sent", id: 1, rejected: true },
     ]) {
       await step(test.name, async () => {
         selectedId = test.id;
         ignore = test.ignore === true;
+        like = test.like === true;
         approved = !test.rejected;
         validations = 0;
         sent.length = 0;
@@ -3486,7 +3507,9 @@ test("periodic trolling delivers to the selected context message or without a re
         );
         deepStrictEqual(
           reactions.splice(0),
-          ignore ? [[-100, 2, [{ type: "emoji", emoji: "👌" }]]] : [],
+          ignore
+            ? [[-100, 2, [{ type: "emoji", emoji: like ? "👍" : "👌" }]]]
+            : [],
         );
         strictEqual(validations, test.skip || ignore ? 0 : 1);
         if (test.skip || test.rejected || ignore) {

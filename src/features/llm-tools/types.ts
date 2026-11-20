@@ -14,6 +14,7 @@ export type LlmToolContext = {
   threadId?: number;
   // The request came from a forum's General topic, which has no topic id.
   generalTopic?: boolean;
+  likeMessage?: () => Promise<boolean>;
   stopPendingThreads?: () => Promise<number>;
   danbooru?: DanbooruOverrides;
 };

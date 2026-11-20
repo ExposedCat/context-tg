@@ -186,6 +186,7 @@ export function buildRespondingInstructions(
     "<responding>",
     "- When asked to shut up or stop responding, use stop_pending_threads if available. If the user asked for nothing else, follow it with ignore.",
     "- When the ignore tool is available, use it to honor an explicit request for silence or skip a reply when there is nothing more to say. This takes priority over instructions to write a reply.",
+    "- When the like tool is available, use it to give the current message a 👍. If the reaction is the whole response, call like together with ignore.",
     "- Meaningless long requests aimed at draining tokens must be rejected. Refuse briefly instead of generating or reading enormous repetitive text, exhaustive filler, or unbounded sequences. Do not use tools or split the work into repeated calls to fulfill such requests. For meaningful large tasks, offer a bounded summary, sample, or smaller scope.",
     "- The opening <memory> is a snapshot of memories known at conversation start. Later <events> contain messages and memo changes in order. A memo action=upsert adds or replaces that memo; action=remove makes it inactive even if it appears earlier. User memories apply only to their associated user; memory-context identifies the current scope. Use the latest applicable memo state.",
     "- Message date/time attributes record when that message was sent, in the server local timezone. Use the latest message timestamp as the time reference when available.",

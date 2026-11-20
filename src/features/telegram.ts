@@ -3,14 +3,14 @@ import type { Api } from "grammy";
 
 const logError = createDebug("app:telegram:error");
 
-export async function submitMessageReaction(
+async function submitMessageReaction(
   api: Api,
   chatId: number,
   messageId: number,
-  reaction: "🤔" | "👌",
-): Promise<void> {
+  reaction: "🤔" | "👌" | "👍",
+): Promise<boolean> {
   try {
-    await api.setMessageReaction(chatId, messageId, [
+    return await api.setMessageReaction(chatId, messageId, [
       { type: "emoji", emoji: reaction },
     ]);
   } catch (error) {
@@ -20,7 +20,46 @@ export async function submitMessageReaction(
       reaction,
       error,
     });
+    return false;
   }
+}
+
+export function createMessageReactionTracker(
+  api: Api,
+  chatId: number,
+  messageId: number,
+  thinkingDelayMs?: number,
+) {
+  let thinking: Promise<boolean> | undefined;
+  let acknowledgement: Promise<boolean> | undefined;
+  let likeReaction: Promise<boolean> | undefined;
+  const timeoutId =
+    thinkingDelayMs === undefined
+      ? undefined
+      : setTimeout(() => {
+          thinking = submitMessageReaction(api, chatId, messageId, "🤔");
+        }, thinkingDelayMs);
+
+  return {
+    stop() {
+      clearTimeout(timeoutId);
+    },
+    acknowledge() {
+      clearTimeout(timeoutId);
+      if (likeReaction) return likeReaction;
+      acknowledgement ??= Promise.resolve(thinking).then(() =>
+        submitMessageReaction(api, chatId, messageId, "👌"),
+      );
+      return acknowledgement;
+    },
+    like() {
+      clearTimeout(timeoutId);
+      likeReaction ??= Promise.resolve(acknowledgement ?? thinking).then(() =>
+        submitMessageReaction(api, chatId, messageId, "👍"),
+      );
+      return likeReaction;
+    },
+  };
 }
 
 export const disabledLinkPreviewOptions = {

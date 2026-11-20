@@ -30,6 +30,7 @@ export const tools = [
   "generate_image",
   "set_reply_message_id",
   "stop_pending_threads",
+  "like",
   "ignore",
   "schedule_message",
   "cron_message",

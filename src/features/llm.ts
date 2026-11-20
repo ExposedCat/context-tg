@@ -40,10 +40,12 @@ import {
 import { formatPromptMessageXml } from "./llm-prompt.ts";
 import {
   executeGetMessageContext,
+  executeLike,
   executeReadLastMessages,
   executeSearchChat,
   executeStopPendingThreads,
   getMessageContextToolDefinition,
+  likeToolDefinition,
   readLastMessagesToolDefinition,
   searchChatToolDefinition,
   stopPendingThreadsToolDefinition,
@@ -106,10 +108,11 @@ export const TOOL_DEFINITIONS = {
   generate_image: imageTool.toolDefinition,
   set_reply_message_id: replyTool.toolDefinition,
   stop_pending_threads: stopPendingThreadsToolDefinition,
+  like: likeToolDefinition,
   ignore: {
     name: "ignore",
     description:
-      "Skip the response. Use this when there is nothing more to say, the user asked for silence, or a response would otherwise be inappropriate. This ends the turn. Call it by itself without any reply text.",
+      "Skip the response. Use this when there is nothing more to say, the user asked for silence, or a response would otherwise be inappropriate. This ends the turn. Call it without any reply text. It can be paired with like to send only a 👍 reaction.",
     parameters: { type: "object", properties: {}, additionalProperties: false },
     strict: true,
   },
@@ -138,6 +141,7 @@ const FUNCTION_TOOL_RUNNERS = {
   get_markets_state: marketTool.execute,
   search_chat: executeSearchChat,
   stop_pending_threads: executeStopPendingThreads,
+  like: executeLike,
   get_message_context: executeGetMessageContext,
   read_last_messages: executeReadLastMessages,
   get_recent_news: gdeltTool.execute,
@@ -1948,11 +1952,11 @@ async function createLlmResponseWithRetries(
         tools.includes("ignore") &&
         functionCalls.some((call) => call.name === "ignore")
       ) {
-        // Models may batch stop and ignore. Honor the stop before ending the turn.
+        // Honor reactions and stop requests that were batched with ignore.
         terminalOutputs = [];
         for (const call of functionCalls) {
           if (
-            call.name === "stop_pending_threads" &&
+            (call.name === "stop_pending_threads" || call.name === "like") &&
             tools.includes(call.name) &&
             state.toolBudget.take()
           ) {

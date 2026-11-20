@@ -38,6 +38,23 @@ export const executeStopPendingThreads: FunctionToolRunner = async (
   return JSON.stringify({ stopped: await context.stopPendingThreads() });
 };
 
+export const likeToolDefinition = {
+  type: "function",
+  name: "like",
+  description:
+    "React with 👍 to the current Telegram message. Use together with ignore to like the message without sending a text reply.",
+  parameters: { type: "object", properties: {}, additionalProperties: false },
+  strict: true,
+} as const;
+
+export const executeLike: FunctionToolRunner = async (_, context) => {
+  if (!context?.likeMessage)
+    throw new Error("Liking messages is unavailable for this request.");
+  if (!(await context.likeMessage()))
+    throw new Error("Telegram could not add the 👍 reaction.");
+  return JSON.stringify({ liked: true });
+};
+
 export const searchChatToolDefinition = {
   type: "function",
   name: "search_chat",

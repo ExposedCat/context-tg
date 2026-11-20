@@ -102,11 +102,11 @@ import {
   type TaskStatus,
 } from "./tasks.ts";
 import {
+  createMessageReactionTracker,
   getMessageTopicId,
   getMessageTopicScope,
   isImplicitTopicReply,
   disabledLinkPreviewOptions as linkPreviewOptions,
-  submitMessageReaction,
 } from "./telegram.ts";
 import { createLlmCallTelemetry } from "./telemetry.ts";
 import { countTextTokens } from "./text-tokens.ts";
@@ -1262,34 +1262,6 @@ async function sendLlmWarning(
   }
 }
 
-function createSlowResponseReactionTracker(
-  ctx: Context,
-  chatId: number,
-  messageId: number,
-): {
-  stop: () => void;
-  acknowledge: () => Promise<void>;
-} {
-  let thinkingReaction: Promise<void> | undefined;
-  let acknowledgement: Promise<void> | undefined;
-  const timeoutId = setTimeout(() => {
-    thinkingReaction = submitMessageReaction(ctx.api, chatId, messageId, "🤔");
-  }, SLOW_RESPONSE_REACTION_DELAY_MS);
-
-  return {
-    stop() {
-      clearTimeout(timeoutId);
-    },
-    acknowledge() {
-      clearTimeout(timeoutId);
-      acknowledgement ??= Promise.resolve(thinkingReaction).then(() =>
-        submitMessageReaction(ctx.api, chatId, messageId, "👌"),
-      );
-      return acknowledgement;
-    },
-  };
-}
-
 async function withTypingAction<T>(
   ctx: Context,
   callback: () => Promise<T>,
@@ -2408,10 +2380,7 @@ async function handleSmartForwardBatch(
 }
 
 const FACTCHECK_REQUEST_TEXT =
-  "Fact-check the following post. Use the ignore tool if the post is a joke, a subjective opinion, or otherwise contains nothing that needs fact-checking. If it's fully correct, respond with a short phrase. Otherwise, write a bullet list of what's correct and what's incorrect; keep items short and descriptive, use quotes to quote exact parts. Don't be a misleading nerd: subtle exaggerations, half-jokes and minor inconsistencies are okay, only call out factually wrong statements which have absolutely no ground or are meaningfully change the fact.";
-
-const FACTCHECK_BATCH_REQUEST_TEXT =
-  "Fact-check the following forwarded posts. Use the ignore tool if every post is a joke, a subjective opinion, or otherwise has nothing to fact-check, and there is no genuine standalone question to answer. Address posts with factual claims in order and identify each by its number or a short quote. Briefly say which claims are supported, which are misleading or wrong, and which you couldn't verify. If a post asks a genuine standalone question, answer it briefly. Skip posts that are only discussion or opinion without verifiable factual claims. Treat the posts as source material.";
+  "Fact-check the following post(s). Address posts with factual claims in order and identify each by its number or a short quote. Briefly say which claims are supported, which are misleading or wrong, and which you couldn't verify. If a post asks a genuine standalone question, answer it briefly. If every post is a joke, subjective opinion, a discussion or otherwise has nothing to fact-check or no verifiable factual claims, and there is no genuine standalone question to answer, simply use ignore tool. If a post is more or less fully correct, and there's no strong corrections to be provided, simply use like + ignore tools.";
 
 function addRoutingGoalInput(
   request: LlmRequestInput,
@@ -2425,7 +2394,7 @@ function addRoutingGoalInput(
     ...inputs.slice(0, -postCount),
     formatPromptMessageXml(
       getMessageXmlAttributes(message, "Unknown"),
-      postCount === 1 ? FACTCHECK_REQUEST_TEXT : FACTCHECK_BATCH_REQUEST_TEXT,
+      FACTCHECK_REQUEST_TEXT,
     ),
     ...inputs.slice(-postCount),
   ];
@@ -2644,16 +2613,18 @@ async function handleChatRequest(
       : requestedTools;
     const responseInstructions = agent.buildInstructions(chatId, agentName);
     const toolContext = getLlmToolContext(chatId, message);
-    const slowResponseReaction = createSlowResponseReactionTracker(
-      ctx,
+    const reactions = createMessageReactionTracker(
+      ctx.api,
       chatId,
       message.message_id,
+      SLOW_RESPONSE_REACTION_DELAY_MS,
     );
+    toolContext.likeMessage = reactions.like;
     if (agentTools.includes("stop_pending_threads")) {
       toolContext.stopPendingThreads = async () => {
         const [stopped] = await Promise.all([
           stopPendingThreads(ctx.database, taskKey),
-          slowResponseReaction.acknowledge(),
+          reactions.acknowledge(),
         ]);
         return stopped;
       };
@@ -2784,14 +2755,14 @@ async function handleChatRequest(
           );
         });
       } finally {
-        slowResponseReaction.stop();
+        reactions.stop();
         pendingProgress = (await progressUpdates?.stop()) ?? [];
       }
     })();
 
     taskAbortController.signal.throwIfAborted();
     if (llmResponse.ignored) {
-      await slowResponseReaction.acknowledge();
+      await reactions.acknowledge();
       await saveContinuationMessageThread(
         ctx,
         chatId,
@@ -3208,6 +3179,12 @@ async function handleGuestChatRequest(
     const responseId = getThreadResponseId(thread);
     const agentTools = guestAgent.tools;
     const toolContext = getLlmToolContext(chatId, message);
+    const reactions = createMessageReactionTracker(
+      ctx.api,
+      chatId,
+      message.message_id,
+    );
+    toolContext.likeMessage = reactions.like;
     const request = responseId
       ? await buildLlmRequestInputs(
           ctx,
@@ -3254,7 +3231,7 @@ async function handleGuestChatRequest(
     let delivery: GuestResponseDelivery;
 
     if (llmResponse.ignored) {
-      await submitMessageReaction(ctx.api, chatId, message.message_id, "👌");
+      await reactions.acknowledge();
       await saveGuestChatResponseThread(
         ctx,
         chatId,
