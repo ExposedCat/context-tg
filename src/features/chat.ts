@@ -80,6 +80,7 @@ import {
   formatSystemPromptMessageXml,
   getPromptDateTimeFromEpochSeconds,
   type PromptMessageAttributes,
+  type PromptReplyReference,
 } from "./llm-prompt.ts";
 import { MediaGroupCollector } from "./media-group-collector.ts";
 import { startsWithCommandPrefix } from "./message-filter.ts";
@@ -129,7 +130,7 @@ import {
   parseGuestUsageCommand,
 } from "./usage.ts";
 
-type LlmContextMessage = {
+type LlmContextMessage = ForwardedMessage & {
   message_id?: number;
   date?: number;
   message_thread_id?: number;
@@ -139,6 +140,10 @@ type LlmContextMessage = {
   from?: TelegramUser;
   sender_chat?: TelegramChat;
   origin?: MessageOrigin;
+  forward_origin?: MessageOrigin;
+  forward_from?: TelegramUser;
+  forward_from_chat?: TelegramChat;
+  forward_signature?: string;
   animation?: unknown;
   audio?: unknown;
   photo?: PhotoSize[];
@@ -153,19 +158,18 @@ type LlmContextMessage = {
   guest_bot_caller_chat?: TelegramChat;
 };
 
-type TextMessage = LlmContextMessage &
-  ForwardedMessage & {
-    message_id: number;
-    chat?: TelegramChat;
-    message_thread_id?: number;
-    is_topic_message?: boolean;
-    forum_topic_created?: unknown;
-    quote?: {
-      text: string;
-    };
-    reply_to_message?: TextMessage;
-    external_reply?: LlmContextMessage;
+type TextMessage = LlmContextMessage & {
+  message_id: number;
+  chat?: TelegramChat;
+  message_thread_id?: number;
+  is_topic_message?: boolean;
+  forum_topic_created?: unknown;
+  quote?: {
+    text: string;
   };
+  reply_to_message?: TextMessage;
+  external_reply?: LlmContextMessage;
+};
 
 type ProactiveTriggerMessage = {
   message_id: number;
@@ -212,25 +216,12 @@ type TelegramChat = {
   username?: string;
 };
 
-type MessageOrigin =
-  | {
-      type: "user";
-      sender_user: TelegramUser;
-    }
-  | {
-      type: "hidden_user";
-      sender_user_name: string;
-    }
-  | {
-      type: "chat";
-      sender_chat: TelegramChat;
-      author_signature?: string;
-    }
-  | {
-      type: "channel";
-      chat: TelegramChat;
-      author_signature?: string;
-    };
+type MessageOrigin = { date?: number } & (
+  | { type: "user"; sender_user: TelegramUser }
+  | { type: "hidden_user"; sender_user_name: string }
+  | { type: "chat"; sender_chat: TelegramChat; author_signature?: string }
+  | { type: "channel"; chat: TelegramChat; author_signature?: string }
+);
 
 type PhotoSize = {
   file_id: string;
@@ -938,14 +929,57 @@ function getMessageXmlAttributes(
   };
 }
 
-function formatRegularMessageXml(
+function getForwardedFromXmlAttributes(
   message: LlmContextMessage | undefined,
-  content: string,
-): string {
-  return formatPromptMessageXml(
-    getMessageXmlAttributes(message, "Unknown"),
-    content,
+): PromptMessageAttributes | undefined {
+  if (!message || !isForwardedMessage(message)) return undefined;
+
+  const origin = message.forward_origin;
+  const dateTime = getPromptDateTimeFromEpochSeconds(
+    origin?.date ?? message.forward_date,
   );
+  if (origin) {
+    const chat =
+      origin.type === "channel"
+        ? origin.chat
+        : origin.type === "chat"
+          ? origin.sender_chat
+          : undefined;
+    const sender =
+      getTelegramChatName(chat) || getMessageOriginSenderName(origin);
+    return {
+      sender: sender?.trim() || "Unknown",
+      sender_id: origin.type === "user" ? origin.sender_user.id : chat?.id,
+      ...dateTime,
+    };
+  }
+
+  const legacyUser = message.forward_from;
+  const hiddenName = message.forward_sender_name?.trim();
+  const legacyChat = hiddenName ? undefined : message.forward_from_chat;
+  const sender =
+    getTelegramUserName(legacyUser) ||
+    hiddenName ||
+    getTelegramChatName(legacyChat) ||
+    message.forward_signature;
+  return {
+    sender: sender?.trim() || "Unknown",
+    sender_id: legacyUser?.id ?? legacyChat?.id,
+    ...dateTime,
+  };
+}
+
+function getPromptReplyReference(
+  message: LlmContextMessage | undefined,
+  excerpt: string | undefined,
+): PromptReplyReference | undefined {
+  if (!message && !excerpt) return undefined;
+
+  return {
+    attributes: getMessageXmlAttributes(message, "Unknown"),
+    excerpt,
+    forwardedFrom: getForwardedFromXmlAttributes(message),
+  };
 }
 
 async function formatRegularLlmMessage(
@@ -963,7 +997,11 @@ async function formatRegularLlmMessage(
     return undefined;
   }
 
-  return formatRegularMessageXml(message, content);
+  return formatPromptMessageXml(
+    getMessageXmlAttributes(message, "Unknown"),
+    content,
+    { forwardedFrom: getForwardedFromXmlAttributes(message) },
+  );
 }
 
 async function formatCurrentLlmMessage(
@@ -979,20 +1017,15 @@ async function formatCurrentLlmMessage(
       text,
       await getMessagesImageMarkdown(database, imageMessages),
     ) ?? text;
-  const quoteText = getQuoteReplyContextText(message);
-  const reply =
-    replyContext || quoteText
-      ? {
-          attributes: getMessageXmlAttributes(replyContext, "Unknown"),
-          excerpt: quoteText,
-        }
-      : undefined;
-
   return formatPromptMessageXml(
     getMessageXmlAttributes(message, "User"),
     content,
     {
-      reply,
+      reply: getPromptReplyReference(
+        replyContext,
+        getQuoteReplyContextText(message),
+      ),
+      forwardedFrom: getForwardedFromXmlAttributes(message),
     },
   );
 }
@@ -2390,8 +2423,8 @@ function addRoutingGoalInput(
   const inputs = Array.isArray(request) ? request : [request];
   return [
     ...inputs.slice(0, -postCount),
-    formatRegularMessageXml(
-      message,
+    formatPromptMessageXml(
+      getMessageXmlAttributes(message, "Unknown"),
       postCount === 1 ? FACTCHECK_REQUEST_TEXT : FACTCHECK_BATCH_REQUEST_TEXT,
     ),
     ...inputs.slice(-postCount),
@@ -2408,13 +2441,13 @@ function formatRoutingMessage(
     buildLlmMessageText(message, text),
     {
       reply: replyContext
-        ? {
-            attributes: getMessageXmlAttributes(replyContext, "Unknown"),
-            excerpt:
-              getQuoteReplyContextText(message) ??
+        ? getPromptReplyReference(
+            replyContext,
+            getQuoteReplyContextText(message) ??
               getLlmContextText(replyContext),
-          }
+          )
         : undefined,
+      forwardedFrom: getForwardedFromXmlAttributes(message),
     },
   );
 }

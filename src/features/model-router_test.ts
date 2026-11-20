@@ -487,8 +487,21 @@ test("direct invocations bypass Smart replies while other mentions and forwards 
       );
       strictEqual(sent - sentBeforeBurst, count === 10 ? 1 : 0);
       if (count === 10) {
+        const routedPosts: string[] = JSON.parse(
+          routeRequests[0].input[0].content,
+        );
+        ok(
+          routedPosts.every((post) =>
+            post.includes('<forwarded_from sender="News" sender_id="-900"'),
+          ),
+        );
         const batchInput = JSON.stringify(requests[1].input);
         ok(!batchInput.includes("Fact-check the following forwarded posts"));
+        ok(
+          requests[1].input.some(({ content }) =>
+            content.includes('<forwarded_from sender="News" sender_id="-900"'),
+          ),
+        );
         for (let i = 1; i <= count; i++) {
           ok(batchInput.includes(`Forwarded post #${i}</content>`));
         }
@@ -543,6 +556,31 @@ test("direct invocations bypass Smart replies while other mentions and forwards 
       );
       strictEqual(sent, sentBeforeDirect + 1);
     }
+    await receive("laylo, translate this quote", chat, true, {
+      reply_to_message: {
+        message_id: 10,
+        chat,
+        date: 1,
+        from: sender,
+        forward_sender_name: 'Alice & "Bob"',
+        forward_date: 1,
+        text: "Full original post",
+      },
+      quote: { text: "Original <excerpt>" },
+    });
+    const quotedForward = requests[0].input.find(({ content }) =>
+      content.includes('<in_reply_to_message id="10"'),
+    )?.content;
+    ok(quotedForward);
+    ok(
+      quotedForward.includes(
+        '    <forwarded_from sender="Alice &amp; &quot;Bob&quot;" date="',
+      ),
+    );
+    ok(
+      quotedForward.includes("    <excerpt>Original &lt;excerpt&gt;</excerpt>"),
+    );
+    ok(!quotedForward.includes("Full original post"));
     const topicChat = { ...chat, id: -304 };
     await persistChatRouterEnabled(database, topicChat.id, true);
     shouldRespond = false;

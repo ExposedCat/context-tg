@@ -13,6 +13,7 @@ export type PromptMessageAttributes = {
 export type PromptReplyReference = {
   attributes: PromptMessageAttributes;
   excerpt?: string;
+  forwardedFrom?: PromptMessageAttributes;
 };
 
 function formatXmlAttributes(attributes: PromptMessageAttributes): string {
@@ -39,6 +40,17 @@ function formatContentElement(content: string): string {
   return `  <content>${escapeXml(content)}</content>`;
 }
 
+function formatForwardedFromXml(
+  attributes: PromptMessageAttributes | undefined,
+  indent: string,
+): string[] {
+  return attributes
+    ? [
+        `${indent}${formatOpenTag("forwarded_from", attributes).slice(0, -1)} />`,
+      ]
+    : [];
+}
+
 function formatReplyReferenceXml(
   reply: PromptReplyReference | undefined,
 ): string | undefined {
@@ -48,13 +60,16 @@ function formatReplyReferenceXml(
 
   const openTag = formatOpenTag("in_reply_to_message", reply.attributes);
 
-  if (!reply.excerpt) {
+  if (!reply.excerpt && !reply.forwardedFrom) {
     return `  ${openTag.slice(0, -1)} />`;
   }
 
   return [
     `  ${openTag}`,
-    `    <excerpt>${escapeXml(reply.excerpt)}</excerpt>`,
+    ...formatForwardedFromXml(reply.forwardedFrom, "    "),
+    ...(reply.excerpt
+      ? [`    <excerpt>${escapeXml(reply.excerpt)}</excerpt>`]
+      : []),
     "  </in_reply_to_message>",
   ].join("\n");
 }
@@ -75,12 +90,14 @@ export function formatPromptMessageXml(
   content: string,
   options: {
     reply?: PromptReplyReference;
+    forwardedFrom?: PromptMessageAttributes;
   } = {},
 ): string {
   const replyReference = formatReplyReferenceXml(options.reply);
 
   return [
     formatOpenTag("message", attributes),
+    ...formatForwardedFromXml(options.forwardedFrom, "  "),
     ...(replyReference ? [replyReference] : []),
     formatContentElement(content),
     "</message>",
