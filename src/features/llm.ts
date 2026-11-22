@@ -39,6 +39,11 @@ import {
 } from "./llm-models.ts";
 import { formatPromptMessageXml } from "./llm-prompt.ts";
 import {
+  getLlmProviderResponseTelemetry,
+  isLlmProviderError,
+  withLlmFallback,
+} from "./llm-provider.ts";
+import {
   executeGetMessageContext,
   executeLike,
   executeReadLastMessages,
@@ -75,6 +80,7 @@ import type {
   LlmCallStatus,
   LlmCallTelemetry,
   LlmCallTelemetryPayload,
+  LlmProviderOperation,
 } from "./telemetry.ts";
 import { createLlmCallTiming } from "./telemetry.ts";
 import { TextCreditMeter } from "./text-credit-meter.ts";
@@ -288,6 +294,8 @@ const logDebug = createDebug("app:llm:debug");
 const logError = createDebug("app:llm:error");
 const MAX_LLM_RETRIES = 10;
 const MAX_EMPTY_RESPONSE_RETRIES = 2;
+const LLM_TRANSPORT_RETRY_DELAY_MS = 1000;
+const LLM_TRANSPORT_MAX_RETRY_DELAY_MS = 4000;
 const LLM_RATE_LIMIT_RETRY_DELAY_MS = 3000;
 const LLM_RATE_LIMIT_MAX_RETRIES = 5;
 const RETRIABLE_EMPTY_RESPONSE_DETAILS = new Set([
@@ -389,7 +397,33 @@ const creditLimitedResponses = new WeakSet<ApiResponse>();
 const TEXT_CHARGE_BATCH_TOKENS = 128;
 const TEXT_CHARGE_INTERVAL_MS = 1000;
 
-async function createModelResponse(
+function createModelResponse(
+  operation: LlmProviderOperation,
+  ...[client, params, signal, ...options]: Parameters<
+    typeof createModelResponseAttempt
+  >
+): Promise<ApiResponse> {
+  return withLlmFallback(
+    (fallback) =>
+      createModelResponseAttempt(
+        fallback ? client.withOptions(fallback) : client,
+        params,
+        signal,
+        ...options,
+      ),
+    {
+      operation,
+      model: params.model,
+      signal,
+      getResultTelemetry: getLlmProviderResponseTelemetry,
+      shouldFallback: (error) =>
+        error instanceof ModelTimeoutBeforeResponseError ||
+        (isLlmProviderError(error) && !isContentFilterError(error)),
+    },
+  );
+}
+
+async function createModelResponseAttempt(
   client: OpenAI,
   params: OpenAI.Responses.ResponseCreateParamsNonStreaming,
   signal?: AbortSignal,
@@ -499,20 +533,19 @@ async function createModelResponse(
     return response;
   } catch (error) {
     throwIfAborted(signal);
-    if (deadline.signal.aborted) {
-      throw new LlmRequestError(
-        "Model call timed out",
-        "The model call exceeded the 5-minute limit. The request was stopped without retrying.",
-        "timeout",
-      );
-    }
     if (
+      deadline.signal.aborted ||
       inactivity.signal.aborted ||
       error instanceof OpenAI.APIConnectionTimeoutError
     ) {
-      throw new LlmRequestError(
+      const TimeoutError = receivedEvent
+        ? LlmRequestError
+        : ModelTimeoutBeforeResponseError;
+      throw new TimeoutError(
         "Model call timed out",
-        "The model produced no progress for 3 minutes. The request was stopped without retrying.",
+        deadline.signal.aborted
+          ? "The model call exceeded the 5-minute limit."
+          : "The model produced no progress for 3 minutes.",
         "timeout",
       );
     }
@@ -1076,6 +1109,8 @@ export class LlmRequestError extends Error {
   }
 }
 
+class ModelTimeoutBeforeResponseError extends LlmRequestError {}
+
 function getErrorObject(error: unknown): Record<string, unknown> | undefined {
   if (typeof error !== "object" || error === null) {
     return undefined;
@@ -1087,11 +1122,18 @@ function getErrorObject(error: unknown): Record<string, unknown> | undefined {
 export function getLlmErrorCode(error: unknown): string {
   const errorObject = getErrorObject(error);
   const apiError = getErrorObject(errorObject?.error);
-  const code = errorObject?.status ?? errorObject?.code ?? apiError?.code;
+  const connectionError = error instanceof OpenAI.APIConnectionError;
+  const code =
+    errorObject?.status ??
+    errorObject?.code ??
+    apiError?.code ??
+    (connectionError ? getErrorObject(error.cause)?.code : undefined);
   return (typeof code === "string" || typeof code === "number") &&
     /^[\w-]+$/.test(String(code))
     ? String(code)
-    : "unknown";
+    : connectionError
+      ? "connection_error"
+      : "unknown";
 }
 
 function isRateLimitError(error: unknown): boolean {
@@ -1835,6 +1877,7 @@ async function createLlmResponse(
   const toolDefinitions = getToolDefinitions(tools, financeMcp, calendarMcp);
 
   return await createModelResponse(
+    "chat_response",
     client,
     {
       model: getConfiguredDeploymentName(model),
@@ -2164,6 +2207,15 @@ async function createLlmResponseWithRetries(
         break;
       }
 
+      if (transportError) {
+        await delay(
+          Math.min(
+            LLM_TRANSPORT_RETRY_DELAY_MS * 2 ** retryAttempts,
+            LLM_TRANSPORT_MAX_RETRY_DELAY_MS,
+          ),
+          options.signal,
+        );
+      }
       retryAttempts += 1;
     }
   }
@@ -2609,6 +2661,7 @@ export async function requestModelRoute(
   try {
     const forwardBatch = options.forwardBatch === true;
     response = await createModelResponse(
+      "model_routing",
       getClient(),
       {
         model: getConfiguredDeploymentName(LLM_DEPLOYMENTS.router),
@@ -2712,6 +2765,7 @@ export async function requestTrollingValidation(
   let status: LlmCallStatus = "failed";
   try {
     response = await createModelResponse(
+      "trolling_validation",
       getClient(),
       {
         model: getConfiguredDeploymentName(LLM_DEPLOYMENTS.judge),
@@ -2824,6 +2878,7 @@ Respond with a name for this thread. Don't use formatting, don't add anything el
   try {
     const settings = await resolveRuntimeSettings(model, options);
     const response = await createModelResponse(
+      "thread_naming",
       getClient(),
       {
         model: getConfiguredDeploymentName(model),

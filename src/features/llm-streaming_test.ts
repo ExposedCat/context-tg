@@ -1178,7 +1178,16 @@ test("an admin stream can exceed 64000 text tokens without an application genera
   }
 });
 
-test("three minutes without model events closes silent and stalled streams without retrying", async () => {
+test("idle stream timeouts only use fallback before the first model event", async () => {
+  const { APP_ENV } = await import("./env.ts");
+  const previousFallback = {
+    FALLBACK_LLM_BASE_URL: APP_ENV.FALLBACK_LLM_BASE_URL,
+    FALLBACK_LLM_API_KEY: APP_ENV.FALLBACK_LLM_API_KEY,
+  };
+  Object.assign(APP_ENV, {
+    FALLBACK_LLM_BASE_URL: "https://fallback.test/v1",
+    FALLBACK_LLM_API_KEY: "fallback-key",
+  });
   setLlmDeploymentName("big", "stream-test");
   const originalFetch = globalThis.fetch;
   const settle = async () => {
@@ -1186,19 +1195,25 @@ test("three minutes without model events closes silent and stalled streams witho
   };
   jest.useFakeTimers();
   try {
-    for (const active of [false, true]) {
+    for (const stream of ["silent", "created", "active"] as const) {
       let requests = 0;
       let closed = false;
       let events = 0;
       let settled = false;
       let body: ReadableStreamDefaultController<Uint8Array> | undefined;
-      globalThis.fetch = (async (_input: unknown, init?: RequestInit) => {
+      globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
         requests++;
+        if (String(input) === "https://fallback.test/v1/responses") {
+          return sse([
+            created,
+            { type: "response.completed", response: response("resp_fallback") },
+          ]);
+        }
         return new Response(
           new ReadableStream<Uint8Array>({
             start(controller) {
               body = controller;
-              controller.enqueue(frame(created));
+              if (stream !== "silent") controller.enqueue(frame(created));
               // Like real fetch, aborting the connection errors its body.
               init?.signal?.addEventListener(
                 "abort",
@@ -1233,12 +1248,12 @@ test("three minutes without model events closes silent and stalled streams witho
         },
       );
       await settle();
-      strictEqual(events, 1);
+      strictEqual(events, stream === "silent" ? 0 : 1);
       ok(body);
-      jest.advanceTimersByTime(active ? 90_000 : 179_000);
+      jest.advanceTimersByTime(stream === "active" ? 90_000 : 179_000);
       await settle();
       strictEqual(settled, false);
-      if (active) {
+      if (stream === "active") {
         body.enqueue(frame(delta));
         await settle();
         strictEqual(events, 2);
@@ -1248,6 +1263,12 @@ test("three minutes without model events closes silent and stalled streams witho
         strictEqual(settled, false);
       }
       jest.advanceTimersByTime(1_000);
+      if (stream === "silent") {
+        strictEqual((await pending).response_id, "resp_fallback");
+        strictEqual(requests, 2);
+        strictEqual(closed, true);
+        continue;
+      }
       await rejects(
         pending,
         (error) =>
@@ -1262,6 +1283,7 @@ test("three minutes without model events closes silent and stalled streams witho
   } finally {
     globalThis.fetch = originalFetch;
     jest.useRealTimers();
+    Object.assign(APP_ENV, previousFallback);
   }
 });
 

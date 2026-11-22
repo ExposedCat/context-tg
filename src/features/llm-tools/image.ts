@@ -6,6 +6,8 @@ import {
   saveImage,
 } from "../images.ts";
 import { LLM_DEPLOYMENTS } from "../llm-deployments.ts";
+import { isLlmProviderStatus, withLlmFallback } from "../llm-provider.ts";
+import type { CreditCharge } from "../usage.ts";
 import type { FunctionToolRunner, LlmToolUsage } from "./types.ts";
 import {
   asRecord,
@@ -88,15 +90,6 @@ export const toolDefinition = {
   },
   strict: false,
 } as const;
-
-function getImageApiUrl(operation: "generations" | "edits"): string {
-  if (!APP_ENV.LLM_BASE_URL) {
-    throw new Error("LLM_BASE_URL is not set.");
-  }
-
-  const baseUrl = APP_ENV.LLM_BASE_URL.replace(/\/+$/, "");
-  return `${baseUrl}/images/${operation}`;
-}
 
 type ImageSize = "small" | "big";
 
@@ -234,31 +227,76 @@ async function createInputImageFile(
   );
 }
 
-async function createDefaultImageRequest(
+class ImageProviderError extends Error {
+  constructor(
+    cause: unknown,
+    readonly status?: number,
+  ) {
+    super(getErrorMessage(cause), { cause });
+  }
+}
+
+async function requestImage(
   model: string,
   prompt: string,
   inputImages: string[],
   signal?: AbortSignal,
-): Promise<Response> {
-  const headers = {
-    Authorization: `Bearer ${APP_ENV.LLM_API_KEY}`,
-    Accept: "application/json",
-  };
+  chargeCredits?: CreditCharge,
+): Promise<ImageGenerationResponse> {
+  const operation = inputImages.length === 0 ? "generations" : "edits";
+  const body =
+    operation === "generations"
+      ? JSON.stringify({ model, prompt, n: 1, moderation: "low" })
+      : await createImageEditForm(model, prompt, inputImages, signal);
 
-  if (inputImages.length === 0) {
-    return await fetch(getImageApiUrl("generations"), {
-      method: "POST",
-      headers: { ...headers, "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model,
-        prompt,
-        n: 1,
-        moderation: "low",
-      }),
+  return await withLlmFallback(
+    async (fallback) => {
+      if (fallback) await chargeCredits?.("image_attempt", "generate_image");
+      const baseURL = (fallback?.baseURL ?? APP_ENV.LLM_BASE_URL).replace(
+        /\/+$/,
+        "",
+      );
+      const headers = {
+        Authorization: `Bearer ${fallback?.apiKey ?? APP_ENV.LLM_API_KEY}`,
+        Accept: "application/json",
+        ...(operation === "generations" && {
+          "Content-Type": "application/json",
+        }),
+      };
+      const response = await fetch(`${baseURL}/images/${operation}`, {
+        method: "POST",
+        headers,
+        body,
+        signal,
+      }).catch((error) => {
+        if (signal?.aborted) throw error;
+        throw new ImageProviderError(error);
+      });
+      try {
+        return await readImageResponse(response);
+      } catch (error) {
+        if (response.ok) throw error;
+        throw new ImageProviderError(error, response.status);
+      }
+    },
+    {
+      operation: operation === "edits" ? "image_edit" : "image_generation",
+      model,
       signal,
-    });
-  }
+      getResultTelemetry: getImageGenerationUsage,
+      shouldFallback: (error) =>
+        error instanceof ImageProviderError &&
+        (error.status === undefined || isLlmProviderStatus(error.status)),
+    },
+  );
+}
 
+async function createImageEditForm(
+  model: string,
+  prompt: string,
+  inputImages: string[],
+  signal?: AbortSignal,
+): Promise<FormData> {
   const files = await Promise.all(
     inputImages.map((url, index) => createInputImageFile(url, index, signal)),
   );
@@ -272,26 +310,12 @@ async function createDefaultImageRequest(
     form.append("image[]", file);
   }
 
-  return await fetch(getImageApiUrl("edits"), {
-    method: "POST",
-    headers,
-    body: form,
-    signal,
-  });
+  return form;
 }
 
-async function createImage(
-  model: string,
-  prompt: string,
-  inputImages: string[],
-  signal?: AbortSignal,
-) {
-  const response = await createDefaultImageRequest(
-    model,
-    prompt,
-    inputImages,
-    signal,
-  );
+async function readImageResponse(
+  response: Response,
+): Promise<ImageGenerationResponse> {
   const text = await response.text();
   let payload: ImageGenerationResponse;
 
@@ -308,6 +332,23 @@ async function createImage(
     throw new Error(`Image API returned HTTP ${response.status}: ${message}`);
   }
 
+  return payload;
+}
+
+async function createImage(
+  model: string,
+  prompt: string,
+  inputImages: string[],
+  signal?: AbortSignal,
+  chargeCredits?: CreditCharge,
+) {
+  const payload = await requestImage(
+    model,
+    prompt,
+    inputImages,
+    signal,
+    chargeCredits,
+  );
   const image = getFirstImageData(payload);
   const b64Json = getString(image?.b64_json);
   const url = getString(image?.url);
@@ -378,6 +419,7 @@ export const execute: FunctionToolRunner = async (args, _context, options) => {
       prompt,
       inputImages,
       options.signal,
+      options.chargeCredits,
     );
   } catch (error) {
     if (options.signal?.aborted) {
@@ -396,6 +438,7 @@ export const execute: FunctionToolRunner = async (args, _context, options) => {
         prompt,
         inputImages,
         options.signal,
+        options.chargeCredits,
       );
     } catch (alternateError) {
       if (options.signal?.aborted) {

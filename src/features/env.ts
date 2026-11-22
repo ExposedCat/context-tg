@@ -52,6 +52,8 @@ export const APP_ENV = {
   MEDIA_CACHE_CHAT_ID: getOptionalNumberEnv("MEDIA_CACHE_CHAT_ID"),
   LLM_BASE_URL: getRequiredEnv("LLM_BASE_URL"),
   LLM_API_KEY: getRequiredEnv("LLM_API_KEY"),
+  FALLBACK_LLM_BASE_URL: getOptionalEnv("FALLBACK_LLM_BASE_URL"),
+  FALLBACK_LLM_API_KEY: getOptionalEnv("FALLBACK_LLM_API_KEY"),
   LLM_STREAMING: getOptionalEnv("LLM_STREAMING") !== "false",
   LLM_COMPACT_THRESHOLD: getPositiveIntegerEnv(
     "LLM_COMPACT_THRESHOLD",
@@ -68,6 +70,8 @@ export const APP_ENV = {
   KEENABLE_API_KEY: getRequiredEnv("KEENABLE_API_KEY"),
   EMBEDDER_BASE_URL: getRequiredEnv("EMBEDDER_BASE_URL"),
   EMBEDDER_API_KEY: getRequiredEnv("EMBEDDER_API_KEY"),
+  FALLBACK_EMBEDDER_BASE_URL: getOptionalEnv("FALLBACK_EMBEDDER_BASE_URL"),
+  FALLBACK_EMBEDDER_API_KEY: getOptionalEnv("FALLBACK_EMBEDDER_API_KEY"),
   EMBEDDING_MODEL: getRequiredEnv("EMBEDDING_MODEL"),
   SEARXNG_URL: getOptionalEnv("SEARXNG_URL") ?? "http://localhost:8080",
   DANBOORU_USERNAME: getOptionalEnv("DANBOORU_USERNAME"),

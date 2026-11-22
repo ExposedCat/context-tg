@@ -12,6 +12,10 @@ import type { AgentId } from "./agents/types.ts";
 import type { Database } from "./database.ts";
 import { APP_ENV } from "./env.ts";
 import { LLM_DEPLOYMENTS } from "./llm-deployments.ts";
+import {
+  getLlmProviderResponseTelemetry,
+  withLlmFallback,
+} from "./llm-provider.ts";
 
 export const MEMO_BUCKETS = ["chat", "user", "self"] as const;
 export type MemoBucket = (typeof MEMO_BUCKETS)[number];
@@ -248,7 +252,8 @@ async function requestMemoIdsToRemove(
     return undefined;
   }
 
-  const response = await getMemoPruningClient().responses.create({
+  const client = getMemoPruningClient();
+  const request: OpenAI.Responses.ResponseCreateParamsNonStreaming = {
     model: deploymentName,
     instructions: [
       "You are a strict memory pruning filter for a Telegram chat assistant.",
@@ -277,7 +282,18 @@ async function requestMemoIdsToRemove(
     ...(LLM_DEPLOYMENTS.big.withReasoning
       ? { reasoning: { effort: "high" } }
       : {}),
-  });
+  };
+  const response = await withLlmFallback(
+    (fallback) =>
+      (fallback ? client.withOptions(fallback) : client).responses.create(
+        request,
+      ),
+    {
+      operation: "memo_pruning",
+      model: deploymentName,
+      getResultTelemetry: getLlmProviderResponseTelemetry,
+    },
+  );
   const responseText = response.output_text;
 
   if (!responseText) {

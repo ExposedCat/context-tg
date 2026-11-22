@@ -1,6 +1,50 @@
+import { logs, SeverityNumber } from "@opentelemetry/api-logs";
+
 export type LlmCallChatType = "private" | "group";
 export type LlmCallMode = "normal" | "guest";
 export type LlmCallStatus = "success" | "with_errors" | "failed";
+
+export type LlmProviderOperation =
+  | "chat_response"
+  | "model_routing"
+  | "trolling_validation"
+  | "thread_naming"
+  | "memo_pruning"
+  | "embedding"
+  | "image_generation"
+  | "image_edit";
+
+export type LlmProviderResultTelemetry = {
+  error_code?: string;
+  input_tokens?: number;
+  cached_tokens?: number;
+  output_tokens?: number;
+};
+
+type LlmProviderAttempt = LlmProviderResultTelemetry & {
+  service: "llm" | "embedder";
+  operation: LlmProviderOperation;
+  model?: string;
+  api: "primary" | "fallback";
+  outcome: "success" | "failed" | "canceled";
+  duration_ms: number;
+  will_use_fallback: boolean;
+  http_status?: number;
+};
+
+const providerLogger = logs.getLogger("context-tg.provider");
+
+export function emitLlmProviderAttempt(attributes: LlmProviderAttempt): void {
+  providerLogger.emit({
+    eventName: "llm_provider_attempt",
+    body: "llm_provider_attempt",
+    severityNumber:
+      attributes.outcome === "failed"
+        ? SeverityNumber.WARN
+        : SeverityNumber.INFO,
+    attributes,
+  });
+}
 
 export type LlmCallTimingPayload = {
   duration_ms: number;

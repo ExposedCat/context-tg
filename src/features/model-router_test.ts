@@ -796,7 +796,7 @@ test("routing goals preserve ordinary answers and prepend the exact fact-check r
     router: LLM_DEPLOYMENTS.router.deploymentName,
   };
   const factcheckText =
-    "Fact-check the following post(s). Address posts with factual claims in order and identify each by its number or a short quote. Briefly say which claims are supported, which are misleading or wrong, and which you couldn't verify. If a post asks a genuine standalone question, answer it briefly. If every post is a joke, subjective opinion, a discussion or otherwise has nothing to fact-check or no verifiable factual claims, and there is no genuine standalone question to answer, simply use ignore tool. If a post is more or less fully correct, and there's no strong corrections to be provided, simply use like + ignore tools.";
+    "Fact-check the following post(s). Address posts with factual claims in order and identify each by its number or a short quote. Briefly say which claims are supported, which are misleading or wrong, and which you couldn't verify. If a post asks a genuine standalone question, answer it briefly. If every post is a joke, subjective opinion, a discussion or otherwise has nothing to fact-check or no verifiable factual claims, and there is no genuine standalone question to answer, simply use ignore tool. If a post is more or less fully correct, and there's no strong corrections to be provided, simply use like + ignore tools. When writing a fact-check review when something is wrong, don't elaborate things which are correct -- just list correct things in a very small, concise sentence; for wrong things write a concise, short sentence or two of correction, with hyperlinks on relevant words.";
   const sender = {
     id: 1,
     is_bot: false,

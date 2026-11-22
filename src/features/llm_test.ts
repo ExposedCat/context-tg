@@ -5,6 +5,7 @@ import {
   ok,
   strictEqual,
 } from "node:assert";
+import { type LogRecord, logs } from "@opentelemetry/api-logs";
 import { type Api, InputFile } from "grammy";
 import { step } from "../utils/test-step.ts";
 import { parseLlmResponseInputItems } from "./llm-chat-responses.ts";
@@ -587,6 +588,183 @@ Respond with a name for this thread. Don't use formatting, don't add anything el
   } finally {
     globalThis.fetch = originalFetch;
     setLlmDeploymentName("openminded", "");
+  }
+});
+
+test("model requests back off after connection resets and preserve the socket error if retries fail", async () => {
+  setLlmDeploymentName("big", "test-model");
+  const originalFetch = globalThis.fetch;
+  const originalSetTimeout = globalThis.setTimeout;
+  const retryDelays: number[] = [];
+  globalThis.setTimeout = ((
+    callback: (...args: unknown[]) => void,
+    ms?: number,
+    ...args: unknown[]
+  ) => {
+    if (ms !== 1000 && ms !== 2000) {
+      return originalSetTimeout(callback, ms, ...args);
+    }
+    retryDelays.push(ms);
+    return originalSetTimeout(callback, 0, ...args);
+  }) as typeof setTimeout;
+  try {
+    for (const recover of [true, false]) {
+      let calls = 0;
+      retryDelays.length = 0;
+      globalThis.fetch = (async () => {
+        if (++calls === 3 && recover) {
+          return Response.json(budgetTestAnswer("resp_after_reset"));
+        }
+        throw Object.assign(new TypeError("Socket closed unexpectedly"), {
+          code: "ECONNRESET",
+        });
+      }) as unknown as typeof fetch;
+
+      const request = requestLlm("Hello", [], undefined, {}, "Be brief.");
+      if (recover) {
+        strictEqual((await request).response_id, "resp_after_reset");
+      } else {
+        await assertRejects(
+          request,
+          (error) =>
+            error instanceof LlmRequestError && error.code === "ECONNRESET",
+        );
+      }
+      strictEqual(calls, 3);
+      deepStrictEqual(retryDelays, [1000, 2000]);
+    }
+  } finally {
+    globalThis.fetch = originalFetch;
+    globalThis.setTimeout = originalSetTimeout;
+    setLlmDeploymentName("big", "");
+  }
+});
+
+test("Azure fallback retries the same Responses request with a second key and optional URL", async () => {
+  const { APP_ENV } = await import("./env.ts");
+  const originalFetch = globalThis.fetch;
+  const attempts: LogRecord[] = [];
+  logs.setGlobalLoggerProvider({
+    getLogger: () => ({
+      emit: (record) => attempts.push(record),
+      enabled: () => true,
+    }),
+  });
+  const previousFallback = {
+    FALLBACK_LLM_BASE_URL: APP_ENV.FALLBACK_LLM_BASE_URL,
+    FALLBACK_LLM_API_KEY: APP_ENV.FALLBACK_LLM_API_KEY,
+  };
+  setLlmDeploymentName("big", "test-model");
+  Object.assign(APP_ENV, {
+    FALLBACK_LLM_API_KEY: "fallback-key",
+  });
+  try {
+    for (const status of [200, 400, 401, 429, 503, "reset"] as const) {
+      attempts.length = 0;
+      const fallbackBaseURL =
+        status === "reset" ? undefined : "https://fallback.test/v1";
+      Object.assign(APP_ENV, { FALLBACK_LLM_BASE_URL: fallbackBaseURL });
+      const requests: { url: string; key: string | null; body: string }[] = [];
+      globalThis.fetch = (async (input, init) => {
+        requests.push({
+          url: String(input),
+          key: new Headers(init?.headers).get("authorization"),
+          body: String(init?.body),
+        });
+        if (requests.length === 1 && status === "reset") {
+          throw Object.assign(new TypeError("Connection reset"), {
+            code: "ECONNRESET",
+          });
+        }
+        if (
+          requests.length === 1 &&
+          typeof status === "number" &&
+          status !== 200
+        ) {
+          return Response.json(
+            { error: { message: "Primary error" } },
+            {
+              status,
+            },
+          );
+        }
+        return Response.json(budgetTestAnswer("resp_with_fallback"));
+      }) as typeof fetch;
+
+      const request = requestLlm(
+        "Hello",
+        ["set_reply_message_id"],
+        undefined,
+        {},
+        "Be brief.",
+      );
+      if (status === 400) {
+        await assertRejects(
+          request,
+          (error) => error instanceof LlmRequestError && error.code === "400",
+        );
+      } else {
+        strictEqual((await request).response_id, "resp_with_fallback");
+      }
+      strictEqual(requests[0].url, `${TEST_ENV.LLM_BASE_URL}/responses`);
+      strictEqual(requests[0].key, `Bearer ${TEST_ENV.LLM_API_KEY}`);
+      if (status === 200 || status === 400) {
+        strictEqual(requests.length, 1);
+      } else {
+        strictEqual(requests.length, 2);
+        deepStrictEqual(requests[1], {
+          url: `${fallbackBaseURL ?? TEST_ENV.LLM_BASE_URL}/responses`,
+          key: "Bearer fallback-key",
+          body: requests[0].body,
+        });
+      }
+      const primaryFailed = status !== 200;
+      const usedFallback = requests.length === 2;
+      const attemptFields = {
+        operation: "chat_response",
+        service: "llm",
+        model: "test-model",
+      };
+      const usage = { input_tokens: 10, cached_tokens: 2, output_tokens: 5 };
+      deepStrictEqual(
+        attempts.map((record) => {
+          strictEqual(record.eventName, "llm_provider_attempt");
+          strictEqual(record.body, "llm_provider_attempt");
+          const { duration_ms, ...fields } = record.attributes ?? {};
+          ok(typeof duration_ms === "number" && duration_ms >= 0);
+          return fields;
+        }),
+        [
+          {
+            ...attemptFields,
+            api: "primary",
+            outcome: primaryFailed ? "failed" : "success",
+            will_use_fallback: usedFallback,
+            ...(primaryFailed && {
+              ...(status !== "reset" && { http_status: status }),
+              error_code: status === "reset" ? "ECONNRESET" : "unknown",
+            }),
+            ...(!primaryFailed && usage),
+          },
+          ...(usedFallback
+            ? [
+                {
+                  ...attemptFields,
+                  api: "fallback",
+                  outcome: "success",
+                  will_use_fallback: false,
+                  ...usage,
+                },
+              ]
+            : []),
+        ],
+      );
+    }
+  } finally {
+    globalThis.fetch = originalFetch;
+    logs.disable();
+    Object.assign(APP_ENV, previousFallback);
+    setLlmDeploymentName("big", "");
   }
 });
 

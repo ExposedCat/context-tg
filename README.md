@@ -18,6 +18,17 @@ recurring reminders use persisted RRULE schedules and next-occurrence timers. Th
 container image bakes in source and dependencies, with persistent `./data` and
 an optional read-only `./secrets` directory for credentials.
 
+## Azure OpenAI fallback credentials
+
+Set `FALLBACK_LLM_API_KEY` to enable a second Azure OpenAI credential. Set
+`FALLBACK_LLM_BASE_URL` if it belongs to a different Azure resource and use the
+same API path and deployment names there. Each request starts with `LLM_BASE_URL`
+and `LLM_API_KEY`.
+Connection failures and HTTP 401, 403, 404, 408, 429, and 5xx responses can trigger
+a retry with the fallback credentials and the same model and request settings.
+Responses API calls can also switch on a timeout before streaming starts. A
+stream that has received events uses the existing interruption and resume flow.
+
 ## Recurring reminders
 
 The normal agent creates recurring Telegram reminders with `cron_message`.
@@ -452,10 +463,11 @@ get fresh timers; tool execution is separate. Local event handling does not
 consume the model's idle allowance, but counts toward the total call limit.
 Without streaming, the full response must arrive within three minutes because
 intermediate progress is unavailable.
-Timeouts stop the request without automatic retries and preserve context for an
-explicit continuation. The application can retry other connection failures that
-happen before any output arrives; SDK retries are disabled so attempts cannot
-bypass accounting. `/cancel_<id>` can stop a pending task earlier.
+Timeouts preserve context for explicit continuation. A configured fallback can
+handle a timeout before the first model event. The application can also retry
+connection failures that happen before any output arrives. SDK retries are
+disabled for chat responses so attempts cannot bypass accounting.
+`/cancel_<id>` can stop a pending task earlier.
 
 **Progress updates** is a per-chat `/settings` toggle, enabled by default and
 controlled by chat admins (or the user in a private chat). During conversation
@@ -506,6 +518,21 @@ New SigNoz SQL panels retain the existing time-range and `bucket`, `chat_type`,
 
 Historical events without duration fields are excluded. Progress charts exclude
 calls without intervals; the per-call table displays NULL for their statistics.
+
+`llm_provider_attempt` records each primary or fallback API invocation, from
+chat responses and auxiliary calls through image generation and embeddings.
+Each event records the operation, model, outcome, elapsed time, and whether it
+will switch to fallback. It includes the HTTP status, sanitized error code,
+and token usage when the provider makes them available.
+Credentials, endpoint URLs, and request and response text are excluded. One
+`llm_call` can include several provider attempts. SDK-managed retries within an
+endpoint invocation are included in its elapsed time.
+
+- [Primary and fallback API usage](docs/signoz-provider-attempts.sql) is a time
+  series by API and service. It uses the dashboard's `bucket` and time range.
+- [Provider failures](docs/signoz-provider-failures.sql) is a table grouped by
+  operation, model, API, HTTP status and error code. It shows failure counts,
+  the number that switched to fallback, and p95 latency for failed attempts.
 
 ## Threaded DMs
 
@@ -614,7 +641,9 @@ or newer. Before deploying over an older persistent Qdrant volume, take a
 snapshot and follow Qdrant's sequential minor-version upgrade guidance.
 
 Embeddings use their own `EMBEDDER_BASE_URL`, `EMBEDDER_API_KEY`, and
-`EMBEDDING_MODEL`, independently of the text and image endpoint. To move from
+`EMBEDDING_MODEL`. Set `FALLBACK_EMBEDDER_API_KEY` to retry provider failures with
+a second key, and optionally set `FALLBACK_EMBEDDER_BASE_URL` for a different
+endpoint serving the same embedding model. To move from
 Azure-hosted `text-embedding-3-small` to OpenAI, keep that same model and the
 default 1536 dimensions (the bot does not override `dimensions`). Existing
 vectors are expected to remain compatible; compare embeddings and search results
@@ -777,8 +806,8 @@ off-topic, or inappropriate replies; a `false` verdict means nothing is sent
 and no replacement is generated. A validation failure or invalid response also
 prevents sending and is reported through the automatic-response error log.
 
-The validator uses the existing `LLM_BASE_URL` and `LLM_API_KEY`, so that endpoint
-must support the configured judge model, reasoning effort `high`, and Responses
+The validator uses the shared Azure OpenAI connection settings. Each configured
+endpoint must support the judge deployment, reasoning effort `high`, and Responses
 structured outputs. Configure the judge before enabling automatic trolling; an
 unset judge prevents sending. No alternative model or JSON-mode fallback is used.
 Candidate text costs token credits even if the validator rejects it; the hidden verdict has no separate request charge. The

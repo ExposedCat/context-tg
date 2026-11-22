@@ -383,6 +383,73 @@ test("generate_image routes sizes and falls back for unavailable deployments", a
   }
 });
 
+test("Azure image failover reuses the image and deployment with fallback credentials", async () => {
+  const { APP_ENV } = await import("../env.ts");
+  const database = await initDatabase()();
+  const originalFetch = globalThis.fetch;
+  const previousFallback = {
+    FALLBACK_LLM_BASE_URL: APP_ENV.FALLBACK_LLM_BASE_URL,
+    FALLBACK_LLM_API_KEY: APP_ENV.FALLBACK_LLM_API_KEY,
+  };
+  Object.assign(APP_ENV, {
+    FALLBACK_LLM_BASE_URL: "https://fallback.test/v1",
+    FALLBACK_LLM_API_KEY: "fallback-key",
+  });
+  const api = {
+    sendPhoto: async () => ({ photo: [{ file_id: "edited-image" }] }),
+  } as unknown as Api;
+  const calls: string[] = [];
+  const charges: string[] = [];
+  const inputImage = "https://images.test/source.png";
+  globalThis.fetch = (async (input, init) => {
+    const request = new Request(input, init);
+    if (request.url.startsWith("data:")) return originalFetch(input, init);
+    const key = request.headers.get("authorization");
+    calls.push(`${request.url} ${key}`);
+    if (request.url === inputImage) {
+      return new Response(new Uint8Array([1]), {
+        headers: { "content-type": "image/png" },
+      });
+    }
+    const form = await request.formData();
+    strictEqual(form.get("model"), "test-image");
+    strictEqual(form.get("prompt"), "Edit this");
+    const file = form.get("image[]");
+    ok(file instanceof File);
+    deepStrictEqual(
+      new Uint8Array(await file.arrayBuffer()),
+      new Uint8Array([1]),
+    );
+    return key === "Bearer test"
+      ? new Response("Unavailable", { status: 503 })
+      : Response.json({ data: [{ b64_json: "Aw==" }] });
+  }) as typeof fetch;
+  try {
+    const result = await execute(
+      { prompt: "Edit this", images: [inputImage] },
+      undefined,
+      {
+        database,
+        api,
+        chargeCredits: async (kind) => {
+          charges.push(kind);
+        },
+      },
+    );
+    ok(typeof result === "object" && result.generatedImageId);
+    deepStrictEqual(calls, [
+      `${inputImage} null`,
+      "https://llm.test/v1/images/edits Bearer test",
+      "https://fallback.test/v1/images/edits Bearer fallback-key",
+    ]);
+    deepStrictEqual(charges, ["image_attempt", "image_attempt"]);
+  } finally {
+    globalThis.fetch = originalFetch;
+    Object.assign(APP_ENV, previousFallback);
+    await database.destroy();
+  }
+});
+
 test("image fallback stops before its API call when credits are exhausted", async () => {
   const database = await initDatabase()();
   const previous = LLM_DEPLOYMENTS.image.deploymentName;

@@ -43,6 +43,69 @@ const [
 type MessageMetadata = import("./messages.ts").MessageMetadata;
 type MessageSearchResult = import("./messages.ts").MessageSearchResult;
 
+test("semantic search retries embeddings with the fallback key and the same model", async () => {
+  const { APP_ENV } = await import("./env.ts");
+  const { search } = await import("./messages.ts");
+  const originalFetch = globalThis.fetch;
+  const embedding = Buffer.from(new Float32Array([1, 0]).buffer).toString(
+    "base64",
+  );
+  const previousFallback = {
+    FALLBACK_EMBEDDER_API_KEY: APP_ENV.FALLBACK_EMBEDDER_API_KEY,
+    FALLBACK_EMBEDDER_BASE_URL: APP_ENV.FALLBACK_EMBEDDER_BASE_URL,
+  };
+  try {
+    for (const baseURL of [undefined, "https://fallback-embedder.test/v1"]) {
+      Object.assign(APP_ENV, {
+        FALLBACK_EMBEDDER_API_KEY: "embedder-fallback-key",
+        FALLBACK_EMBEDDER_BASE_URL: baseURL,
+      });
+      const requests: { url: string; key: string | null; body: string }[] = [];
+      const searchVectors: number[][] = [];
+      globalThis.fetch = (async (input, init) => {
+        const url = String(input);
+        if (url.endsWith("/embeddings")) {
+          requests.push({
+            url,
+            key: new Headers(init?.headers).get("authorization"),
+            body: String(init?.body),
+          });
+          if (requests.length === 1) {
+            throw Object.assign(new TypeError("Connection reset"), {
+              code: "ECONNRESET",
+            });
+          }
+          return Response.json({ data: [{ index: 0, embedding }] });
+        }
+        ok(url.startsWith(TEST_ENV.QDRANT_URL));
+        if (url.endsWith("/points/search")) {
+          searchVectors.push(JSON.parse(String(init?.body)).vector);
+          return Response.json({ result: [] });
+        }
+        if (url.endsWith("/points/scroll")) {
+          return Response.json({ result: { points: [] } });
+        }
+        return Response.json({ result: { payload_schema: {} } });
+      }) as typeof fetch;
+
+      await search({ queries: ["test query"] });
+      strictEqual(requests.length, 2);
+      strictEqual(requests[0].url, `${TEST_ENV.EMBEDDER_BASE_URL}/embeddings`);
+      strictEqual(requests[0].key, `Bearer ${TEST_ENV.EMBEDDER_API_KEY}`);
+      strictEqual(JSON.parse(requests[0].body).model, TEST_ENV.EMBEDDING_MODEL);
+      deepStrictEqual(requests[1], {
+        url: `${baseURL ?? TEST_ENV.EMBEDDER_BASE_URL}/embeddings`,
+        key: "Bearer embedder-fallback-key",
+        body: requests[0].body,
+      });
+      deepStrictEqual(searchVectors, [[1, 0]]);
+    }
+  } finally {
+    globalThis.fetch = originalFetch;
+    Object.assign(APP_ENV, previousFallback);
+  }
+});
+
 test("slash commands are indexed and reindexed without triggering automatic responses", async () => {
   const originalFetch = globalThis.fetch;
   const indexed: MessageMetadata[] = [];

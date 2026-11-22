@@ -7,6 +7,7 @@ import { parseDanbooruOptions } from "./danbooru-options.ts";
 import type { Database } from "./database.ts";
 import { APP_ENV } from "./env.ts";
 import { formatImageMarkdown, saveImageFileId } from "./images.ts";
+import { withLlmFallback } from "./llm-provider.ts";
 import { startsWithCommandPrefix } from "./message-filter.ts";
 import { getMessageTopicId, isImplicitTopicReply } from "./telegram.ts";
 
@@ -208,13 +209,6 @@ type IndexedTextMessageHandler = (
 ) => Promise<void>;
 
 let indexedTextMessageHandler: IndexedTextMessageHandler | undefined;
-
-function getEmbedderClient(): OpenAI {
-  return new OpenAI({
-    apiKey: APP_ENV.EMBEDDER_API_KEY,
-    baseURL: APP_ENV.EMBEDDER_BASE_URL,
-  });
-}
 
 function getQdrantUrl(path: string): string {
   return `${APP_ENV.QDRANT_URL.replace(/\/+$/, "")}${path}`;
@@ -438,10 +432,25 @@ async function embed(texts: string[]): Promise<number[][]> {
     return [];
   }
 
-  const response = await getEmbedderClient().embeddings.create({
-    model: APP_ENV.EMBEDDING_MODEL,
-    input,
+  const client = new OpenAI({
+    apiKey: APP_ENV.EMBEDDER_API_KEY,
+    baseURL: APP_ENV.EMBEDDER_BASE_URL,
+    maxRetries: APP_ENV.FALLBACK_EMBEDDER_API_KEY ? 0 : undefined,
   });
+  const request = { model: APP_ENV.EMBEDDING_MODEL, input };
+  const response = await withLlmFallback(
+    (fallback) =>
+      (fallback ? client.withOptions(fallback) : client).embeddings.create(
+        request,
+      ),
+    {
+      service: "embedder",
+      operation: "embedding",
+      model: request.model,
+      getResultTelemetry: (response) =>
+        response.usage && { input_tokens: response.usage.prompt_tokens },
+    },
+  );
   const vectors = response.data.map((item) => item.embedding);
   const firstVector = vectors[0];
 
