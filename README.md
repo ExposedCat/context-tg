@@ -6,6 +6,7 @@ Runs on [Bun](https://bun.sh) (1.4+).
 
 ```sh
 bun install
+bunx playwright-core install --only-shell chromium  # for HTML visuals
 bun run dev        # watch mode; Bun loads .env automatically
 bun run test       # isolated, parallel test files; never loads .env
 bun run typecheck
@@ -744,6 +745,11 @@ Use `<tg-math>` for inline LaTeX and `<tg-math-block>` or a fenced `math` block 
 display LaTeX, including multiline formulas. Delivery escapes dollar signs in
 Markdown prose, including consecutive dollars, and preserves them inside math,
 code, and HTML blocks such as tables, quotes, and media captions.
+
+Standalone `<html>…</html>` blocks in final replies become inline 2× PNG
+visuals. They support static HTML, inline CSS, and inline SVG. Chromium runs
+with JavaScript disabled and blocks external resources. Guest replies upload
+visuals through the media cache described below.
 
 ## Saved images
 

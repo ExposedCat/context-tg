@@ -23,11 +23,11 @@ export type ImageSource = {
   mimeType?: string;
 };
 
-export type RichMessageImageMedia = {
+export type RichMessageImageMedia<Upload = never> = {
   id: string;
   media: {
     type: SavedImageMediaType;
-    media: string;
+    media: string | Upload;
   };
 };
 
@@ -38,7 +38,7 @@ type ImageReference = {
 
 const IMAGE_REFERENCE_PATTERN =
   /tg:\/\/(photo|document)\?id=([A-Za-z0-9_-]{1,64})/g;
-const RICH_MESSAGE_IMAGE_MARKDOWN_PATTERN =
+export const RICH_MESSAGE_IMAGE_MARKDOWN_PATTERN =
   /!\[[^\]\r\n]*\]\(tg:\/\/(?:photo|document)\?id=[A-Za-z0-9_-]{1,64}\)/g;
 const pendingImageRegistrations = new WeakMap<
   Database,
@@ -163,11 +163,11 @@ function getMediaCacheChatId(): number {
 export async function saveImage(
   database: Database,
   api: Api,
-  source: ImageSource,
+  source: ImageSource | InputFile,
 ): Promise<StoredImage> {
   const sentMessage = await api.sendPhoto(
     getMediaCacheChatId(),
-    createImageInput(source),
+    source instanceof InputFile ? source : createImageInput(source),
   );
   const photo = sentMessage.photo.toSorted(
     (left, right) => right.width * right.height - left.width * left.height,
@@ -365,22 +365,21 @@ export function getRichMessageImageIds(markdown: string): string[] {
   return getRichMessageImageReferences(markdown).map(({ id }) => id);
 }
 
-export async function resolveRichMessageImageMedia(
+export async function resolveRichMessageImageMedia<Upload = never>(
   database: Database,
   markdown: string,
-): Promise<RichMessageImageMedia[]> {
+  uploads?: ReadonlyMap<string, Upload>,
+): Promise<RichMessageImageMedia<Upload>[]> {
   const references = getRichMessageImageReferences(markdown);
-  const ids = references.map(({ id }) => id);
+  const ids = references.map(({ id }) => id).filter((id) => !uploads?.has(id));
 
-  if (ids.length === 0) {
-    return [];
-  }
-
-  const images = await database
-    .selectFrom("images")
-    .select(["id", "file_id", "media_type"])
-    .where("id", "in", ids)
-    .execute();
+  const images = ids.length
+    ? await database
+        .selectFrom("images")
+        .select(["id", "file_id", "media_type"])
+        .where("id", "in", ids)
+        .execute()
+    : [];
   const imagesById = new Map(images.map((image) => [image.id, image]));
   const missingIds = ids.filter((id) => !imagesById.has(id));
 
@@ -389,6 +388,14 @@ export async function resolveRichMessageImageMedia(
   }
 
   return references.map((reference) => {
+    const upload = uploads?.get(reference.id);
+    if (upload !== undefined) {
+      return {
+        id: reference.id,
+        media: { type: reference.mediaType, media: upload },
+      };
+    }
+
     const image = imagesById.get(reference.id);
 
     if (!image) {

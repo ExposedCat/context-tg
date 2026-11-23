@@ -15,6 +15,9 @@ WORKDIR /app
 # Dependencies first so source edits reuse the cached install layer.
 COPY package.json bun.lock bunfig.toml ./
 RUN bun install --frozen-lockfile --production
+RUN PLAYWRIGHT_BROWSERS_PATH=/opt/playwright bun node_modules/playwright-core/cli.js install --with-deps --only-shell chromium \
+  && rm -rf /var/lib/apt/lists/*
+ENV PLAYWRIGHT_BROWSERS_PATH=/opt/playwright
 
 COPY . .
 

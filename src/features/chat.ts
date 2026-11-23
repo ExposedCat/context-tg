@@ -1,7 +1,11 @@
 import { createDebug } from "@grammyjs/debug";
 import { Composer, InputFile } from "grammy";
 import type { Context } from "../bot.ts";
-import { normalizeRichMarkdown } from "../utils/markdown.ts";
+import {
+  getRichMarkdownHtmlBlocks,
+  normalizeRichMarkdown,
+  stripRichMarkdownHtmlBlocks,
+} from "../utils/markdown.ts";
 import {
   escapeHtml,
   normalizeHtmlFilename,
@@ -36,13 +40,16 @@ import {
   getGuestInlineMessageId,
   getGuestMessageScope,
 } from "./guest-threads.ts";
+import { insertHtmlVisuals, renderHtmlVisual } from "./html-visuals.ts";
 import {
   downloadTelegramImageDataUrl,
   formatImageMarkdown,
   getImageById,
   getRichMessageImageIds,
+  RICH_MESSAGE_IMAGE_MARKDOWN_PATTERN,
   resolveRichMessageImageMedia,
   type SavedImageMediaType,
+  saveImage,
   saveImageFileId,
   stripRichMessageImages,
 } from "./images.ts";
@@ -1276,6 +1283,11 @@ function getUtf8ByteLength(text: string): number {
   return new TextEncoder().encode(text).length;
 }
 
+const RICH_MESSAGE_CHUNK_TOKEN = new RegExp(
+  `${RICH_MESSAGE_IMAGE_MARKDOWN_PATTERN.source}|.`,
+  "gsu",
+);
+
 function splitRichMarkdownMessage(
   text: string,
   maxBytes = TELEGRAM_RICH_MESSAGE_CHUNK_SIZE_BYTES,
@@ -1284,17 +1296,17 @@ function splitRichMarkdownMessage(
   let chunk = "";
   let chunkBytes = 0;
 
-  for (const character of text) {
-    const characterBytes = getUtf8ByteLength(character);
+  for (const [token] of text.matchAll(RICH_MESSAGE_CHUNK_TOKEN)) {
+    const tokenBytes = getUtf8ByteLength(token);
 
-    if (chunk && chunkBytes + characterBytes > maxBytes) {
+    if (chunk && chunkBytes + tokenBytes > maxBytes) {
       chunks.push(chunk);
       chunk = "";
       chunkBytes = 0;
     }
 
-    chunk += character;
-    chunkBytes += characterBytes;
+    chunk += token;
+    chunkBytes += tokenBytes;
   }
 
   if (chunk) {
@@ -1434,10 +1446,20 @@ function formatMarkdownCitations(
   response: string,
   citations: LlmCitation[],
 ): string {
+  if (citations.length === 0) return response;
+  const visuals = getRichMarkdownHtmlBlocks(response);
   let cursor = 0;
   let formatted = "";
 
   for (const citation of getValidCitations(response, citations)) {
+    if (
+      visuals.some(
+        ({ start, end }) =>
+          citation.start_index < end && citation.end_index > start,
+      )
+    ) {
+      continue;
+    }
     formatted += response.slice(cursor, citation.start_index);
     formatted += `[ℹ️](${escapeMarkdownLinkDestination(citation.link)})`;
     cursor = citation.end_index;
@@ -1573,7 +1595,9 @@ export function splitProgressSegments(
     const footerBytes = getUtf8ByteLength(
       formatProgressSegments([{ tools: segment.tools }]),
     );
-    const content = normalizeRichMarkdown(segment.text ?? "");
+    const content = normalizeRichMarkdown(
+      stripRichMarkdownHtmlBlocks(segment.text ?? ""),
+    );
     return splitRichMarkdownMessage(
       content,
       TELEGRAM_RICH_MESSAGE_CHUNK_SIZE_BYTES - footerBytes - 2,
@@ -1909,12 +1933,25 @@ async function sendRichMarkdownResponse(
   }
 
   const sentMessages: SentRichMarkdownMessage[] = [];
-  const content = normalizeRichMarkdown(
-    richMarkdown.trim() ? richMarkdown : "Done.",
+  const uploads = new Map<string, InputFile>();
+  const markdown = await insertHtmlVisuals(
+    richMarkdown,
+    async (html) => {
+      const id = `visual_${crypto.randomUUID()}`;
+      const png = await renderHtmlVisual(html, signal);
+      uploads.set(id, new InputFile(png, "visual.png"));
+      return formatImageMarkdown(id);
+    },
+    signal,
   );
+  const content = normalizeRichMarkdown(markdown.trim() ? markdown : "Done.");
 
   for (const chunk of splitRichMarkdownMessage(content)) {
-    const media = await resolveRichMessageImageMedia(ctx.database, chunk);
+    const media = await resolveRichMessageImageMedia(
+      ctx.database,
+      chunk,
+      uploads,
+    );
     signal?.throwIfAborted();
     const sentMessage = await ctx.api.sendRichMessage(
       ctx.chat.id,
@@ -1993,11 +2030,25 @@ async function sendGuestLlmResponse(
   llmResponse: LlmResponse,
 ): Promise<GuestResponseDelivery> {
   const formattedResponse = formatLlmResponse(llmResponse);
-  const richMarkdown = formattedResponse.richMarkdown.trim();
+  const richMarkdown = await insertHtmlVisuals(
+    formattedResponse.richMarkdown,
+    async (html) => {
+      if (APP_ENV.MEDIA_CACHE_CHAT_ID === undefined) {
+        throw new Error("MEDIA_CACHE_CHAT_ID is required for guest visuals.");
+      }
+      const png = await renderHtmlVisual(html);
+      const image = await saveImage(
+        ctx.database,
+        ctx.api,
+        new InputFile(png, "visual.png"),
+      );
+      return formatImageMarkdown(image.id);
+    },
+  );
   const result = await buildGuestArticleResult(
     ctx.database,
     message,
-    formattedResponse.richMarkdown,
+    richMarkdown,
   );
 
   try {
@@ -2008,7 +2059,7 @@ async function sendGuestLlmResponse(
         {
           inline_message_id: sentGuestMessage.inline_message_id,
           content_fingerprint: getGuestContentFingerprint(
-            getGuestArticleRichMarkdown(formattedResponse.richMarkdown),
+            getGuestArticleRichMarkdown(richMarkdown),
             "markdown",
           ),
         },
@@ -2295,8 +2346,9 @@ async function sendRecoveredErrorResponse(
     sentMessages = await sendRichMarkdownResponse(
       ctx,
       message,
-      stripRichMessageImages(formattedResponse.richMarkdown) ||
-        "I couldn't send that image.",
+      stripRichMessageImages(
+        stripRichMarkdownHtmlBlocks(formattedResponse.richMarkdown),
+      ) || "I couldn't send that image.",
       undefined,
       signal,
     );
@@ -3294,8 +3346,9 @@ async function handleGuestChatRequest(
         llmResponse = {
           ...llmResponse,
           response:
-            stripRichMessageImages(llmResponse.response ?? "") ||
-            "I couldn't send that image.",
+            stripRichMessageImages(
+              stripRichMarkdownHtmlBlocks(llmResponse.response ?? ""),
+            ) || "I couldn't send that image.",
         };
         delivery = await sendGuestLlmResponse(ctx, message, llmResponse);
       }

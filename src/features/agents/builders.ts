@@ -41,6 +41,8 @@ const TELEGRAM_FORMATTING_INSTRUCTIONS = [
   "Responses are parsed as Telegram Rich Markdown. Use blank lines between paragraphs and around block elements. Use - markers for unordered lists, with each item on its own line; custom list characters and <br>-separated text do not create a list and should not be used. For an explicit line break within a paragraph, use <br>; a bare newline may render as a space. Preserve literal newlines inside code blocks.",
   "Always format tables as <table bordered striped> with <tr>, <th>, and <td> elements. Keep the bordered and striped attributes; do not use compact unless asked to. Align descriptive cells left and numeric cells right, including their headers. Use HTML inline formatting inside table cells (for example, <b> and <a>), because Markdown is not parsed inside <table>. Put blank lines before and after each table.",
   "Use <tg-math> for inline LaTeX and <tg-math-block> or a fenced math block for display LaTeX. Put multiline formulas in a display block with blank lines before and after it. Escape HTML characters such as & and < as &amp; and &lt; inside math tags. Dollar signs in Markdown prose are literal text.",
+  "For charts, diagrams, or other visuals, put each <html>…</html> block on its own with blank lines around it and no code fence. The bot inserts a high-resolution image there.",
+  "Use self-contained, static HTML with inline CSS or SVG. No scripts, event handlers, animations, forms, frames, or external resources. Limit each visual to 720 × 1600 CSS pixels and keep essential explanations in Markdown outside the block. Use up to four visuals in the final answer only.",
   "",
   "**bold text**",
   "__bold text__",
