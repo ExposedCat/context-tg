@@ -1631,35 +1631,6 @@ export function formatLlmToolError(
   return includeDetails ? `${summary}: ${error.details}` : `${summary}.`;
 }
 
-function appendResponseFooterMarkdown(
-  text: string,
-  tools: ToolName[],
-  errors: string[],
-): string {
-  const uniqueErrors = getUniqueNonEmptyLines(errors);
-  const suffix = formatToolUsageMarkdown(tools, uniqueErrors.length > 0);
-  const sections: string[] = [];
-  const trimmedText = text.trimEnd();
-
-  if (trimmedText) {
-    sections.push(trimmedText);
-  }
-
-  for (const error of uniqueErrors) {
-    const blockquote = formatMarkdownBlockquote(error);
-
-    if (blockquote) {
-      sections.push(blockquote);
-    }
-  }
-
-  if (suffix) {
-    sections.push(suffix);
-  }
-
-  return sections.join("\n\n");
-}
-
 function formatDebugValue(value: unknown): string {
   if (typeof value === "string") {
     return value;
@@ -1780,37 +1751,65 @@ function formatDebugMarkdown(debug: LlmDebugInfo): string {
   )}</blockquote>`;
 }
 
+type FormattedLlmResponse = {
+  richMarkdown: string;
+  toolFooter: string;
+};
+
 function formatLlmResponse(
   llmResponse: LlmResponse,
   options: { debug?: boolean; errors?: string[] } = {},
-): {
-  richMarkdown: string;
-} {
+): FormattedLlmResponse {
   const response = llmResponse.response ?? "";
   const richMarkdown = formatMarkdownCitations(
     response,
     llmResponse.web_search.citations,
   );
-  const errors = [
+  const errors = getUniqueNonEmptyLines([
     ...llmResponse.errors.map((error) =>
       formatLlmToolError(error, options.debug === true),
     ),
     ...(options.errors ?? []),
-  ];
-  const responseWithFooter = appendResponseFooterMarkdown(
-    richMarkdown,
-    llmResponse.tools,
-    errors,
-  );
+  ]);
   const debugMarkdown = options.debug
     ? formatDebugMarkdown(llmResponse.debug)
     : "";
 
   return {
-    richMarkdown: [debugMarkdown, responseWithFooter]
+    richMarkdown: [
+      debugMarkdown,
+      richMarkdown.trimEnd(),
+      ...errors.map(formatMarkdownBlockquote),
+    ]
       .filter(Boolean)
       .join("\n\n"),
+    toolFooter: formatToolUsageMarkdown(llmResponse.tools, errors.length > 0),
   };
+}
+
+const HTML_VISUAL_USAGE_EMOJI = "![🎨](tg://emoji?id=5875206779196935950)";
+
+async function prepareRichMarkdownResponse(
+  response: string | FormattedLlmResponse,
+  insertImage: (html: string) => Promise<string>,
+  signal?: AbortSignal,
+): Promise<string> {
+  const { richMarkdown, toolFooter } =
+    typeof response === "string" ? { richMarkdown: response } : response;
+  let hasHtmlVisual = false;
+  const markdown = await insertHtmlVisuals(
+    richMarkdown,
+    async (html) => {
+      const image = await insertImage(html);
+      hasHtmlVisual = true;
+      return image;
+    },
+    signal,
+  );
+  const footer = [toolFooter, hasHtmlVisual ? HTML_VISUAL_USAGE_EMOJI : ""]
+    .filter(Boolean)
+    .join(" ");
+  return [markdown, footer].filter(Boolean).join("\n\n");
 }
 
 function getErrorDetails(error: unknown): string {
@@ -1893,7 +1892,7 @@ async function sendReportResponse(
   ctx: Context,
   message: TextMessage,
   report: LlmReport,
-  formattedResponse: ReturnType<typeof formatLlmResponse>,
+  formattedResponse: FormattedLlmResponse,
   replyMessageId?: number | null,
   signal?: AbortSignal,
 ): Promise<Array<{ message_id: number }>> {
@@ -1912,7 +1911,9 @@ async function sendReportResponse(
     ...(await sendRichMarkdownResponse(
       ctx,
       message,
-      formattedResponse.richMarkdown || "Report attached.",
+      formattedResponse.richMarkdown || formattedResponse.toolFooter
+        ? formattedResponse
+        : "Report attached.",
       replyMessageId,
       signal,
     )),
@@ -1924,7 +1925,7 @@ async function sendReportResponse(
 async function sendRichMarkdownResponse(
   ctx: Context,
   message: TextMessage,
-  richMarkdown: string,
+  response: string | FormattedLlmResponse,
   replyMessageId?: number | null,
   signal?: AbortSignal,
 ): Promise<SentRichMarkdownMessage[]> {
@@ -1934,8 +1935,8 @@ async function sendRichMarkdownResponse(
 
   const sentMessages: SentRichMarkdownMessage[] = [];
   const uploads = new Map<string, InputFile>();
-  const markdown = await insertHtmlVisuals(
-    richMarkdown,
+  const markdown = await prepareRichMarkdownResponse(
+    response,
     async (html) => {
       const id = `visual_${crypto.randomUUID()}`;
       const png = await renderHtmlVisual(html, signal);
@@ -2030,8 +2031,8 @@ async function sendGuestLlmResponse(
   llmResponse: LlmResponse,
 ): Promise<GuestResponseDelivery> {
   const formattedResponse = formatLlmResponse(llmResponse);
-  const richMarkdown = await insertHtmlVisuals(
-    formattedResponse.richMarkdown,
+  const richMarkdown = await prepareRichMarkdownResponse(
+    formattedResponse,
     async (html) => {
       if (APP_ENV.MEDIA_CACHE_CHAT_ID === undefined) {
         throw new Error("MEDIA_CACHE_CHAT_ID is required for guest visuals.");
@@ -2331,7 +2332,7 @@ async function sendRecoveredErrorResponse(
     sentMessages = await sendRichMarkdownResponse(
       ctx,
       message,
-      formattedResponse.richMarkdown,
+      formattedResponse,
       undefined,
       signal,
     );
@@ -2346,9 +2347,14 @@ async function sendRecoveredErrorResponse(
     sentMessages = await sendRichMarkdownResponse(
       ctx,
       message,
-      stripRichMessageImages(
-        stripRichMarkdownHtmlBlocks(formattedResponse.richMarkdown),
-      ) || "I couldn't send that image.",
+      {
+        ...formattedResponse,
+        richMarkdown:
+          stripRichMessageImages(
+            stripRichMarkdownHtmlBlocks(formattedResponse.richMarkdown),
+          ) ||
+          (formattedResponse.toolFooter ? "" : "I couldn't send that image."),
+      },
       undefined,
       signal,
     );
@@ -2871,7 +2877,7 @@ async function handleChatRequest(
         ...(await sendRichMarkdownResponse(
           ctx,
           message,
-          formattedResponse.richMarkdown,
+          formattedResponse,
           responseReplyMessageId,
           taskAbortController.signal,
         )),
