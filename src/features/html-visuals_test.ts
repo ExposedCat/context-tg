@@ -1,6 +1,26 @@
 import { test } from "bun:test";
 import { deepStrictEqual, rejects, strictEqual } from "node:assert";
+import { fetchHtmlVisualAsset } from "./html-visual-assets.ts";
 import { insertHtmlVisuals } from "./html-visuals.ts";
+
+test("visual asset downloads keep local files and services out of the renderer", async () => {
+  const signal = AbortSignal.timeout(2_000);
+  await rejects(
+    fetchHtmlVisualAsset("file:///visual.png", signal),
+    /require an HTTP\(S\) URL/,
+  );
+  for (const host of [
+    "localhost",
+    "127.0.0.1",
+    "[::1]",
+    "[::ffff:127.0.0.1]",
+  ]) {
+    await rejects(
+      fetchHtmlVisualAsset(`http://${host}/visual.png`, signal),
+      /require a public address/,
+    );
+  }
+});
 
 test("HTML visuals are replaced in order while code and Telegram markup stay intact", async () => {
   const first = "<html lang='en'>\n<body>$5</body>\n</html>";

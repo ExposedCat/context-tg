@@ -1,6 +1,7 @@
 import { createDebug } from "@grammyjs/debug";
 import { chromium } from "playwright-core";
 import { getRichMarkdownHtmlBlocks } from "../utils/markdown.ts";
+import { fetchHtmlVisualAsset } from "./html-visual-assets.ts";
 
 const logError = createDebug("app:html-visuals:error");
 const WIDTH = 720;
@@ -8,7 +9,10 @@ const MAX_HEIGHT = 1600;
 const MAX_VISUALS = 4;
 const MAX_HTML_BYTES = 64 * 1024;
 const RENDER_TIMEOUT_MS = 5_000;
-const VISUAL_URL = "https://html-visual.invalid/";
+const ASSET_TIMEOUT_MS = 2_500;
+const MAX_ASSETS = 12;
+const ASSET_TYPES = new Set(["image", "stylesheet", "font"]);
+const VISUAL_URL = "http://html-visual.invalid/";
 
 export async function renderHtmlVisual(
   html: string,
@@ -39,21 +43,50 @@ export async function renderHtmlVisual(
     page.setDefaultTimeout(RENDER_TIMEOUT_MS);
 
     let served = false;
+    let assetsLeft = MAX_ASSETS;
     await context.route("**/*", async (route) => {
-      if (served || route.request().url() !== VISUAL_URL) {
-        await route.abort();
+      const request = route.request();
+      if (
+        !served &&
+        request.isNavigationRequest() &&
+        request.url() === VISUAL_URL
+      ) {
+        served = true;
+        await route.fulfill({
+          contentType: "text/html; charset=utf-8",
+          headers: {
+            "Content-Security-Policy":
+              "sandbox; default-src 'none'; img-src http: https: data:; style-src 'unsafe-inline' http: https:; font-src http: https: data:; base-uri 'none'; form-action 'none'",
+            "X-DNS-Prefetch-Control": "off",
+          },
+          body: `<!doctype html>\n${html}`,
+        });
         return;
       }
-      served = true;
-      await route.fulfill({
-        contentType: "text/html; charset=utf-8",
-        headers: {
-          "Content-Security-Policy":
-            "sandbox; default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'",
-          "X-DNS-Prefetch-Control": "off",
-        },
-        body: `<!doctype html>\n${html}`,
-      });
+
+      if (
+        request.method() === "GET" &&
+        ASSET_TYPES.has(request.resourceType()) &&
+        assetsLeft > 0
+      ) {
+        assetsLeft--;
+        const assetSignal = AbortSignal.any([
+          renderSignal,
+          AbortSignal.timeout(ASSET_TIMEOUT_MS),
+        ]);
+        const asset = await fetchHtmlVisualAsset(
+          request.url(),
+          assetSignal,
+        ).catch(() => undefined);
+        if (asset) {
+          await route.fulfill({
+            ...asset,
+            headers: { "Access-Control-Allow-Origin": "*" },
+          });
+          return;
+        }
+      }
+      await route.abort();
     });
     await page.goto(VISUAL_URL);
 

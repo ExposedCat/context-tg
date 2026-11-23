@@ -747,9 +747,10 @@ Markdown prose, including consecutive dollars, and preserves them inside math,
 code, and HTML blocks such as tables, quotes, and media captions.
 
 Standalone `<html>…</html>` blocks in final replies become inline 2× PNG
-visuals. They support static HTML, inline CSS, and inline SVG. Chromium runs
-with JavaScript disabled and blocks external resources. Guest replies upload
-visuals through the media cache described below.
+visuals. They support static HTML, CSS, SVG, and public HTTP(S) images,
+stylesheets, and fonts. Chromium renders them with JavaScript disabled.
+Regular replies upload visuals directly. Guest replies with new visuals use
+the media cache described below to get a Telegram file ID.
 
 ## Saved images
 
