@@ -496,7 +496,7 @@ test("direct invocations bypass Smart replies while other mentions and forwards 
           ),
         );
         const batchInput = JSON.stringify(requests[1].input);
-        ok(!batchInput.includes("Fact-check the following post(s)."));
+        ok(!batchInput.includes("Fact-check the following post(s);"));
         ok(
           requests[1].input.some(({ content }) =>
             content.includes('<forwarded_from sender="News" sender_id="-900"'),
@@ -683,7 +683,7 @@ test("direct invocations bypass Smart replies while other mentions and forwards 
     );
     ok(
       JSON.stringify(requests[1].input).includes(
-        "Fact-check the following post(s).",
+        "Fact-check the following post(s);",
       ),
     );
     ok(JSON.stringify(requests[1].input).includes(xLink));
@@ -796,7 +796,7 @@ test("routing goals preserve ordinary answers and prepend the exact fact-check r
     router: LLM_DEPLOYMENTS.router.deploymentName,
   };
   const factcheckText =
-    "Fact-check the following post(s). Address posts with factual claims in order and identify each by its number or a short quote. Briefly say which claims are supported, which are misleading or wrong, and which you couldn't verify. If a post asks a genuine standalone question, answer it briefly. If every post is a joke, subjective opinion, a discussion or otherwise has nothing to fact-check or no verifiable factual claims, and there is no genuine standalone question to answer, simply use ignore tool. If a post is more or less fully correct, and there's no strong corrections to be provided, simply use like + ignore tools. When writing a fact-check review when something is wrong, don't elaborate things which are correct -- just list correct things in a very small, concise sentence; for wrong things write a concise, short sentence or two of correction, with hyperlinks on relevant words.";
+    "Fact-check the following post(s); address those with factual claims in order, identifying each by number or short quote. Report only claims that are wrong, exaggerated or misleading in a way that matters to the post's point (including headline figures the sources don't support); say nothing about supported, unverifiable or subjective claims. Answer a genuine standalone question briefly. For a joke, opinion, prediction or discussion with nothing to fact-check, use ignore tool; if the post is essentially correct, use like + ignore tools. For each error write one or two concise sentences of correction with hyperlinks on relevant words, without mentioning what is correct.";
   const sender = {
     id: 1,
     is_bot: false,
