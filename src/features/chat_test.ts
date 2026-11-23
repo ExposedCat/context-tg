@@ -1378,14 +1378,14 @@ test("model failures hide diagnostics and preserve resume commands", () => {
       "/resume_1283340",
     ),
     [
-      "Failed to generate response (400)",
+      "Failed to generate response (Request rejected)",
       "/resume_1283340",
       "![⚠️](tg://emoji?id=5881702736843511327)",
     ].join("\n\n"),
   );
 });
 
-test("initial 401 failures show only the code in normal and guest chats", async () => {
+test("initial 401 failures show a friendly label in normal and guest chats", async () => {
   const { setLlmDeploymentName } = await import("./llm-deployments.ts");
   const database = await initDatabase()();
   const originalFetch = globalThis.fetch;
@@ -1447,7 +1447,11 @@ test("initial 401 failures show only the code in normal and guest chats", async 
       await chatComposer.middleware()(ctx, async () => {});
       strictEqual(calls, 1);
       strictEqual(sent.length, 1);
-      ok(sent[0].includes("Failed to generate response (401)"));
+      ok(
+        sent[0].includes(
+          "Failed to generate response (API authentication failed)",
+        ),
+      );
       ok(!sent[0].includes("Invalid subscription key"));
       ok(!sent[0].includes("/resume"));
     }
@@ -1584,7 +1588,11 @@ test("failed model follow-ups retain activity and suppress resume for 401", asyn
       strictEqual(modelCalls, 13);
       strictEqual(sent.length, 1);
       strictEqual(sent[0].includes("Checking **sources**."), progressEnabled);
-      ok(sent[0].includes(`Failed to generate response (${status})`));
+      const label =
+        status === 401
+          ? "API authentication failed"
+          : "Blocked by content filter";
+      ok(sent[0].includes(`Failed to generate response (${label})`));
       ok(!sent[0].includes("content policy violation"));
       strictEqual(sent[0].includes(`/resume_${messageId}`), status !== 401);
       ok(
@@ -1610,24 +1618,59 @@ test("failed model follow-ups retain activity and suppress resume for 401", asyn
   }
 });
 
-test("authentication failures omit resume and unknown failures hide diagnostics", () => {
-  for (const [error, code, resumable] of [
+test("model failures prefer specific codes and omit raw diagnostics", () => {
+  for (const [error, label, resumable] of [
     [
       Object.assign(new Error("Invalid subscription key"), { status: 401 }),
-      "401",
+      "API authentication failed",
       false,
     ],
     [
       Object.assign(new Error("no healthy upstream"), { status: 503 }),
-      "503",
+      "Provider unavailable",
       true,
     ],
-    [new Error("Internal diagnostics"), "unknown", true],
+    [
+      {
+        status: 429,
+        error: { code: "credit_balance_exhausted", type: "insufficient_quota" },
+      },
+      "API credits exhausted",
+      true,
+    ],
+    [
+      { status: 429, error: { type: "insufficient_quota" } },
+      "API quota exhausted",
+      true,
+    ],
+    [{ status: 429 }, "Temporarily throttled", true],
+    [
+      { status: 429, code: "project_spend_limit_exceeded" },
+      "API spending limit reached",
+      true,
+    ],
+    [{ status: 503, code: "server_is_overloaded" }, "Model overloaded", true],
+    [{ status: 404, code: "DeploymentNotFound" }, "Model unavailable", true],
+    [{ status: 400, code: "context_length_exceeded" }, "Input too long", true],
+    [{ status: 504 }, "Request timed out", true],
+    [
+      new Error("Network details", { cause: { code: "EAI_AGAIN" } }),
+      "DNS lookup failed",
+      true,
+    ],
+    [
+      new Error("Certificate details", {
+        cause: { code: "ERR_TLS_CERT_ALTNAME_INVALID" },
+      }),
+      "Secure connection failed",
+      true,
+    ],
+    [new Error("Internal diagnostics"), "Unexpected error", true],
   ] as const) {
     strictEqual(
       formatModelFailureResponse(error, "/resume_42"),
       [
-        `Failed to generate response (${code})`,
+        `Failed to generate response (${label})`,
         ...(resumable ? ["/resume_42"] : []),
         "![⚠️](tg://emoji?id=5881702736843511327)",
       ].join("\n\n"),

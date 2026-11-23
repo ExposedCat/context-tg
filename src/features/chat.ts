@@ -49,6 +49,7 @@ import {
 import { readLastMessages, readMediaGroupMessages } from "./last-messages.ts";
 import {
   getLlmErrorCode,
+  getLlmErrorLabel,
   type LlmCitation,
   type LlmDebugInfo,
   type LlmImageInput,
@@ -82,6 +83,7 @@ import {
   type PromptMessageAttributes,
   type PromptReplyReference,
 } from "./llm-prompt.ts";
+import { getMainProviderFailure } from "./llm-provider.ts";
 import { MediaGroupCollector } from "./media-group-collector.ts";
 import { startsWithCommandPrefix } from "./message-filter.ts";
 import type { MessageMetadata } from "./messages.ts";
@@ -1796,7 +1798,15 @@ function getErrorDetails(error: unknown): string {
 }
 
 function formatModelFailureMessage(error: unknown): string {
-  return `Failed to generate response (${getLlmErrorCode(error)})`;
+  const label = getLlmErrorLabel(error);
+  const mainError = getMainProviderFailure(error);
+  return mainError
+    ? [
+        "Failed to generate response",
+        `<blockquote>Main: ${getLlmErrorLabel(mainError.error)}</blockquote>`,
+        `<blockquote>Fallback: ${label}</blockquote>`,
+      ].join("\n\n")
+    : `Failed to generate response (${label})`;
 }
 
 export function formatModelFailureResponse(

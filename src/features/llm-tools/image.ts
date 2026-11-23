@@ -6,7 +6,11 @@ import {
   saveImage,
 } from "../images.ts";
 import { LLM_DEPLOYMENTS } from "../llm-deployments.ts";
-import { isLlmProviderStatus, withLlmFallback } from "../llm-provider.ts";
+import {
+  fetchLlmProvider,
+  isLlmProviderStatus,
+  withLlmFallback,
+} from "../llm-provider.ts";
 import type { CreditCharge } from "../usage.ts";
 import type { FunctionToolRunner, LlmToolUsage } from "./types.ts";
 import {
@@ -263,12 +267,15 @@ async function requestImage(
           "Content-Type": "application/json",
         }),
       };
-      const response = await fetch(`${baseURL}/images/${operation}`, {
-        method: "POST",
-        headers,
-        body,
-        signal,
-      }).catch((error) => {
+      const response = await fetchLlmProvider(
+        `${baseURL}/images/${operation}`,
+        {
+          method: "POST",
+          headers,
+          body,
+          signal,
+        },
+      ).catch((error) => {
         if (signal?.aborted) throw error;
         throw new ImageProviderError(error);
       });

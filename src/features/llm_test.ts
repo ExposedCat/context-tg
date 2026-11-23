@@ -5,6 +5,7 @@ import {
   ok,
   strictEqual,
 } from "node:assert";
+import { constants } from "node:crypto";
 import { type LogRecord, logs } from "@opentelemetry/api-logs";
 import { type Api, InputFile } from "grammy";
 import { step } from "../utils/test-step.ts";
@@ -651,11 +652,15 @@ test("Azure fallback retries the same Responses request with a second key and op
     }),
   });
   const previousFallback = {
+    LLM_BASE_URL: APP_ENV.LLM_BASE_URL,
     FALLBACK_LLM_BASE_URL: APP_ENV.FALLBACK_LLM_BASE_URL,
     FALLBACK_LLM_API_KEY: APP_ENV.FALLBACK_LLM_API_KEY,
   };
+  const azureBaseURL = "https://test.openai.azure.com/v1";
+  const azureTls = { secureOptions: constants.SSL_OP_NO_TLSv1_3 };
   setLlmDeploymentName("big", "test-model");
   Object.assign(APP_ENV, {
+    LLM_BASE_URL: azureBaseURL,
     FALLBACK_LLM_API_KEY: "fallback-key",
   });
   try {
@@ -664,12 +669,18 @@ test("Azure fallback retries the same Responses request with a second key and op
       const fallbackBaseURL =
         status === "reset" ? undefined : "https://fallback.test/v1";
       Object.assign(APP_ENV, { FALLBACK_LLM_BASE_URL: fallbackBaseURL });
-      const requests: { url: string; key: string | null; body: string }[] = [];
+      const requests: {
+        url: string;
+        key: string | null;
+        body: string;
+        tls?: BunFetchRequestInit["tls"];
+      }[] = [];
       globalThis.fetch = (async (input, init) => {
         requests.push({
           url: String(input),
           key: new Headers(init?.headers).get("authorization"),
           body: String(init?.body),
+          tls: init && "tls" in init ? init.tls : undefined,
         });
         if (requests.length === 1 && status === "reset") {
           throw Object.assign(new TypeError("Connection reset"), {
@@ -706,16 +717,18 @@ test("Azure fallback retries the same Responses request with a second key and op
       } else {
         strictEqual((await request).response_id, "resp_with_fallback");
       }
-      strictEqual(requests[0].url, `${TEST_ENV.LLM_BASE_URL}/responses`);
+      strictEqual(requests[0].url, `${azureBaseURL}/responses`);
       strictEqual(requests[0].key, `Bearer ${TEST_ENV.LLM_API_KEY}`);
+      deepStrictEqual(requests[0].tls, azureTls);
       if (status === 200 || status === 400) {
         strictEqual(requests.length, 1);
       } else {
         strictEqual(requests.length, 2);
         deepStrictEqual(requests[1], {
-          url: `${fallbackBaseURL ?? TEST_ENV.LLM_BASE_URL}/responses`,
+          url: `${fallbackBaseURL ?? azureBaseURL}/responses`,
           key: "Bearer fallback-key",
           body: requests[0].body,
+          tls: fallbackBaseURL ? undefined : azureTls,
         });
       }
       const primaryFailed = status !== 200;

@@ -1,3 +1,4 @@
+import { constants } from "node:crypto";
 import { createDebug } from "@grammyjs/debug";
 import OpenAI from "openai";
 import { APP_ENV } from "./env.ts";
@@ -18,6 +19,47 @@ type LlmFallbackOptions<T> = {
 };
 
 const logError = createDebug("app:llm:error");
+
+// Preserve the primary failure alongside SDK errors and Responses API results.
+const mainProviderFailures = new WeakMap<object, { error: unknown }>();
+
+export function getMainProviderFailure(value: unknown) {
+  return typeof value === "object" && value !== null
+    ? mainProviderFailures.get(value)
+    : undefined;
+}
+
+export function carryMainProviderFailure<T extends object>(
+  source: unknown,
+  target: T,
+): T {
+  const failure = getMainProviderFailure(source);
+  if (failure) mainProviderFailures.set(target, failure);
+  return target;
+}
+
+export function fetchLlmProvider(
+  input: string | URL | Request,
+  init?: BunFetchRequestInit,
+): Promise<Response> {
+  const url = new URL(input instanceof Request ? input.url : input);
+  if (
+    url.protocol !== "https:" ||
+    !url.hostname.endsWith(".openai.azure.com")
+  ) {
+    return fetch(input, init);
+  }
+
+  // Bun's TLS 1.3 handshake intermittently resets on Azure OpenAI endpoints.
+  return fetch(input, {
+    ...init,
+    tls: {
+      ...init?.tls,
+      secureOptions:
+        (init?.tls?.secureOptions ?? 0) | constants.SSL_OP_NO_TLSv1_3,
+    },
+  });
+}
 
 export function isLlmProviderStatus(status: number): boolean {
   return [401, 403, 404, 408, 429].includes(status) || status >= 500;
@@ -111,7 +153,22 @@ export async function withLlmFallback<T>(
         service,
         operation,
       });
-      return await attempt("fallback", fallback);
+      const mainFailure = { error };
+      try {
+        const result = await attempt("fallback", fallback);
+        if (typeof result === "object" && result !== null) {
+          mainProviderFailures.set(result, mainFailure);
+        }
+        return result;
+      } catch (fallbackError) {
+        if (signal?.aborted) throw fallbackError;
+        const failure =
+          typeof fallbackError === "object" && fallbackError !== null
+            ? fallbackError
+            : new Error(String(fallbackError), { cause: fallbackError });
+        mainProviderFailures.set(failure, mainFailure);
+        throw failure;
+      }
     }
     const result = getResultTelemetry?.(response);
     emitLlmProviderAttempt({

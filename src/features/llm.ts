@@ -39,6 +39,8 @@ import {
 } from "./llm-models.ts";
 import { formatPromptMessageXml } from "./llm-prompt.ts";
 import {
+  carryMainProviderFailure,
+  fetchLlmProvider,
   getLlmProviderResponseTelemetry,
   isLlmProviderError,
   withLlmFallback,
@@ -385,6 +387,7 @@ function getClient(): OpenAI {
   return new OpenAI({
     apiKey: APP_ENV.LLM_API_KEY,
     baseURL: APP_ENV.LLM_BASE_URL,
+    fetch: fetchLlmProvider,
     timeout: MODEL_IDLE_TIMEOUT_MS,
     // The application handles retries and credit checks.
     maxRetries: 0,
@@ -564,6 +567,7 @@ async function createModelResponseAttempt(
           "stream_failed",
           undefined,
           getLlmErrorCode(error),
+          error,
         );
       }
       throw new LlmRequestError(
@@ -1091,6 +1095,8 @@ function formatResponseSummary(response: ApiResponse): Record<string, unknown> {
 }
 
 export class LlmRequestError extends Error {
+  readonly displayLabel: string | undefined;
+
   constructor(
     message: string,
     readonly details: string,
@@ -1103,9 +1109,12 @@ export class LlmRequestError extends Error {
       | "stream_interrupted" = "error",
     readonly lastResponseId?: string,
     readonly code: string = kind === "error" ? "unknown" : kind,
+    previousError?: unknown,
   ) {
     super(message);
     this.name = "LlmRequestError";
+    this.displayLabel = findLlmErrorLabel(previousError);
+    carryMainProviderFailure(previousError, this);
   }
 }
 
@@ -1134,6 +1143,115 @@ export function getLlmErrorCode(error: unknown): string {
     : connectionError
       ? "connection_error"
       : "unknown";
+}
+
+const llmErrorLabels = new Map<string, string>([
+  ["credit_balance_exhausted", "API credits exhausted"],
+  ["organization_spend_limit_exceeded", "API spending limit reached"],
+  ["project_spend_limit_exceeded", "API spending limit reached"],
+  ["insufficient_quota", "API quota exhausted"],
+  ["organization_usage_limit_exceeded", "API quota exhausted"],
+  ["rate_limit_exceeded", "Temporarily throttled"],
+  ["rate_limit_error", "Temporarily throttled"],
+  ["slow_down", "Temporarily throttled"],
+  ["server_is_overloaded", "Model overloaded"],
+  ["server_error", "Provider error"],
+  ["invalid_api_key", "API authentication failed"],
+  ["deploymentnotfound", "Model unavailable"],
+  ["model_not_found", "Model unavailable"],
+  ["content_filter", "Blocked by content filter"],
+  ["content_policy_violation", "Blocked by content filter"],
+  ["responsibleaipolicyviolation", "Blocked by content filter"],
+  ["context_length_exceeded", "Input too long"],
+  ["max_output_tokens", "Response too long"],
+  ["token_limit", "Response too long"],
+  ["econnreset", "Connection reset"],
+  ["epipe", "Connection reset"],
+  ["econnrefused", "Connection refused"],
+  ["enotfound", "DNS lookup failed"],
+  ["eai_again", "DNS lookup failed"],
+  ["etimedout", "Request timed out"],
+  ["timeout", "Request timed out"],
+  ["stream_interrupted", "Response interrupted"],
+]);
+
+const llmHttpErrorLabels = new Map<number, string>([
+  [400, "Request rejected"],
+  [401, "API authentication failed"],
+  [403, "API access denied"],
+  [404, "Endpoint or model not found"],
+  [408, "Request timed out"],
+  [422, "Request rejected"],
+  [429, "Temporarily throttled"],
+  [502, "Provider unavailable"],
+  [503, "Provider unavailable"],
+  [504, "Request timed out"],
+]);
+
+const tlsErrorCode =
+  /^(?:err_tls_|err_ssl_|cert_|unable_to_verify_leaf_signature$|unable_to_get_issuer_cert(?:_locally)?$|depth_zero_self_signed_cert$|self_signed_cert_in_chain$)/;
+
+function findLlmErrorLabel(error: unknown): string | undefined {
+  const seen = new Set<object>();
+  let httpStatus: number | undefined;
+  let typeLabel: string | undefined;
+  let connectionFailed = false;
+
+  for (let detail = getErrorObject(error); detail && !seen.has(detail); ) {
+    seen.add(detail);
+    if (error instanceof LlmRequestError && error.displayLabel) {
+      return error.displayLabel;
+    }
+    if (error instanceof OpenAI.APIConnectionTimeoutError) {
+      return "Request timed out";
+    }
+
+    const apiError = getErrorObject(detail.error);
+    const innerError = getErrorObject(
+      apiError?.innererror ?? detail.innererror,
+    );
+    for (const code of [
+      innerError?.code,
+      apiError?.code,
+      detail.code,
+      detail.kind,
+    ]) {
+      if (typeof code !== "string") continue;
+      const normalized = code.toLowerCase();
+      const label = llmErrorLabels.get(normalized);
+      if (label) return label;
+      if (tlsErrorCode.test(normalized)) return "Secure connection failed";
+    }
+    const type = apiError?.type ?? detail.type;
+    if (typeof type === "string") {
+      typeLabel ??= llmErrorLabels.get(type.toLowerCase());
+    }
+
+    const status = detail.status ?? detail.code;
+    if (
+      typeof status === "number" ||
+      (typeof status === "string" && /^[45]\d\d$/.test(status))
+    ) {
+      httpStatus ??= Number(status);
+    }
+    connectionFailed ||=
+      error instanceof OpenAI.APIConnectionError ||
+      detail.code === "connection_error";
+    error = detail.cause;
+    detail = getErrorObject(error);
+  }
+
+  if (typeLabel) return typeLabel;
+  if (httpStatus !== undefined) {
+    const label = llmHttpErrorLabels.get(httpStatus);
+    if (label) return label;
+    if (httpStatus >= 500 && httpStatus <= 599) return "Provider error";
+  }
+  return connectionFailed ? "Connection failed" : undefined;
+}
+
+export function getLlmErrorLabel(error: unknown): string {
+  return findLlmErrorLabel(error) ?? "Unexpected error";
 }
 
 function isRateLimitError(error: unknown): boolean {
@@ -1263,6 +1381,7 @@ function getResponseError(response: ApiResponse): LlmRequestError | undefined {
       isContentFilterError(response.error) ? "content_filter" : "error",
       undefined,
       getLlmErrorCode(response.error),
+      response.error,
     );
   }
 
@@ -1984,7 +2103,7 @@ async function createLlmResponseWithRetries(
             options,
           );
         }
-        throw responseError;
+        throw carryMainProviderFailure(response, responseError);
       }
 
       const functionCalls = getFunctionToolCalls(response);
@@ -2072,6 +2191,7 @@ async function createLlmResponseWithRetries(
           error.kind,
           checkpoint,
           error.code,
+          error,
         );
       }
       if (error instanceof LlmRequestError && error.kind === "token_limit") {
@@ -2081,6 +2201,7 @@ async function createLlmResponseWithRetries(
           "token_limit",
           state.lastResponseId,
           error.code,
+          error,
         );
       }
       if (creditWrapUp) {
@@ -2092,6 +2213,7 @@ async function createLlmResponseWithRetries(
               "error",
               state.lastResponseId,
               getLlmErrorCode(error),
+              error,
             );
       }
       lastError = error;
@@ -2191,6 +2313,7 @@ async function createLlmResponseWithRetries(
           "error",
           checkpointResponseId,
           getLlmErrorCode(error),
+          error,
         );
       }
 
@@ -2233,6 +2356,7 @@ async function createLlmResponseWithRetries(
     "error",
     checkpointResponseId,
     getLlmErrorCode(lastError),
+    lastError,
   );
 }
 

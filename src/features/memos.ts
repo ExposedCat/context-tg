@@ -13,6 +13,7 @@ import type { Database } from "./database.ts";
 import { APP_ENV } from "./env.ts";
 import { LLM_DEPLOYMENTS } from "./llm-deployments.ts";
 import {
+  fetchLlmProvider,
   getLlmProviderResponseTelemetry,
   withLlmFallback,
 } from "./llm-provider.ts";
@@ -204,6 +205,7 @@ function getMemoPruningClient(): OpenAI {
   return new OpenAI({
     apiKey: APP_ENV.LLM_API_KEY,
     baseURL: APP_ENV.LLM_BASE_URL,
+    fetch: fetchLlmProvider,
   });
 }
 

@@ -1095,6 +1095,78 @@ test("a streamed provider error preserves its diagnosis and resumes without repl
   }
 });
 
+test("failed fallback streams quote the original Azure failure and the fallback error separately", async () => {
+  const { APP_ENV } = await import("./env.ts");
+  const { formatModelFailureResponse } = await import("./chat.ts");
+  const originalFetch = globalThis.fetch;
+  const previousFallback = {
+    FALLBACK_LLM_BASE_URL: APP_ENV.FALLBACK_LLM_BASE_URL,
+    FALLBACK_LLM_API_KEY: APP_ENV.FALLBACK_LLM_API_KEY,
+  };
+  const fallbackBaseURL = "https://fallback.test/v1";
+  Object.assign(APP_ENV, {
+    FALLBACK_LLM_BASE_URL: fallbackBaseURL,
+    FALLBACK_LLM_API_KEY: "test-fallback-key",
+  });
+  setLlmDeploymentName("big", "stream-test");
+  try {
+    const providerError = {
+      code: "credit_balance_exhausted",
+      type: "insufficient_quota",
+      message: "Private billing details",
+    };
+    for (const event of [
+      { error: providerError },
+      {
+        type: "response.failed",
+        response: {
+          ...response("resp_fallback_failed", []),
+          status: "failed",
+          error: providerError,
+        },
+      },
+    ]) {
+      const calls: string[] = [];
+      globalThis.fetch = (async (input) => {
+        const url = String(input);
+        calls.push(url);
+        if (url === `${APP_ENV.LLM_BASE_URL}/responses`) {
+          throw Object.assign(new TypeError("Private network details"), {
+            code: "ECONNRESET",
+          });
+        }
+        return sse([created, event]);
+      }) as typeof fetch;
+
+      await rejects(
+        requestLlm("Work", [], undefined, {}, "Be brief."),
+        (error) => {
+          ok(error instanceof LlmRequestError);
+          ok(error.lastResponseId);
+          strictEqual(
+            formatModelFailureResponse(error, "/resume_557401"),
+            [
+              "Failed to generate response",
+              "<blockquote>Main: Connection reset</blockquote>",
+              "<blockquote>Fallback: API credits exhausted</blockquote>",
+              "/resume_557401",
+              "![⚠️](tg://emoji?id=5881702736843511327)",
+            ].join("\n\n"),
+          );
+          return true;
+        },
+      );
+      deepStrictEqual(calls, [
+        `${APP_ENV.LLM_BASE_URL}/responses`,
+        `${fallbackBaseURL}/responses`,
+      ]);
+    }
+  } finally {
+    globalThis.fetch = originalFetch;
+    Object.assign(APP_ENV, previousFallback);
+  }
+});
+
 test("a streamed provider output limit preserves partial text without retrying", async () => {
   setLlmDeploymentName("big", "stream-test");
   const originalFetch = globalThis.fetch;

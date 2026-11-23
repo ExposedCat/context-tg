@@ -29,6 +29,10 @@ a retry with the fallback credentials and the same model and request settings.
 Responses API calls can also switch on a timeout before streaming starts. A
 stream that has received events uses the existing interruption and resume flow.
 
+Model, image, and embedding requests to `*.openai.azure.com` use TLS 1.2 to
+avoid intermittent resets during Bun's TLS 1.3 handshake. Bun verifies the
+server certificate on these connections.
+
 ## Recurring reminders
 
 The normal agent creates recurring Telegram reminders with `cron_message`.

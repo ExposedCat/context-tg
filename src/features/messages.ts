@@ -7,7 +7,7 @@ import { parseDanbooruOptions } from "./danbooru-options.ts";
 import type { Database } from "./database.ts";
 import { APP_ENV } from "./env.ts";
 import { formatImageMarkdown, saveImageFileId } from "./images.ts";
-import { withLlmFallback } from "./llm-provider.ts";
+import { fetchLlmProvider, withLlmFallback } from "./llm-provider.ts";
 import { startsWithCommandPrefix } from "./message-filter.ts";
 import { getMessageTopicId, isImplicitTopicReply } from "./telegram.ts";
 
@@ -435,6 +435,7 @@ async function embed(texts: string[]): Promise<number[][]> {
   const client = new OpenAI({
     apiKey: APP_ENV.EMBEDDER_API_KEY,
     baseURL: APP_ENV.EMBEDDER_BASE_URL,
+    fetch: fetchLlmProvider,
     maxRetries: APP_ENV.FALLBACK_EMBEDDER_API_KEY ? 0 : undefined,
   });
   const request = { model: APP_ENV.EMBEDDING_MODEL, input };
