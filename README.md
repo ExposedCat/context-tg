@@ -747,8 +747,13 @@ Markdown prose, including consecutive dollars, and preserves them inside math,
 code, and HTML blocks such as tables, quotes, and media captions.
 
 Standalone `<html>…</html>` blocks in final replies become inline 2× PNG
-visuals. They support static HTML, CSS, SVG, and public HTTP(S) images,
-stylesheets, and fonts. Chromium renders them with JavaScript disabled.
+visuals. Chromium renders them with JavaScript disabled. Every visual gets the
+dark component kit in `src/features/html-visual-kit.css`, which provides the
+page frame, colors, and `.v-*` component classes. The kit uses bundled Source
+Serif 4, Inter, and JetBrains Mono fonts from Fontsource. The prompt tells the
+model to style visuals only with kit classes and kit CSS variables. The
+renderer still accepts static HTML, SVG, and public HTTP(S) images,
+stylesheets, and fonts.
 Regular replies upload visuals directly. Guest replies with new visuals use
 the media cache described below to get a Telegram file ID.
 

@@ -1,6 +1,10 @@
 import { test } from "bun:test";
-import { deepStrictEqual, rejects, strictEqual } from "node:assert";
+import { deepStrictEqual, ok, rejects, strictEqual } from "node:assert";
 import { fetchHtmlVisualAsset } from "./html-visual-assets.ts";
+import {
+  getHtmlVisualKit,
+  HTML_VISUAL_KIT_FONT_PATH,
+} from "./html-visual-kit.ts";
 import { insertHtmlVisuals } from "./html-visuals.ts";
 
 test("visual asset downloads keep local files and services out of the renderer", async () => {
@@ -83,4 +87,22 @@ test("cancelling an HTML render aborts reply preparation", async () => {
     ),
     { name: "AbortError" },
   );
+});
+
+test("the visual kit serves only its bundled fonts", async () => {
+  const kit = await getHtmlVisualKit();
+  const urls = [
+    ...kit.css.matchAll(/url\((\/__visual-kit\/fonts\/[^)]+)\)/g),
+  ].map(([, url]) => url);
+
+  ok(kit.css.includes(".v-bars"));
+  ok(!kit.css.includes("font-display: swap"));
+  ok(urls.length > 0);
+  for (const url of urls) {
+    const name = url.slice(HTML_VISUAL_KIT_FONT_PATH.length);
+    const path = kit.fonts.get(name) ?? "";
+    ok(path.endsWith(`/files/${name}`), url);
+    ok(await Bun.file(path).exists(), path);
+  }
+  strictEqual(kit.fonts.size, new Set(urls).size);
 });

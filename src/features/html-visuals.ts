@@ -2,6 +2,10 @@ import { createDebug } from "@grammyjs/debug";
 import { chromium } from "playwright-core";
 import { getRichMarkdownHtmlBlocks } from "../utils/markdown.ts";
 import { fetchHtmlVisualAsset } from "./html-visual-assets.ts";
+import {
+  getHtmlVisualKit,
+  HTML_VISUAL_KIT_FONT_PATH,
+} from "./html-visual-kit.ts";
 
 const logError = createDebug("app:html-visuals:error");
 const WIDTH = 720;
@@ -13,11 +17,14 @@ const ASSET_TIMEOUT_MS = 2_500;
 const MAX_ASSETS = 12;
 const ASSET_TYPES = new Set(["image", "stylesheet", "font"]);
 const VISUAL_URL = "http://html-visual.invalid/";
+const VISUAL_ORIGIN = new URL(VISUAL_URL).origin;
 
 export async function renderHtmlVisual(
   html: string,
   signal?: AbortSignal,
 ): Promise<Buffer> {
+  signal?.throwIfAborted();
+  const kit = await getHtmlVisualKit();
   signal?.throwIfAborted();
   const browser = await chromium.launch({
     timeout: RENDER_TIMEOUT_MS,
@@ -59,8 +66,29 @@ export async function renderHtmlVisual(
               "sandbox; default-src 'none'; img-src http: https: data:; style-src 'unsafe-inline' http: https:; font-src http: https: data:; base-uri 'none'; form-action 'none'",
             "X-DNS-Prefetch-Control": "off",
           },
-          body: `<!doctype html>\n${html}`,
+          body: `<!doctype html>\n<style>${kit.css}</style>\n${html}`,
         });
+        return;
+      }
+
+      const url = new URL(request.url());
+      if (url.origin === VISUAL_ORIGIN) {
+        const font =
+          request.method() === "GET" &&
+          url.pathname.startsWith(HTML_VISUAL_KIT_FONT_PATH)
+            ? kit.fonts.get(
+                url.pathname.slice(HTML_VISUAL_KIT_FONT_PATH.length),
+              )
+            : undefined;
+        if (font) {
+          await route.fulfill({
+            path: font,
+            contentType: "font/woff2",
+            headers: { "Access-Control-Allow-Origin": "*" },
+          });
+        } else {
+          await route.abort();
+        }
         return;
       }
 
@@ -89,6 +117,9 @@ export async function renderHtmlVisual(
       await route.abort();
     });
     await page.goto(VISUAL_URL);
+    await page.evaluate(async () => {
+      await document.fonts.ready;
+    });
 
     const { width, height } = await page.evaluate(() => ({
       width: document.documentElement.scrollWidth,

@@ -1,0 +1,496 @@
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Visual kit · paper dark</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Source+Serif+4:ital,opsz,wght@0,8..60,300;0,8..60,400;0,8..60,500;1,8..60,300;1,8..60,400&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+
+<!-- ════════════════════════════════════════════════════════════════════
+     PROPOSED KIT STYLESHEET  (would be injected by the renderer, so the
+     model only writes markup with .v-* classes)
+     ════════════════════════════════════════════════════════════════════ -->
+<style id="v-kit">
+  .v {
+    /* paper */
+    --bg:        #1c2027;   /* page */
+    --paper:     #262624;   /* card / chart surface */
+    --paper-2:   #2d2c29;   /* raised, tracks, empty cells */
+    /* ink */
+    --ink:       #f0eee6;
+    --ink-2:     #bfbcb0;
+    --ink-3:     #8a877d;
+    /* hairlines */
+    --rule:      rgb(240 238 230 / .09);
+    --rule-2:    rgb(240 238 230 / .18);
+    /* brand accent (UI only: rules, markers, emphasis) */
+    --accent:    #d97757;
+    --accent-bg: rgb(217 119 87 / .12);
+    /* data series, fixed order — validated on #262624 (dark band, CVD ΔE ≥ 10) */
+    --s1: #d4714f;  /* clay   */
+    --s2: #4a8ad8;  /* sky    */
+    --s3: #b8891a;  /* ochre  */
+    --s4: #3fa37f;  /* sage   */
+    --s5: #a274d9;  /* heather*/
+    /* status (glyph + label, never color alone) */
+    --up:   #7fb38f;
+    --down: #e08a76;
+    --warn: #d6a64a;
+
+    --serif: "Source Serif 4", "Tiempos Text", Georgia, serif;
+    --sans:  Inter, "Styrene B", system-ui, sans-serif;
+    --mono:  "JetBrains Mono", ui-monospace, monospace;
+
+    box-sizing: border-box;
+    width: 100%;
+    max-width: 720px;
+    padding: 36px 40px 32px;
+    background:
+      url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 1 0 0 0 0 .97 0 0 0 0 .9 0 0 0 .05 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E"),
+      var(--bg);
+    color: var(--ink-2);
+    font: 400 14px/1.55 var(--sans);
+    font-feature-settings: "tnum" 1, "lnum" 1;
+    -webkit-font-smoothing: antialiased;
+  }
+  .v *, .v *::before, .v *::after { box-sizing: border-box; }
+  .v :is(h1,h2,h3,p,figure,blockquote,dl,dd,ol,ul,table) { margin: 0; padding: 0; }
+  .v :is(ol,ul) { list-style: none; }
+  .v b, .v strong { color: var(--ink); font-weight: 500; }
+
+  /* ── Type ─────────────────────────────────────────────────────────── */
+  .v-eyebrow { font: 500 10.5px/1 var(--sans); letter-spacing: .16em; text-transform: uppercase; color: var(--ink-3); }
+  .v-title   { font: 300 34px/1.12 var(--serif); letter-spacing: -.015em; color: var(--ink); }
+  .v-h       { font: 400 19px/1.25 var(--serif); color: var(--ink); }
+  .v-lede    { font: 300 italic 16px/1.45 var(--serif); color: var(--ink-2); max-width: 52ch; }
+  .v-small   { font-size: 12px; color: var(--ink-3); }
+  .v-mono    { font: 400 12px/1.4 var(--mono); color: var(--ink-2); }
+  .v-num     { font-family: var(--serif); font-weight: 300; color: var(--ink); }
+  .v-accent  { color: var(--accent); }
+
+  /* ── Frame ────────────────────────────────────────────────────────── */
+  .v-head    { display: grid; gap: 10px; padding-bottom: 22px; margin-bottom: 24px; border-bottom: 1px solid var(--rule); }
+  .v-foot    { display: flex; justify-content: space-between; gap: 16px; margin-top: 24px; padding-top: 12px; border-top: 1px solid var(--rule); font-size: 11.5px; color: var(--ink-3); }
+  .v-card    { padding: 18px 20px; background: var(--paper); border: 1px solid var(--rule); border-radius: 10px; }
+  .v-card > .v-eyebrow:first-child { display: block; margin-bottom: 14px; }
+  .v-stack   { display: grid; gap: var(--gap, 16px); }
+  .v-grid    { display: grid; gap: var(--gap, 16px); grid-template-columns: repeat(var(--cols, 2), minmax(0, 1fr)); }
+  .v-rule    { height: 1px; border: 0; margin: 4px 0; background: var(--rule); }
+  .v-rule.is-accent { width: 28px; height: 1.5px; background: var(--accent); }
+
+  /* ── Stat row ─────────────────────────────────────────────────────── */
+  .v-stats   { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); }
+  .v-stat    { display: grid; gap: 6px; padding: 2px 20px; border-left: 1px solid var(--rule); }
+  .v-stat:first-child { padding-left: 0; border-left: 0; }
+  .v-stat dt { font: 500 10.5px/1 var(--sans); letter-spacing: .14em; text-transform: uppercase; color: var(--ink-3); }
+  .v-stat dd { font: 300 38px/1 var(--serif); letter-spacing: -.02em; color: var(--ink); }
+  .v-stat dd small { font-size: 16px; color: var(--ink-3); margin-left: 2px; }
+  .v-stat.is-accent dd { color: var(--accent); }
+  .v-delta   { font: 500 12px/1 var(--sans); color: var(--ink-2); }
+  .v-delta::before { margin-right: 4px; }
+  .v-delta.is-up::before   { content: "▲"; color: var(--up);   font-size: 8px; vertical-align: 1px; }
+  .v-delta.is-down::before { content: "▼"; color: var(--down); font-size: 8px; vertical-align: 1px; }
+  .v-delta.is-flat::before { content: "—"; color: var(--ink-3); }
+
+  /* ── Horizontal bars ──────────────────────────────────────────────── */
+  .v-bars    { display: grid; gap: 9px; }
+  .v-bars > div { display: grid; grid-template-columns: var(--label, 110px) minmax(0, 1fr) 52px; align-items: center; gap: 14px; }
+  .v-bars dt { color: var(--ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .v-bars dd { display: contents; }
+  .v-bar     { height: 8px; border-left: 1px solid var(--rule-2); }
+  .v-bar i   { display: block; width: var(--v); height: 100%; border-radius: 0 3px 3px 0; background: var(--c, var(--ink-3)); }
+  .v-bars .is-accent { --c: var(--accent); }
+  .v-bars .is-accent dt, .v-bars .is-accent .v-val { color: var(--ink); }
+  .v-val     { text-align: right; font: 400 13px/1 var(--mono); color: var(--ink-3); }
+
+  /* ── Column chart ─────────────────────────────────────────────────── */
+  .v-cols    { --h: 150px; display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0,1fr); gap: 10px; align-items: end;
+               height: calc(var(--h) + 22px); padding-bottom: 22px; position: relative;
+               background: linear-gradient(var(--rule-2), var(--rule-2)) 0 var(--h) / 100% 1px no-repeat,
+                           repeating-linear-gradient(to top, transparent 0 calc(var(--h) / 4 - 1px), var(--rule) calc(var(--h) / 4 - 1px) calc(var(--h) / 4)) 0 0 / 100% var(--h) no-repeat; }
+  .v-cols > div { position: relative; height: calc(var(--v) * var(--h) / 100%); min-height: 1px;
+                  border-radius: 3px 3px 0 0; background: var(--c, var(--ink-3)); opacity: var(--o, .55); }
+  .v-cols > .is-accent { --c: var(--accent); --o: 1; }
+  .v-cols > div::after { content: attr(data-x); position: absolute; top: 100%; left: 50%; translate: -50% 7px;
+                         font: 400 11px/1 var(--mono); color: var(--ink-3); white-space: nowrap; }
+  .v-cols > div[data-y]::before { content: attr(data-y); position: absolute; bottom: 100%; left: 50%; translate: -50% -6px;
+                                  font: 400 13px/1 var(--serif); color: var(--ink); white-space: nowrap; }
+
+  /* ── Composition (100 % split) ────────────────────────────────────── */
+  .v-split   { display: flex; gap: 2px; height: 14px; }
+  .v-split > i { flex: 0 0 var(--v); background: var(--c); }
+  .v-split > i:first-child { border-radius: 3px 0 0 3px; }
+  .v-split > i:last-child  { border-radius: 0 3px 3px 0; flex: 1 1 auto; }
+
+  /* ── Legend / series colors ───────────────────────────────────────── */
+  .v-legend  { display: flex; flex-wrap: wrap; gap: 6px 18px; margin-top: 12px; font-size: 12.5px; color: var(--ink-2); }
+  .v-legend > span::before { content: ""; display: inline-block; width: 8px; height: 8px; margin-right: 7px; border-radius: 2px; background: var(--c); }
+  .v-legend b { margin-left: 4px; font: 400 12px var(--mono); color: var(--ink-3); }
+  .c1 { --c: var(--s1); } .c2 { --c: var(--s2); } .c3 { --c: var(--s3); } .c4 { --c: var(--s4); } .c5 { --c: var(--s5); }
+  .c0 { --c: var(--ink-3); } .ca { --c: var(--accent); }
+
+  /* ── Meter / range ────────────────────────────────────────────────── */
+  .v-meter   { display: grid; gap: 8px; }
+  .v-meter > div:first-child { display: flex; justify-content: space-between; align-items: baseline; }
+  .v-meter > div:first-child b { font: 300 22px/1 var(--serif); }
+  .v-meter .v-track { height: 4px; border-radius: 2px; background: var(--paper-2); }
+  .v-meter .v-track i { display: block; width: var(--v); height: 100%; border-radius: inherit; background: var(--c, var(--accent)); }
+
+  .v-range   { position: relative; height: 34px; margin: 0 6px; }
+  .v-range::before { content: ""; position: absolute; inset: 9px 0 auto; height: 1px; background: var(--rule-2); }
+  .v-range > .band { position: absolute; top: 6px; height: 7px; left: var(--lo); right: calc(100% - var(--hi)); border-radius: 2px; background: var(--accent-bg); border: 1px solid rgb(217 119 87 / .45); }
+  .v-range > .mark { position: absolute; top: 2px; left: var(--at); width: 1.5px; height: 15px; translate: -50% 0; background: var(--ink); }
+  .v-range > span  { position: absolute; top: 22px; translate: -50% 0; font: 400 11px/1 var(--mono); color: var(--ink-3); white-space: nowrap; }
+
+  /* ── Heat grid ────────────────────────────────────────────────────── */
+  .v-heat    { display: grid; grid-template-columns: repeat(var(--cols, 7), 1fr); gap: 3px; }
+  .v-heat > i { aspect-ratio: 1; border-radius: 3px;
+                background: color-mix(in oklab, var(--c, var(--s1)) calc(var(--v, 0) * 100%), var(--paper-2)); }
+  .v-scale   { display: flex; align-items: center; gap: 8px; margin-top: 10px; font: 400 11px var(--mono); color: var(--ink-3); }
+  .v-scale::after { content: ""; order: 1; width: 80px; height: 6px; border-radius: 2px;
+                    background: linear-gradient(90deg, var(--paper-2), var(--c, var(--s1))); }
+  .v-scale > :last-child { order: 2; }
+
+  /* ── Line chart (SVG) ─────────────────────────────────────────────── */
+  .v-chart   { display: block; width: 100%; overflow: visible; }
+  .v-chart .grid  { stroke: var(--rule); stroke-width: 1; }
+  .v-chart .base  { stroke: var(--rule-2); stroke-width: 1; }
+  .v-chart .tick  { fill: var(--ink-3); font: 400 10.5px var(--mono); }
+  .v-chart .line  { fill: none; stroke: var(--c); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+  .v-chart .area  { fill: var(--c); opacity: .10; }
+  .v-chart .dot   { fill: var(--c); stroke: var(--paper); stroke-width: 2; }
+  .v-chart .lbl   { fill: var(--ink-2); font: 400 12px var(--sans); }
+  .v-chart .note  { fill: var(--ink); font: 400 13px var(--serif); }
+  .v-chart .guide { stroke: var(--ink-3); stroke-dasharray: 2 3; }
+
+  /* ── Table ────────────────────────────────────────────────────────── */
+  .v-table   { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+  .v-table th { padding: 0 10px 9px; text-align: left; font: 500 10.5px/1 var(--sans); letter-spacing: .14em; text-transform: uppercase; color: var(--ink-3); border-bottom: 1px solid var(--rule-2); }
+  .v-table td { padding: 9px 10px; border-bottom: 1px solid var(--rule); color: var(--ink-2); }
+  .v-table :is(th, td):first-child { padding-left: 0; }
+  .v-table :is(th, td):last-child  { padding-right: 0; }
+  .v-table tr:last-child td { border-bottom: 0; }
+  .v-table .num { text-align: right; font-family: var(--mono); font-size: 12.5px; }
+  .v-table tr.is-accent td { color: var(--ink); }
+  .v-table tr.is-accent td:first-child { box-shadow: inset 2px 0 var(--accent); padding-left: 10px; }
+
+  /* ── Key/value facts ──────────────────────────────────────────────── */
+  .v-facts > div { display: flex; justify-content: space-between; gap: 16px; padding: 8px 0; border-bottom: 1px dotted var(--rule-2); }
+  .v-facts > div:last-child { border-bottom: 0; }
+  .v-facts dt { color: var(--ink-3); }
+  .v-facts dd { color: var(--ink); text-align: right; }
+
+  /* ── Ranked list ──────────────────────────────────────────────────── */
+  .v-rank    { counter-reset: r; display: grid; }
+  .v-rank li { counter-increment: r; display: grid; grid-template-columns: 34px 1fr auto; align-items: baseline; gap: 10px; padding: 9px 0; border-bottom: 1px solid var(--rule); }
+  .v-rank li:last-child { border-bottom: 0; }
+  .v-rank li::before { content: counter(r, decimal-leading-zero); font: 300 italic 18px/1 var(--serif); color: var(--ink-3); }
+  .v-rank li:first-child::before { color: var(--accent); }
+  .v-rank li > span:last-child { font: 400 12.5px var(--mono); color: var(--ink-3); }
+
+  /* ── Process flow ─────────────────────────────────────────────────── */
+  .v-flow    { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: 22px; }
+  .v-flow > li { position: relative; padding: 12px 14px; border: 1px solid var(--rule-2); border-radius: 8px; background: var(--paper); }
+  .v-flow > li + li::before { content: ""; position: absolute; right: 100%; top: 50%; width: 22px; height: 1px; background: var(--rule-2); }
+  .v-flow > li + li::after  { content: ""; position: absolute; right: 100%; top: 50%; width: 5px; height: 5px; translate: 0 -2px;
+                              border: solid var(--ink-3); border-width: 1px 1px 0 0; rotate: 45deg; }
+  .v-flow small { display: block; margin-bottom: 6px; font: 400 10.5px/1 var(--mono); color: var(--ink-3); }
+  .v-flow b  { display: block; font: 400 15px/1.25 var(--serif); }
+  .v-flow > .is-done { border-color: var(--rule); background: transparent; }
+  .v-flow > .is-done b { color: var(--ink-2); }
+  .v-flow > .is-current { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-bg); }
+  .v-flow > .is-current small { color: var(--accent); }
+
+  /* ── Timeline ─────────────────────────────────────────────────────── */
+  .v-timeline { display: grid; }
+  .v-timeline li { display: grid; grid-template-columns: 84px 15px 1fr; gap: 12px; }
+  .v-timeline time { padding-top: 1px; font: 400 11.5px/1.5 var(--mono); color: var(--ink-3); text-align: right; }
+  .v-timeline li > i { position: relative; }
+  .v-timeline li > i::before { content: ""; position: absolute; left: 7px; top: 0; bottom: 0; width: 1px; background: var(--rule-2); }
+  .v-timeline li:first-child > i::before { top: 7px; }
+  .v-timeline li:last-child > i::before  { bottom: auto; height: 7px; }
+  .v-timeline li > i::after { content: ""; position: absolute; left: 3.5px; top: 4px; width: 8px; height: 8px; border-radius: 50%; background: var(--bg); border: 1px solid var(--ink-3); }
+  .v-timeline li.is-accent > i::after { background: var(--accent); border-color: var(--accent); }
+  .v-timeline li > div { padding-bottom: 16px; }
+  .v-timeline li > div b { display: block; font: 400 15px/1.35 var(--serif); }
+
+  /* ── Compare (A vs B) ─────────────────────────────────────────────── */
+  .v-compare { display: grid; grid-template-columns: 1fr 1fr; border: 1px solid var(--rule); border-radius: 10px; overflow: hidden; }
+  .v-compare > div { padding: 16px 18px; background: var(--paper); }
+  .v-compare > div + div { border-left: 1px solid var(--rule); }
+  .v-compare > .is-accent { background: linear-gradient(var(--accent-bg), transparent 60%), var(--paper); }
+  .v-compare h3 { margin-bottom: 12px; font: 400 18px/1.2 var(--serif); color: var(--ink); }
+  .v-compare li { position: relative; padding: 5px 0 5px 20px; font-size: 13.5px; }
+  .v-compare li::before { position: absolute; left: 0; font-size: 12px; }
+  .v-compare .yes::before { content: "✓"; color: var(--up); }
+  .v-compare .no::before  { content: "✕"; color: var(--down); }
+  .v-compare .meh::before { content: "~"; color: var(--ink-3); }
+
+  /* ── Notes, quotes, math, tags ────────────────────────────────────── */
+  .v-note    { padding: 12px 16px; border-left: 1.5px solid var(--ink-3); background: var(--paper); border-radius: 0 6px 6px 0; font-size: 13.5px; }
+  .v-note b:first-child { display: block; margin-bottom: 2px; font: 400 15px var(--serif); }
+  .v-note.is-accent { border-color: var(--accent); background: linear-gradient(90deg, var(--accent-bg), var(--paper) 70%); }
+  .v-note.is-warn   { border-color: var(--warn); }
+  .v-note.is-warn b:first-child::before { content: "⚠ "; color: var(--warn); font-family: var(--sans); font-size: 13px; }
+
+  .v-quote   { font: 300 italic 21px/1.4 var(--serif); color: var(--ink); text-indent: -.42em; }
+  .v-quote cite { display: block; margin-top: 10px; text-indent: 0; font: 500 10.5px/1 var(--sans); letter-spacing: .14em; text-transform: uppercase; font-style: normal; color: var(--ink-3); }
+  .v-quote cite::before { content: "— "; }
+
+  .v-math    { padding: 18px; text-align: center; border: 1px solid var(--rule); border-radius: 8px; background: var(--paper); }
+  .v-math > b { display: block; font: 300 italic 26px/1.2 var(--serif); }
+  .v-math > b sup { font-size: .6em; }
+  .v-math > span { display: block; margin-top: 6px; font-size: 12px; color: var(--ink-3); }
+
+  .v-tags    { display: flex; flex-wrap: wrap; gap: 6px; }
+  .v-tag     { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border: 1px solid var(--rule-2); border-radius: 99px; font: 400 12px/1.4 var(--sans); color: var(--ink-2); }
+  .v-tag.is-accent { border-color: rgb(217 119 87 / .5); background: var(--accent-bg); color: var(--ink); }
+  .v-tag.is-accent::before { content: ""; width: 5px; height: 5px; border-radius: 50%; background: var(--accent); }
+  .v-tag.is-quiet  { border-style: dashed; color: var(--ink-3); }
+  .v-tag[class*=" c"]::before { content: ""; width: 6px; height: 6px; border-radius: 2px; background: var(--c); }
+</style>
+
+<!-- Showcase chrome only (not part of the kit) -->
+<style>
+  html, body { margin: 0; background: #1c2027; }
+  body { display: grid; justify-items: center; padding: 0 0 64px; }
+  .doc-sec { margin: 34px 0 14px; display: flex; align-items: baseline; gap: 14px; }
+  .doc-sec span { font: 300 italic 22px/1 var(--serif); color: var(--ink); }
+  .doc-sec::after { content: ""; flex: 1; height: 1px; background: var(--rule); }
+  .doc-key { display: flex; flex-wrap: wrap; gap: 4px 8px; margin-bottom: 12px; }
+  .doc-key code { font: 400 11px/1 var(--mono); color: var(--accent); padding: 4px 6px; border-radius: 4px; background: var(--accent-bg); }
+  .doc-key code + code { color: var(--ink-3); background: var(--paper-2); }
+  .doc-swatch { display: grid; grid-template-columns: repeat(6, 1fr); gap: 10px; }
+  .doc-swatch span { display: grid; gap: 6px; font: 400 10.5px/1.3 var(--mono); color: var(--ink-3); }
+  .doc-swatch i { height: 30px; border-radius: 4px; border: 1px solid var(--rule); background: var(--c); }
+</style>
+</head>
+<body>
+<main class="v">
+
+  <!-- ═══ Header (also the canonical visual frame) ═══ -->
+  <header class="v-head">
+    <span class="v-eyebrow">Telegram visuals · component kit</span>
+    <h1 class="v-title">Paper, in the dark</h1>
+    <p class="v-lede">Warm ink on charcoal stock, hairline rules, serif figures. One accent, five series hues — used sparingly.</p>
+  </header>
+
+  <div class="doc-swatch">
+    <span><i style="--c:var(--bg)"></i>bg #1c2027</span>
+    <span><i style="--c:var(--paper)"></i>paper #262624</span>
+    <span><i style="--c:var(--ink)"></i>ink #f0eee6</span>
+    <span><i style="--c:var(--ink-2)"></i>ink-2 #bfbcb0</span>
+    <span><i style="--c:var(--ink-3)"></i>ink-3 #8a877d</span>
+    <span><i style="--c:var(--accent)"></i>accent #d97757</span>
+    <span><i class="c1" style="background:var(--c)"></i>s1 clay</span>
+    <span><i class="c2" style="background:var(--c)"></i>s2 sky</span>
+    <span><i class="c3" style="background:var(--c)"></i>s3 ochre</span>
+    <span><i class="c4" style="background:var(--c)"></i>s4 sage</span>
+    <span><i class="c5" style="background:var(--c)"></i>s5 heather</span>
+    <span><i style="--c:var(--paper-2)"></i>paper-2 #2d2c29</span>
+  </div>
+
+  <!-- ═══ 1. Headline numbers ═══ -->
+  <div class="doc-sec"><span>Headline numbers</span></div>
+  <div class="doc-key"><code>.v-stats</code><code>.v-stat</code><code>.v-delta.is-up / .is-down / .is-flat</code><code>.is-accent</code></div>
+  <dl class="v-stats">
+    <div class="v-stat"><dt>Messages</dt><dd>12,480</dd><span class="v-delta is-up">14% vs last week</span></div>
+    <div class="v-stat is-accent"><dt>Active members</dt><dd>318</dd><span class="v-delta is-up">22 new</span></div>
+    <div class="v-stat"><dt>Median reply</dt><dd>4.2<small>min</small></dd><span class="v-delta is-down">0.8 min slower</span></div>
+  </dl>
+
+  <!-- ═══ 2. Charts ═══ -->
+  <div class="doc-sec"><span>Charts</span></div>
+  <div class="v-grid">
+    <div>
+      <div class="doc-key"><code>.v-bars</code><code>.v-bar &gt; i</code><code>--v</code><code>.is-accent</code></div>
+      <div class="v-card">
+        <span class="v-eyebrow">Top posters, messages</span>
+        <dl class="v-bars" style="--label:72px">
+          <div class="is-accent"><dt>Anna</dt><dd><span class="v-bar"><i style="--v:100%"></i></span><span class="v-val">1,204</span></dd></div>
+          <div><dt>Mikhail</dt><dd><span class="v-bar"><i style="--v:71%"></i></span><span class="v-val">856</span></dd></div>
+          <div><dt>Lena</dt><dd><span class="v-bar"><i style="--v:58%"></i></span><span class="v-val">702</span></dd></div>
+          <div><dt>Ivan</dt><dd><span class="v-bar"><i style="--v:34%"></i></span><span class="v-val">411</span></dd></div>
+          <div><dt>Others</dt><dd><span class="v-bar"><i style="--v:21%"></i></span><span class="v-val">257</span></dd></div>
+        </dl>
+      </div>
+    </div>
+    <div>
+      <div class="doc-key"><code>.v-cols</code><code>--v</code><code>data-x</code><code>data-y</code></div>
+      <div class="v-card">
+        <span class="v-eyebrow">Messages per day</span>
+        <div class="v-cols" style="--h:118px">
+          <div style="--v:52%" data-x="Mon"></div>
+          <div style="--v:64%" data-x="Tue"></div>
+          <div style="--v:47%" data-x="Wed"></div>
+          <div class="is-accent" style="--v:96%" data-x="Thu" data-y="2,310"></div>
+          <div style="--v:70%" data-x="Fri"></div>
+          <div style="--v:31%" data-x="Sat"></div>
+          <div style="--v:26%" data-x="Sun"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div style="height:16px"></div>
+  <div class="doc-key"><code>svg.v-chart</code><code>.grid .base .tick</code><code>.line .area .dot .lbl .note .guide</code><code>.c1–.c5</code></div>
+  <div class="v-card">
+    <span class="v-eyebrow">Weekly active members</span>
+    <svg class="v-chart" viewBox="0 0 640 170" role="img" aria-label="Weekly active members, two groups, 12 weeks">
+      <line class="grid" x1="30" x2="580" y1="20" y2="20"/><line class="grid" x1="30" x2="580" y1="65" y2="65"/><line class="grid" x1="30" x2="580" y1="110" y2="110"/>
+      <line class="base" x1="30" x2="580" y1="150" y2="150"/>
+      <text class="tick" x="0" y="24">300</text><text class="tick" x="0" y="69">200</text><text class="tick" x="0" y="114">100</text>
+      <text class="tick" x="30" y="166">Sep 1</text><text class="tick" x="290" y="166">Oct 6</text><text class="tick" x="548" y="166">Nov 17</text>
+      <g class="c2">
+        <path class="area" d="M30 120 L80 116 L130 118 L180 108 L230 104 L280 100 L330 96 L380 98 L430 90 L480 86 L530 82 L580 78 L580 150 L30 150Z"/>
+        <polyline class="line" points="30,120 80,116 130,118 180,108 230,104 280,100 330,96 380,98 430,90 480,86 530,82 580,78"/>
+        <circle class="dot" cx="580" cy="78" r="4"/>
+        <text class="lbl" x="590" y="82">Guests</text>
+      </g>
+      <g class="c1">
+        <polyline class="line" points="30,92 80,88 130,80 180,84 230,70 280,62 330,58 380,50 430,44 480,40 530,30 580,24"/>
+        <circle class="dot" cx="580" cy="24" r="4"/>
+        <text class="lbl" x="590" y="28">Members</text>
+      </g>
+      <line class="guide" x1="330" x2="330" y1="40" y2="150"/>
+      <text class="note" x="338" y="44">Bot added</text>
+    </svg>
+  </div>
+
+  <div style="height:16px"></div>
+  <div class="v-grid" style="--cols:2">
+    <div>
+      <div class="doc-key"><code>.v-split &gt; i</code><code>.v-legend</code><code>.c1–.c5</code></div>
+      <div class="v-card">
+        <span class="v-eyebrow">Message types</span>
+        <div class="v-split"><i class="c1" style="--v:58%"></i><i class="c2" style="--v:21%"></i><i class="c3" style="--v:13%"></i><i class="c4"></i></div>
+        <div class="v-legend">
+          <span class="c1">Text<b>58%</b></span><span class="c2">Photo<b>21%</b></span><span class="c3">Voice<b>13%</b></span><span class="c4">Other<b>8%</b></span>
+        </div>
+      </div>
+    </div>
+    <div>
+      <div class="doc-key"><code>.v-heat &gt; i</code><code>--v 0–1</code><code>.v-scale</code></div>
+      <div class="v-card">
+        <span class="v-eyebrow">Activity, last 4 weeks</span>
+        <div class="v-heat" style="--cols:14">
+          <i style="--v:.2"></i><i style="--v:.4"></i><i style="--v:.3"></i><i style="--v:.8"></i><i style="--v:.6"></i><i style="--v:.1"></i><i style="--v:.05"></i>
+          <i style="--v:.3"></i><i style="--v:.5"></i><i style="--v:.4"></i><i style="--v:.9"></i><i style="--v:.7"></i><i style="--v:.2"></i><i style="--v:.1"></i>
+          <i style="--v:.4"></i><i style="--v:.6"></i><i style="--v:.5"></i><i style="--v:1"></i><i style="--v:.8"></i><i style="--v:.3"></i><i style="--v:.15"></i>
+          <i style="--v:.35"></i><i style="--v:.45"></i><i style="--v:.6"></i><i style="--v:.85"></i><i style="--v:.55"></i><i style="--v:.25"></i><i style="--v:.1"></i>
+        </div>
+        <div class="v-scale"><span>0</span><span>420 / day</span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══ 3. Gauges ═══ -->
+  <div class="doc-sec"><span>Gauges &amp; ranges</span></div>
+  <div class="v-grid">
+    <div>
+      <div class="doc-key"><code>.v-meter</code><code>.v-track &gt; i</code><code>--v</code></div>
+      <div class="v-stack" style="--gap:18px">
+        <div class="v-meter"><div><span>Monthly credits used</span><b>72%</b></div><div class="v-track"><i style="--v:72%"></i></div></div>
+        <div class="v-meter"><div><span>Context window</span><b>41%</b></div><div class="v-track"><i class="c2" style="--v:41%"></i></div></div>
+      </div>
+    </div>
+    <div>
+      <div class="doc-key"><code>.v-range</code><code>.band --lo --hi</code><code>.mark --at</code></div>
+      <span class="v-small">Estimated delivery, days — expected range vs. quoted</span>
+      <div class="v-range" style="--lo:30%;--hi:65%;--at:42%">
+        <div class="band"></div><div class="mark"></div>
+        <span style="left:0">0</span><span style="left:30%">6</span><span style="left:42%">8</span><span style="left:65%">13</span><span style="left:100%">20</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══ 4. Structured text ═══ -->
+  <div class="doc-sec"><span>Tables &amp; lists</span></div>
+  <div class="doc-key"><code>.v-table</code><code>td.num</code><code>tr.is-accent</code></div>
+  <table class="v-table">
+    <thead><tr><th>Model</th><th>Context</th><th class="num">Input $/M</th><th class="num">Latency</th></tr></thead>
+    <tbody>
+      <tr><td>small</td><td>128k</td><td class="num">0.40</td><td class="num">0.6 s</td></tr>
+      <tr class="is-accent"><td>big</td><td>400k</td><td class="num">2.50</td><td class="num">1.9 s</td></tr>
+      <tr><td>router</td><td>32k</td><td class="num">0.10</td><td class="num">0.2 s</td></tr>
+    </tbody>
+  </table>
+
+  <div style="height:22px"></div>
+  <div class="v-grid">
+    <div>
+      <div class="doc-key"><code>ol.v-rank</code></div>
+      <ol class="v-rank">
+        <li><span>Bun 1.4 upgrade</span><span>48 msgs</span></li>
+        <li><span>Fallback credentials</span><span>31</span></li>
+        <li><span>HTML visuals</span><span>27</span></li>
+        <li><span>Reminder limits</span><span>12</span></li>
+      </ol>
+    </div>
+    <div>
+      <div class="doc-key"><code>dl.v-facts</code></div>
+      <dl class="v-facts">
+        <div><dt>Render width</dt><dd>720 px</dd></div>
+        <div><dt>Max height</dt><dd>1,600 px</dd></div>
+        <div><dt>Scale</dt><dd>2×</dd></div>
+        <div><dt>Visuals per reply</dt><dd>4</dd></div>
+      </dl>
+    </div>
+  </div>
+
+  <!-- ═══ 5. Process & time ═══ -->
+  <div class="doc-sec"><span>Process &amp; time</span></div>
+  <div class="doc-key"><code>ol.v-flow</code><code>.is-done</code><code>.is-current</code></div>
+  <ol class="v-flow">
+    <li class="is-done"><small>01</small><b>Parse reply</b></li>
+    <li class="is-done"><small>02</small><b>Find &lt;html&gt;</b></li>
+    <li class="is-current"><small>03 · now</small><b>Render PNG</b></li>
+    <li><small>04</small><b>Upload</b></li>
+  </ol>
+
+  <div style="height:22px"></div>
+  <div class="v-grid">
+    <div>
+      <div class="doc-key"><code>ol.v-timeline</code><code>time</code><code>.is-accent</code></div>
+      <ol class="v-timeline">
+        <li><time>Nov 22</time><i></i><div><b>Fallback LLM keys</b>Second Azure credential on 401/429/5xx.</div></li>
+        <li class="is-accent"><time>Nov 23</time><i></i><div><b>HTML visuals ship</b>Standalone blocks become PNGs.</div></li>
+        <li><time>Next</time><i></i><div><b>Component kit</b>Injected stylesheet, .v-* classes.</div></li>
+      </ol>
+    </div>
+    <div>
+      <div class="doc-key"><code>.v-compare</code><code>.yes .no .meh</code></div>
+      <div class="v-compare">
+        <div><h3>Inline CSS</h3><ul><li class="yes">No setup</li><li class="no">Long prompts</li><li class="no">Drifting style</li></ul></div>
+        <div class="is-accent"><h3>Kit classes</h3><ul><li class="yes">Short markup</li><li class="yes">Consistent</li><li class="meh">Needs injection</li></ul></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══ 6. Voice ═══ -->
+  <div class="doc-sec"><span>Notes, quotes, math</span></div>
+  <div class="v-grid">
+    <div class="v-stack">
+      <div class="doc-key"><code>.v-note</code><code>.is-accent</code><code>.is-warn</code></div>
+      <aside class="v-note is-accent"><b>Takeaway</b>Thursday drives a fifth of weekly volume.</aside>
+      <aside class="v-note is-warn"><b>Partial data</b>Sunday excludes the last six hours.</aside>
+      <aside class="v-note"><b>Method</b>Bots and forwarded posts are excluded.</aside>
+    </div>
+    <div class="v-stack">
+      <div class="doc-key"><code>blockquote.v-quote</code></div>
+      <blockquote class="v-quote">“Compare like for like before you compare anything else.”<cite>Review note</cite></blockquote>
+      <div class="doc-key" style="margin-top:6px"><code>.v-math</code></div>
+      <div class="v-math"><b>y = x<sup>2</sup> + 25</b><span>Vertex at (0, 25)</span></div>
+    </div>
+  </div>
+
+  <div style="height:22px"></div>
+  <div class="doc-key"><code>.v-tags</code><code>.v-tag</code><code>.is-accent</code><code>.is-quiet</code><code>.c1–.c5</code><code>.v-rule.is-accent</code></div>
+  <div class="v-tags">
+    <span class="v-tag is-accent">Confirmed</span><span class="v-tag">Estimate</span><span class="v-tag is-quiet">Archived</span>
+    <span class="v-tag c2">Guests</span><span class="v-tag c1">Members</span>
+  </div>
+  <hr class="v-rule is-accent" style="margin-top:20px">
+
+  <footer class="v-foot"><span>Source · chat history, Nov 17–23</span><span>.v-foot</span></footer>
+</main>
+</body>
+</html>

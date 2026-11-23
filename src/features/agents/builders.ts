@@ -35,6 +35,24 @@ export function buildConflictInstructions(): string {
 </chat_conflict>`;
 }
 
+const VISUAL_KIT_INSTRUCTIONS = [
+  'Every visual already includes a dark component kit with its page background, padding, fonts, and colors. Style visuals only with the kit classes below. Never write <style> elements, stylesheet links, @import or @font-face rules, inline style declarations, class names outside the kit, or SVG fill, stroke, color, opacity, or font attributes. The only allowed style attribute sets kit variables, such as style="--v:72%" or style="--cols:3;--gap:12px". If a design needs a style the kit lacks, simplify the design to fit the kit.',
+  "Kit variables: --v (value), --cols, --gap, --label (bar label width), --h (column chart height), --lo, --hi, --at, --x (range positions). Write percentages for --v except in .v-heat, which uses 0 to 1.",
+  'Frame: <header class="v-head"><span class="v-eyebrow">Context</span><h1 class="v-title">Title</h1><p class="v-lede">One-line takeaway</p></header> … <footer class="v-foot"><span>Source</span><span>Date</span></footer>. Layout: .v-card (panel; a first-child .v-eyebrow is its label), .v-grid (2 columns; --cols for more), .v-stack, <hr class="v-rule"> (.is-accent for a short accent rule). Text: .v-h (serif subheading), .v-small, .v-mono, .v-num, .v-accent.',
+  'Headline numbers: <dl class="v-stats"><div class="v-stat"><dt>Label</dt><dd>12,480<small>unit</small></dd><span class="v-delta is-up">14% vs last week</span></div>…</dl>. Delta modifiers: .is-up, .is-down, .is-flat. Add .is-accent to one .v-stat to highlight it.',
+  'Horizontal bars: <dl class="v-bars" style="--label:90px"><div class="is-accent"><dt>Name</dt><dd><span class="v-bar"><i style="--v:100%"></i></span><span class="v-val">1,204</span></dd></div>…</dl>. --v is the value as a percentage of the largest value.',
+  'Column chart: <div class="v-cols" style="--h:140px"><div style="--v:52%" data-x="Mon"></div><div class="is-accent" style="--v:96%" data-x="Thu" data-y="2,310"></div>…</div>. data-x is the axis label; use data-y only for the few values worth labeling.',
+  'Composition: <div class="v-split"><i class="c1" style="--v:58%"></i><i class="c2" style="--v:21%"></i><i class="c3"></i></div><div class="v-legend"><span class="c1">Text<b>58%</b></span>…</div>. The last segment fills the remainder.',
+  "Series colors: .c1 to .c5 (clay, sky, ochre, sage, heather), .c0 (neutral), and .ca (accent). Use them in order, keep each entity's color across visuals, and group anything beyond five series as Other. Always pair colors with a legend or direct labels.",
+  'Line chart or diagram: <svg class="v-chart" viewBox="0 0 640 180"> with <line class="grid"> gridlines, <line class="base"> baseline, <text class="tick"> axis labels, and one <g class="c1"> per series containing <path class="area"> (optional), <polyline class="line">, <circle class="dot" r="4"> at the end, and <text class="lbl"> naming the series. Annotate with <line class="guide"> and <text class="note">. For diagrams, use <rect class="shape" rx="8"> (.is-accent to highlight), <path class="edge">, and <text class="lbl">. Use one y scale per chart.',
+  'Heatmap: <div class="v-heat" style="--cols:7"><i style="--v:.4"></i>…</div><div class="v-scale"><span>0</span><span>420 / day</span></div>.',
+  'Meter: <div class="v-meter"><div><span>Label</span><b>72%</b></div><div class="v-track"><i style="--v:72%"></i></div></div>. Range: <div class="v-range" style="--lo:30%;--hi:65%;--at:42%"><div class="band"></div><div class="mark"></div><span style="--x:0%">0</span><span style="--x:30%">6</span>…</div>.',
+  'Table: <table class="v-table"> with <th> and <td>; add class="num" to numeric cells and their headers, and class="is-accent" to one highlighted <tr>. Ranking: <ol class="v-rank"><li><span>Item</span><span>48</span></li>…</ol>. Facts: <dl class="v-facts"><div><dt>Key</dt><dd>Value</dd></div>…</dl>.',
+  'Process: <ol class="v-flow"><li class="is-done"><small>01</small><b>Step</b></li><li class="is-current">…</li>…</ol> with up to five steps. Timeline: <ol class="v-timeline"><li class="is-accent"><time>Nov 23</time><i></i><div><b>Event</b>Detail</div></li>…</ol>. Comparison: <div class="v-compare"><div><h3>Option A</h3><ul><li class="yes">…</li><li class="no">…</li><li class="meh">…</li></ul></div><div class="is-accent">…</div></div>.',
+  'Notes: <aside class="v-note is-accent"><b>Title</b>Text</aside> (.is-warn for caveats). Quote: <blockquote class="v-quote">“Text”<cite>Source</cite></blockquote>. Formula: <div class="v-math"><b>y = x<sup>2</sup></b><span>Explanation</span></div>. Tags: <div class="v-tags"><span class="v-tag is-accent">Tag</span>…</div> (.is-quiet, or .c1 to .c5 for series tags).',
+  "Use .is-accent for the single most important item in a visual. Label selectively instead of putting a number on every mark.",
+];
+
 const TELEGRAM_FORMATTING_INSTRUCTIONS = [
   "<formatting>",
   "Telegram supports the following response formatting:",
@@ -42,7 +60,8 @@ const TELEGRAM_FORMATTING_INSTRUCTIONS = [
   "Always format tables as <table bordered striped> with <tr>, <th>, and <td> elements. Keep the bordered and striped attributes; do not use compact unless asked to. Align descriptive cells left and numeric cells right, including their headers. Use HTML inline formatting inside table cells (for example, <b> and <a>), because Markdown is not parsed inside <table>. Put blank lines before and after each table.",
   "Use <tg-math> for inline LaTeX and <tg-math-block> or a fenced math block for display LaTeX. Put multiline formulas in a display block with blank lines before and after it. Escape HTML characters such as & and < as &amp; and &lt; inside math tags. Dollar signs in Markdown prose are literal text.",
   "Always render charts, diagrams, and other visuals in standalone <html>…</html> blocks. Never call generate_image for visuals. Surround each block with blank lines and leave it outside code fences. The bot inserts a high-resolution image there.",
-  "Use static HTML, CSS, or SVG. Public images, stylesheets, and fonts are supported. No scripts, event handlers, animations, forms, or frames. Limit each visual to 720 × 1600 CSS pixels and keep essential explanations in Markdown outside the block. Use up to four visuals in the final answer only.",
+  "Use static HTML and SVG with public images if needed. No scripts, event handlers, animations, forms, or frames. Limit each visual to 720 × 1600 CSS pixels, including the built-in page padding, and keep essential explanations in Markdown outside the block. Use up to four visuals in the final answer only.",
+  ...VISUAL_KIT_INSTRUCTIONS,
   "",
   "**bold text**",
   "__bold text__",
