@@ -2,7 +2,7 @@ import type { PlotInput } from "./html-plot-engine.ts";
 
 const PLOT = /<tg-plot\b([^>]*)>([\s\S]*?)<\/tg-plot\s*>/gi;
 const MAX_PLOTS = 4;
-const PLOT_TIMEOUT_MS = 3_000;
+const PLOT_TIMEOUT_MS = 15_000;
 
 type PlotResult = { svg?: string; error?: string };
 
@@ -57,7 +57,7 @@ function runPlotWorker(
       () =>
         finish(
           plots.map(() => ({
-            error: "The plot took too long. Use simpler expressions.",
+            error: `Plot calculation exceeded the ${timeoutMs / 1000} s limit. Try simpler expressions or fewer mesh lines.`,
           })),
         ),
       timeoutMs,

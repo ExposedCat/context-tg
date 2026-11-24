@@ -12,12 +12,19 @@ RUN apt-get update \
 
 WORKDIR /app
 
-# Dependencies first so source edits reuse the cached install layer.
-COPY package.json bun.lock bunfig.toml ./
-RUN bun install --frozen-lockfile --production
-RUN PLAYWRIGHT_BROWSERS_PATH=/opt/playwright bun node_modules/playwright-core/cli.js install --with-deps --only-shell chromium \
-  && rm -rf /var/lib/apt/lists/*
+# Keep the Chromium layer independent of the app dependencies.
+ARG PLAYWRIGHT_VERSION=1.65.1
 ENV PLAYWRIGHT_BROWSERS_PATH=/opt/playwright
+RUN set -eu; \
+  install_tmp="$(mktemp -d)"; \
+  TMPDIR="$install_tmp" BUN_INSTALL_CACHE_DIR="$install_tmp/cache" \
+    bunx --bun "playwright-core@$PLAYWRIGHT_VERSION" install --with-deps --only-shell chromium; \
+  rm -rf "$install_tmp" /var/lib/apt/lists/*
+
+# Copy dependency manifests before source so code edits reuse the install layer.
+COPY package.json bun.lock bunfig.toml ./
+RUN bun install --frozen-lockfile --production \
+  && bun -e 'const version = require("playwright-core/package.json").version; if (version !== Bun.env.PLAYWRIGHT_VERSION) throw new Error(`Set the Dockerfile PLAYWRIGHT_VERSION to ${version}.`);'
 
 COPY . .
 

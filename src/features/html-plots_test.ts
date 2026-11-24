@@ -82,5 +82,5 @@ test("slow plots time out without blocking the bot", async () => {
     200,
   );
   ok(performance.now() - started < 2_000);
-  match(html, /The plot took too long/);
+  match(html, /Plot calculation exceeded the 0\.2 s limit/);
 });

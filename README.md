@@ -19,6 +19,10 @@ recurring reminders use persisted RRULE schedules and next-occurrence timers. Th
 container image bakes in source and dependencies, with persistent `./data` and
 an optional read-only `./secrets` directory for credentials.
 
+`pm3 restart context -y -g` pulls and builds the app. The image caches Chromium
+and its system dependencies separately from the app's Bun dependencies. When
+upgrading `playwright-core`, update `PLAYWRIGHT_VERSION` in the Dockerfile too.
+
 ## Azure OpenAI fallback credentials
 
 Set `FALLBACK_LLM_API_KEY` to enable a second Azure OpenAI credential. Set
@@ -759,7 +763,7 @@ A `<tg-plot>` element inside a visual draws math plots: function graphs
 (`y = …`), parametric curves (`(x(t), y(t)) for t in a..b`), meshes of grid
 lines through a point-valued function (`w(u, v) for u in …, v in …`), and
 points. Constants and functions use math.js syntax. Plots are evaluated in a
-worker with a three-second deadline and a 120,000-point limit. math.js
+worker with a 15-second deadline and a 120,000-point limit. math.js
 functions that evaluate nested expressions or allocate large matrices are
 disabled. A plot that fails becomes a warning note in the visual.
 Regular replies upload visuals directly. Guest replies with new visuals use
