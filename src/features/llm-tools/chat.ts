@@ -55,11 +55,18 @@ export const executeLike: FunctionToolRunner = async (_, context) => {
   return JSON.stringify({ liked: true });
 };
 
+const chatTarget = {
+  type: "string",
+  enum: ["topic_thread", "group"],
+  description:
+    "Default to topic_thread for the current topic in a group or threaded private chat. Use group when the request calls for the entire chat, including all topics.",
+} as const;
+
 export const searchChatToolDefinition = {
   type: "function",
   name: "search_chat",
   description:
-    "Search remembered messages using semantic and lexical matching. Prefer target=topic_thread for the current topic in a group or threaded private chat; use target=group to search all topics in the current chat. Infer the intended scope from context; if unclear, briefly ask whether the user means this topic or the entire chat. Returns a JSON array of relevant conversation windows, with each matched anchor surrounded by nearby messages and its reply parent when available. Telegram photos and image documents are represented as reusable tg://photo or tg://document Markdown, followed by their caption when present; inspect one by passing its exact ID to read_image. Messages from the same album share media_group_id. Telegram stickers are represented as [sticker EMOJI]. The sender_id and date filters are optional; only use them when the user explicitly needs a sender or date range filter. Prefer using only queries and target.",
+    "Find remembered messages by meaning and wording. Returns matching messages with nearby messages and their reply parent when available. Photos and image documents appear as reusable tg://photo or tg://document Markdown with any caption. Pass the exact ID to read_image to inspect one. Album messages share media_group_id. Stickers appear as [sticker EMOJI].",
   parameters: {
     type: "object",
     properties: {
@@ -71,12 +78,7 @@ export const searchChatToolDefinition = {
           type: "string",
         },
       },
-      target: {
-        type: "string",
-        enum: ["topic_thread", "group"],
-        description:
-          "topic_thread searches the current topic in a group or threaded private chat; group searches the entire current chat, including all topics.",
-      },
+      target: chatTarget,
       exact_phrases: {
         type: "array",
         description:
@@ -111,7 +113,7 @@ export const readLastMessagesToolDefinition = {
   type: "function",
   name: "read_last_messages",
   description:
-    "Read recent remembered text messages. Prefer target=topic_thread for the current topic in a group or threaded private chat, especially when reading for context; use target=group for all topics in the current chat. Infer the intended scope from context; if unclear, briefly ask whether the user means this topic or the entire chat. Returns a JSON array of message objects. Only quote messages when you are asked to do so. If you are tasked to do a summary or help with ongoing discussion, you must read messages as extra context, do not just list or recite entire discussion unless explicitly requested to do so.",
+    "Read recent remembered messages for conversation context. Returns a JSON array of message objects.",
   parameters: {
     type: "object",
     properties: {
@@ -122,12 +124,7 @@ export const readLastMessagesToolDefinition = {
         minimum: 1,
         maximum: MAX_LAST_MESSAGES_COUNT,
       },
-      target: {
-        type: "string",
-        enum: ["topic_thread", "group"],
-        description:
-          "topic_thread reads the current topic in a group or threaded private chat; group reads the entire current chat, including all topics.",
-      },
+      target: chatTarget,
     },
     required: ["count", "target"],
     additionalProperties: false,

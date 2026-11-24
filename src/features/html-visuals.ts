@@ -1,6 +1,7 @@
 import { createDebug } from "@grammyjs/debug";
 import { chromium } from "playwright-core";
 import { getRichMarkdownHtmlBlocks } from "../utils/markdown.ts";
+import { expandHtmlPlots } from "./html-plots.ts";
 import { fetchHtmlVisualAsset } from "./html-visual-assets.ts";
 import {
   getHtmlVisualKit,
@@ -25,6 +26,7 @@ export async function renderHtmlVisual(
 ): Promise<Buffer> {
   signal?.throwIfAborted();
   const kit = await getHtmlVisualKit();
+  html = await expandHtmlPlots(html, signal);
   signal?.throwIfAborted();
   const browser = await chromium.launch({
     timeout: RENDER_TIMEOUT_MS,

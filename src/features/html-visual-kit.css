@@ -27,9 +27,7 @@
   --sans: "Inter Variable", system-ui, sans-serif;
   --mono: "JetBrains Mono Variable", ui-monospace, monospace;
 
-  background:
-    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 1 0 0 0 0 .97 0 0 0 0 .9 0 0 0 .05 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E"),
-    var(--bg);
+  background: var(--bg);
   color: var(--ink-2);
   font: 400 14px/1.55 var(--sans);
   font-feature-settings: "tnum" 1, "lnum" 1;
@@ -536,6 +534,15 @@ svg {
 .v-chart .shape.is-accent {
   fill: var(--accent-bg);
   stroke: var(--accent);
+}
+.v-chart .mesh {
+  stroke-width: 0.8;
+}
+.v-chart .lbl:is(.c1, .c2, .c3, .c4, .c5) {
+  fill: var(--ink);
+}
+.v-plot {
+  margin: 0;
 }
 .v-chart .edge {
   fill: none;

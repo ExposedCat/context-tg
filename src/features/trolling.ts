@@ -301,12 +301,7 @@ function buildTrollingRequest(
 ): string[] {
   return [
     formatSystemPromptMessageXml(
-      [
-        `Write a trolling reply that fits the ongoing conversation, in the chat's configured trolling_mode. The request was triggered by the last message from ${triggerSenderName}.`,
-        "The final context message is the trigger, not a required target. Choose one participant, statement, or situation from the recent conversation with a concrete hook for the joke. The person being teased can differ from the sender of the message you reply to. Make it clear who or what the joke concerns, and attribute statements to the person who actually made them.",
-        "Reply to the message the joke is about. If it is an earlier context message, call set_reply_message_id with its exact id before your final response. For a joke about the shared situation without a specific target message, call set_reply_message_id with null to send without a reply. Never invent a message id.",
-        "Use one brief, context-specific roast, joke, wordplay, or sarcastic observation. The trolling_mode setting determines whether profanity, name-calling, and aggressive roasting are allowed. Keep the reply relevant to the ongoing conversation; do not drag in unrelated people or invent facts to create a target.",
-      ].join("\n"),
+      `Write a trolling reply for this conversation. The final context message, from ${triggerSenderName}, triggered this request. Any relevant message or shared situation may be the target.`,
     ),
     ...messages.map(formatContextMessage),
   ];

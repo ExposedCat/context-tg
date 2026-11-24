@@ -67,7 +67,7 @@ export const toolDefinition = {
   type: "function",
   name: "generate_image",
   description:
-    "Generate image from a text prompt and/or optional input images. Never use proactively. Use this only when the user explicitly asks to create, draw, render, edit, transform, combine, or visualize an image. The result contains a ready-to-use rich Markdown image reference. Include that reference in your response wherever you want the image to appear.",
+    "Generate or edit a raster image from a text prompt and optional reference images. Use for explicit requests to create or edit artwork, photos, or illustrations. The result includes a ready-to-use rich Markdown image reference. Copy it where the image should appear in the reply.",
   parameters: {
     type: "object",
     properties: {

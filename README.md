@@ -754,6 +754,14 @@ Serif 4, Inter, and JetBrains Mono fonts from Fontsource. The prompt tells the
 model to style visuals only with kit classes and kit CSS variables. The
 renderer still accepts static HTML, SVG, and public HTTP(S) images,
 stylesheets, and fonts.
+
+A `<tg-plot>` element inside a visual draws math plots: function graphs
+(`y = …`), parametric curves (`(x(t), y(t)) for t in a..b`), meshes of grid
+lines through a point-valued function (`w(u, v) for u in …, v in …`), and
+points. Constants and functions use math.js syntax. Plots are evaluated in a
+worker with a three-second deadline and a 120,000-point limit. math.js
+functions that evaluate nested expressions or allocate large matrices are
+disabled. A plot that fails becomes a warning note in the visual.
 Regular replies upload visuals directly. Guest replies with new visuals use
 the media cache described below to get a Telegram file ID.
 

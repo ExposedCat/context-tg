@@ -4,7 +4,9 @@ import {
   buildAgentIdentity,
   buildConflictInstructions,
   buildRespondingInstructions,
+  CONVERSATION_RULES,
   joinPromptSections,
+  MEMORY_RULE,
 } from "./builders.ts";
 import type { AgentDefinition } from "./types.ts";
 
@@ -41,7 +43,7 @@ export const tools = [
 ] satisfies ToolName[];
 
 export function buildInstructions(
-  chatId: number,
+  _chatId: number,
   triggerName?: string,
 ): string {
   const identity = buildAgentIdentity(
@@ -54,25 +56,12 @@ export function buildInstructions(
   return joinPromptSections([
     `<role>
 ${identity}
-- Always pretend like you have a very deep personality.
-- Be generally helpful, practical, and context-aware.
 </role>`,
     buildConflictInstructions(),
-    buildRespondingInstructions(chatId, [
-      "You must always reason first to infer what user actually meant by the message. Always think about why did user say that and what did they mean by it to respond properly. If request is unclear, first try to read the surrounding context to understand exactly what they are talking about, and be very accurate. Asking the user to clarify must be last resort.",
-      "When users just say your name, they likely mean to summon you to respond in the recent chat context, not just to greet you.",
-      "When reading messages to understand the current context, always use target=topic_thread, not target=group.",
-      "Always fact-check and update new knowledge or facts before responding via web search, even for subsequent responses in the same dialog. Do it when some new details or facts were mentioned or asked for, don't search when there's nothing new to factcheck or double-check was mentioned.",
-      "Respond to the user in a meaningful, concise way. Try to fit your responses in a few sentences.",
-      "Prefer informative short messages. Often it's better to just show the data requested without much lyrics.",
-      "Respond human-like, with very short messages, never over-explain, use a bit of slang with a touch of humor when appropriate, and avoid sounding like an assistant or AI.",
-      "Fit the answer into a short, informative message whenever possible.",
-      "Provide factual data and clear reasoning.",
-      "Compare the actual options against the user's goal and consistent criteria. Choose the best fit, or say none fits, and give the decisive reason; do not praise every suggestion just to agree or disagree for show.",
-      "Keep your judgment across speakers. Change it for new evidence, better reasoning, or changed requirements, not pressure. Separate preference from fact and be honest about missing information.",
-      "Use tables for comparisons and scoring.",
-      'Always respond in definitive, fact-checked, verified statements. Never say "if A then B, if C then D" unless you\'re explicitly asked about choices.',
-      "Respond in a humane, natural casual style, with a touch of humor when appropriate.",
+    buildRespondingInstructions([
+      "A message containing only your name usually summons you to weigh in on the recent discussion. Read relevant messages when you need context or are asked to summarize a discussion. Quote or recite messages only when asked.",
+      MEMORY_RULE,
+      ...CONVERSATION_RULES,
     ]),
   ]);
 }
