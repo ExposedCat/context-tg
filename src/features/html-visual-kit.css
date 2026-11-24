@@ -3,14 +3,14 @@
 
 :root {
   --bg: #1c2027;
-  --paper: #232832;
-  --paper-2: #2b313c;
+  --paper: #262624;
+  --paper-2: #2d2c29;
   --surface: var(--bg);
-  --ink: #edebe5;
-  --ink-2: #b5b9c1;
-  --ink-3: #8d93a0;
-  --rule: rgb(214 222 235 / 0.09);
-  --rule-2: rgb(214 222 235 / 0.18);
+  --ink: #f0eee6;
+  --ink-2: #bfbcb0;
+  --ink-3: #8a877d;
+  --rule: rgb(240 238 230 / 0.09);
+  --rule-2: rgb(240 238 230 / 0.18);
   --accent: #d97757;
   --accent-bg: rgb(217 119 87 / 0.12);
   /* Series colors in fixed order, validated for color-vision deficiency on
@@ -645,14 +645,20 @@ svg {
 }
 
 /* Process flow */
+.v-card:has(> .v-flow:only-child) {
+  display: contents;
+}
 .v-flow {
+  --flow-gap: 22px;
+  --arrow-inset: 6px;
   display: grid;
   grid-auto-flow: column;
   grid-auto-columns: minmax(0, 1fr);
-  gap: 22px;
+  gap: var(--flow-gap);
 }
 .v-flow > li {
   position: relative;
+  overflow-wrap: anywhere;
   padding: 12px 14px;
   border: 1px solid var(--rule-2);
   border-radius: 8px;
@@ -661,16 +667,16 @@ svg {
 .v-flow > li + li::before {
   content: "";
   position: absolute;
-  right: 100%;
+  right: calc(100% + var(--arrow-inset));
   top: 50%;
-  width: 22px;
+  width: calc(var(--flow-gap) - 2 * var(--arrow-inset));
   height: 1px;
   background: var(--rule-2);
 }
 .v-flow > li + li::after {
   content: "";
   position: absolute;
-  right: 100%;
+  right: calc(100% + var(--arrow-inset));
   top: 50%;
   width: 5px;
   height: 5px;
@@ -678,6 +684,26 @@ svg {
   border: solid var(--ink-3);
   border-width: 1px 1px 0 0;
   rotate: 45deg;
+}
+.v-flow:is(.is-vertical, :has(> li:nth-child(5))) {
+  grid-auto-flow: row;
+  grid-template-columns: minmax(0, 1fr);
+}
+.v-flow:is(.is-vertical, :has(> li:nth-child(5))) > li + li::before {
+  top: auto;
+  right: auto;
+  bottom: calc(100% + var(--arrow-inset));
+  left: 50%;
+  width: 1px;
+  height: calc(var(--flow-gap) - 2 * var(--arrow-inset));
+}
+.v-flow:is(.is-vertical, :has(> li:nth-child(5))) > li + li::after {
+  top: auto;
+  right: auto;
+  bottom: calc(100% + var(--arrow-inset));
+  left: 50%;
+  translate: -2px 0;
+  rotate: 135deg;
 }
 .v-flow small {
   display: block;
@@ -688,6 +714,10 @@ svg {
 .v-flow b {
   display: block;
   font: 400 15px/1.25 var(--serif);
+}
+.v-flow p {
+  margin-top: 4px;
+  font-size: 13px;
 }
 .v-flow > .is-done {
   border-color: var(--rule);

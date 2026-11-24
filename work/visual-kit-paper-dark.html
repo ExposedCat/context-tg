@@ -185,10 +185,10 @@
   .v-rank li > span:last-child { font: 400 12.5px var(--mono); color: var(--ink-3); }
 
   /* ── Process flow ─────────────────────────────────────────────────── */
-  .v-flow    { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: 22px; }
+  .v-flow    { --flow-gap: 22px; --arrow-inset: 6px; display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: var(--flow-gap); }
   .v-flow > li { position: relative; padding: 12px 14px; border: 1px solid var(--rule-2); border-radius: 8px; background: var(--paper); }
-  .v-flow > li + li::before { content: ""; position: absolute; right: 100%; top: 50%; width: 22px; height: 1px; background: var(--rule-2); }
-  .v-flow > li + li::after  { content: ""; position: absolute; right: 100%; top: 50%; width: 5px; height: 5px; translate: 0 -2px;
+  .v-flow > li + li::before { content: ""; position: absolute; right: calc(100% + var(--arrow-inset)); top: 50%; width: calc(var(--flow-gap) - 2 * var(--arrow-inset)); height: 1px; background: var(--rule-2); }
+  .v-flow > li + li::after  { content: ""; position: absolute; right: calc(100% + var(--arrow-inset)); top: 50%; width: 5px; height: 5px; translate: 0 -2px;
                               border: solid var(--ink-3); border-width: 1px 1px 0 0; rotate: 45deg; }
   .v-flow small { display: block; margin-bottom: 6px; font: 400 10.5px/1 var(--mono); color: var(--ink-3); }
   .v-flow b  { display: block; font: 400 15px/1.25 var(--serif); }
