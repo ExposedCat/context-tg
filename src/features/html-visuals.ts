@@ -42,6 +42,7 @@ export async function renderHtmlVisual(
   try {
     renderSignal.throwIfAborted();
     const context = await browser.newContext({
+      colorScheme: "dark",
       javaScriptEnabled: false,
       offline: true,
       serviceWorkers: "block",
