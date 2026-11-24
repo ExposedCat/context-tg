@@ -451,8 +451,30 @@ are available to the application through `onStreamEvent` while generation is
 running. Telegram delivery still uses the existing progress batching and final
 response flow. Set `LLM_STREAMING=false` for a provider that does not support SSE.
 
+While a normal chat task is active, its trigger's author can steer it by replying
+to the original trigger message, without mentioning the bot again. In private DM
+topics (the conversations whose topic names the bot sets), any new message in
+the same topic steers the active task. Group forum topics and the default,
+unthreaded DM conversation do not automatically steer. Commands keep their usual
+handling. Updates retain message authors, timestamps and image attachments,
+count as incoming requests for credits, and share the original task's tools,
+cancellation and final answer. Replies to those updates can continue its saved
+history after completion.
+
+With streaming enabled, deployments named `gpt-6*` use Responses WebSockets and
+native `response.steer`. The current output item or running tool may finish
+before the update takes effect. Other deployments, non-streamed requests, and
+providers without WebSocket upgrades apply updates at the next model-call
+boundary. Client tools are never replayed for steering; updates waiting on a
+tool are appended alongside its result in the next request. Instructions and
+tool definitions stay stable. Native steering uses explicit compaction between
+generations at `LLM_COMPACT_THRESHOLD`, since it cannot use automatic compaction.
+Completed response items and committed updates are saved in order. A failed
+stream is not automatically replayed; uncommitted updates remain in its resume
+checkpoint.
+
 Use `/tasks` to find the cancellation link `/cancel_<message-id>` for a running
-normal chat task. Cancellation aborts its active HTTP connection and any tools
+normal chat task. Cancellation aborts its active model connection and any tools
 using the task's signal, even while the stream is waiting for its next event.
 This already works for non-streamed requests too. Stopping the connection asks
 the provider to stop a foreground generation; tokens already generated remain
@@ -750,16 +772,25 @@ display LaTeX, including multiline formulas. Delivery escapes dollar signs in
 Markdown prose, including consecutive dollars, and preserves them inside math,
 code, and HTML blocks such as tables, quotes, and media captions.
 
-Standalone `<html>…</html>` blocks in final replies become inline 2× PNG
-visuals. Chromium renders them with JavaScript disabled. Every visual gets the
-dark component kit in `src/features/html-visual-kit.css`, which provides the
-page frame, colors, and `.v-*` component classes. The kit uses bundled Source
-Serif 4, Inter, and JetBrains Mono fonts from Fontsource. The prompt tells the
-model to style visuals only with kit classes and kit CSS variables. The
-renderer still accepts static HTML, SVG, and public HTTP(S) images,
-stylesheets, and fonts.
+Replies can combine Telegram Rich Markdown with graphic blocks such as
+`<media-bars>`, `<media-columns>`, `<media-composition>`, `<media-heatmap>`,
+`<media-meter>`, `<media-range>`, `<media-chart>`, `<media-flow>`, and `<media-plot>`.
+Each run of tags separated only by whitespace becomes one inline 4× PNG in place.
+Prose and native Telegram blocks between tags start a new image group. Chromium
+captures the PNG with JavaScript disabled using the bundled component kit and fonts.
+The bot generates a 2,880-pixel-wide PNG before Telegram processes the inline photo.
 
-A `<tg-plot>` element inside a visual draws math plots: function graphs
+Use `<media-mermaid>…</media-mermaid>` for Mermaid source, including
+flowcharts and sequence diagrams. The renderer parses the source on a separate
+offline page and applies the kit theme and typography. Put the source directly
+in the tag.
+
+- `<media-intervals unit="s">` takes one `Label | low | high` row per interval.
+- `<media-stacked-bars unit="s">` takes a header of series names such as
+  `Label | Model | Tools | Render`, followed by rows such as `Fast | 5 | 1 | 1`.
+- `<media-timebands>` takes one `Label | YYYY-MM-DD | YYYY-MM-DD` row per band.
+
+A `<media-plot>` block draws math plots: function graphs
 (`y = …`), parametric curves (`(x(t), y(t)) for t in a..b`), meshes of grid
 lines through a point-valued function (`w(u, v) for u in …, v in …`), and
 points. Constants and functions use math.js syntax. Plots are evaluated in a

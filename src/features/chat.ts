@@ -2,9 +2,9 @@ import { createDebug } from "@grammyjs/debug";
 import { Composer, InputFile } from "grammy";
 import type { Context } from "../bot.ts";
 import {
-  getRichMarkdownHtmlBlocks,
+  getRichMarkdownVisualBlocks,
   normalizeRichMarkdown,
-  stripRichMarkdownHtmlBlocks,
+  stripRichMarkdownVisualBlocks,
 } from "../utils/markdown.ts";
 import {
   escapeHtml,
@@ -55,6 +55,7 @@ import {
 } from "./images.ts";
 import { readLastMessages, readMediaGroupMessages } from "./last-messages.ts";
 import {
+  createLlmSteeringInput,
   getLlmErrorCode,
   getLlmErrorLabel,
   type LlmCitation,
@@ -91,6 +92,7 @@ import {
   type PromptReplyReference,
 } from "./llm-prompt.ts";
 import { getMainProviderFailure } from "./llm-provider.ts";
+import { LlmSteering } from "./llm-steering.ts";
 import { MediaGroupCollector } from "./media-group-collector.ts";
 import { startsWithCommandPrefix } from "./message-filter.ts";
 import type { MessageMetadata } from "./messages.ts";
@@ -1447,7 +1449,7 @@ function formatMarkdownCitations(
   citations: LlmCitation[],
 ): string {
   if (citations.length === 0) return response;
-  const visuals = getRichMarkdownHtmlBlocks(response);
+  const visuals = getRichMarkdownVisualBlocks(response);
   let cursor = 0;
   let formatted = "";
 
@@ -1596,7 +1598,7 @@ export function splitProgressSegments(
       formatProgressSegments([{ tools: segment.tools }]),
     );
     const content = normalizeRichMarkdown(
-      stripRichMarkdownHtmlBlocks(segment.text ?? ""),
+      stripRichMarkdownVisualBlocks(segment.text ?? ""),
     );
     return splitRichMarkdownMessage(
       content,
@@ -1787,8 +1789,6 @@ function formatLlmResponse(
   };
 }
 
-const HTML_VISUAL_USAGE_EMOJI = "![🎨](tg://emoji?id=5875206779196935950)";
-
 async function prepareRichMarkdownResponse(
   response: string | FormattedLlmResponse,
   insertImage: (html: string) => Promise<string>,
@@ -1796,20 +1796,8 @@ async function prepareRichMarkdownResponse(
 ): Promise<string> {
   const { richMarkdown, toolFooter } =
     typeof response === "string" ? { richMarkdown: response } : response;
-  let hasHtmlVisual = false;
-  const markdown = await insertHtmlVisuals(
-    richMarkdown,
-    async (html) => {
-      const image = await insertImage(html);
-      hasHtmlVisual = true;
-      return image;
-    },
-    signal,
-  );
-  const footer = [toolFooter, hasHtmlVisual ? HTML_VISUAL_USAGE_EMOJI : ""]
-    .filter(Boolean)
-    .join(" ");
-  return [markdown, footer].filter(Boolean).join("\n\n");
+  const markdown = await insertHtmlVisuals(richMarkdown, insertImage, signal);
+  return [markdown, toolFooter].filter(Boolean).join("\n\n");
 }
 
 function getErrorDetails(error: unknown): string {
@@ -2351,7 +2339,7 @@ async function sendRecoveredErrorResponse(
         ...formattedResponse,
         richMarkdown:
           stripRichMessageImages(
-            stripRichMarkdownHtmlBlocks(formattedResponse.richMarkdown),
+            stripRichMarkdownVisualBlocks(formattedResponse.richMarkdown),
           ) ||
           (formattedResponse.toolFooter ? "" : "I couldn't send that image."),
       },
@@ -2410,6 +2398,86 @@ type HandleChatRequestOptions = {
   linkedBotPost?: boolean;
   onUnhandledError?: () => Promise<void>;
 };
+
+type ActiveChatRequest = {
+  message: TextMessage;
+  topicId?: number;
+  privateTopic: boolean;
+  steering: LlmSteering;
+  signal: AbortSignal;
+  messageIds: Set<number>;
+};
+
+const activeChatRequests = new WeakMap<Database, Set<ActiveChatRequest>>();
+
+function getSteeringTarget(ctx: Context, message: TextMessage) {
+  const reply = getActualReply(message);
+  const topicId = getMessageTopicId(message, reply);
+  const author = getMessageSenderId(message);
+  return [...(activeChatRequests.get(ctx.database) ?? [])]
+    .reverse()
+    .find(
+      (active) =>
+        !active.signal.aborted &&
+        active.message.chat?.id === ctx.chat?.id &&
+        active.topicId === topicId &&
+        ((author !== undefined &&
+          author === getMessageSenderId(active.message) &&
+          Boolean(message.sender_chat) ===
+            Boolean(active.message.sender_chat) &&
+          reply?.message_id === active.message.message_id) ||
+          (ctx.chat?.type === "private" &&
+            active.privateTopic &&
+            topicId !== undefined)),
+    );
+}
+
+async function trySteerChatRequest(
+  ctx: Context,
+  message: TextMessage,
+  text: string,
+  imageMessages: TextMessage[],
+): Promise<boolean> {
+  if (
+    startsWithCommandPrefix(text) ||
+    (!text.trim() && !hasMessagesImageAttachments(imageMessages))
+  )
+    return false;
+  const target = getSteeringTarget(ctx, message);
+  const submit = target?.steering.reserve();
+  if (!target || !submit) return false;
+  try {
+    const inputError = getUserInputLimitError(message);
+    if (inputError) {
+      await ctx.reply(inputError, getReplyDeliveryOptions(message, undefined));
+      return true;
+    }
+    await createCreditCharge(ctx, false)("request");
+    const request = await buildLlmRequestInputs(
+      ctx,
+      await buildThreadRequestMessages(
+        ctx.database,
+        message,
+        text,
+        getReplyContext(message, getActualReply(message)),
+        imageMessages,
+      ),
+      target.signal,
+    );
+    target.messageIds.add(message.message_id);
+    submit(createLlmSteeringInput(request));
+    return true;
+  } catch (error) {
+    if (!target.signal.aborted)
+      await ctx.reply(
+        getErrorDetails(error),
+        getReplyDeliveryOptions(message, undefined),
+      );
+    return true;
+  } finally {
+    submit();
+  }
+}
 
 type SmartForward = {
   ctx: Context;
@@ -2635,6 +2703,23 @@ async function handleChatRequest(
   let pendingProgress: LlmProgressSegment[] = [];
   const usedTools = new Set<ToolName>();
   const taskAbortController = createTaskAbortController(taskKey);
+  const steering = new LlmSteering();
+  const activeRequest: ActiveChatRequest = {
+    message,
+    topicId: getMessageTopicId(message, reply),
+    privateTopic:
+      ctx.chat.type === "private" &&
+      getMessageTopicId(message, reply) !== undefined,
+    steering,
+    signal: taskAbortController.signal,
+    messageIds: new Set(),
+  };
+  let activeRequests = activeChatRequests.get(ctx.database);
+  if (!activeRequests) {
+    activeRequests = new Set();
+    activeChatRequests.set(ctx.database, activeRequests);
+  }
+  activeRequests.add(activeRequest);
 
   try {
     await createTask(ctx.database, {
@@ -2743,6 +2828,7 @@ async function handleChatRequest(
       try {
         return await withTypingAction(ctx, async () => {
           const requestOptions: LlmRequestOptions = {
+            steering,
             toolBudget,
             textCredits: createTextCreditCharge(ctx),
             chargeCredits,
@@ -3016,6 +3102,19 @@ async function handleChatRequest(
     }
     await options.onUnhandledError?.();
   } finally {
+    steering.close();
+    activeRequests.delete(activeRequest);
+    for (const messageId of activeRequest.messageIds) {
+      await saveContinuationMessageThread(
+        ctx,
+        chatId,
+        messageId,
+        threadId,
+        activeAgent,
+        activeAgentName,
+        progressResponseId,
+      );
+    }
     await progressUpdates?.stop();
     if (taskCreated) {
       try {
@@ -3353,7 +3452,7 @@ async function handleGuestChatRequest(
           ...llmResponse,
           response:
             stripRichMessageImages(
-              stripRichMarkdownHtmlBlocks(llmResponse.response ?? ""),
+              stripRichMarkdownVisualBlocks(llmResponse.response ?? ""),
             ) || "I couldn't send that image.",
         };
         delivery = await sendGuestLlmResponse(ctx, message, llmResponse);
@@ -3653,13 +3752,20 @@ chatComposer.on("message", async (ctx, next) => {
   );
   const message = linkedBotPost
     ? incomingMessage
-    : selectNormalMediaGroupMessage(
+    : (mediaGroupMessages.find(
+        (candidate) =>
+          !startsWithCommandPrefix(getMessageText(candidate)) &&
+          (Boolean(getMessageText(candidate)?.trim()) ||
+            hasMessagesImageAttachments(mediaGroupMessages)) &&
+          getSteeringTarget(ctx, candidate),
+      ) ??
+      selectNormalMediaGroupMessage(
         mediaGroupMessages,
         ctx.me.username,
         ctx.me.id,
         privateChat,
         routerEnabled,
-      );
+      ));
 
   if (!message || message.message_id !== incomingMessage.message_id) {
     await next();
@@ -3677,6 +3783,8 @@ chatComposer.on("message", async (ctx, next) => {
       )
     : messageText;
   const reply = getActualReply(message);
+  if (await trySteerChatRequest(ctx, message, text ?? "", mediaGroupMessages))
+    return;
   const replyContext = getReplyContext(message, reply);
   const isDirectBotReply = isDirectReplyToBot(reply, ctx.me.id);
   const addressed = text ? isAddressed(text, ctx.me.username) : false;

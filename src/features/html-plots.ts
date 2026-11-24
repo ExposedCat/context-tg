@@ -1,13 +1,13 @@
 import type { PlotInput } from "./html-plot-engine.ts";
 
-const PLOT = /<tg-plot\b([^>]*)>([\s\S]*?)<\/tg-plot\s*>/gi;
+const PLOT = /<((?:media|tg)-plot)\b([^>]*)>([\s\S]*?)<\/\1\s*>/gi;
 const MAX_PLOTS = 4;
 const PLOT_TIMEOUT_MS = 15_000;
 
 type PlotResult = { svg?: string; error?: string };
 
 /**
- * Replaces `<tg-plot>` elements in a visual with SVG. Expressions run in a
+ * Replaces `<media-plot>` elements in a visual with SVG. Expressions run in a
  * worker that is terminated after a deadline. A failed plot becomes a warning
  * note so the rest of the visual still renders.
  */
@@ -21,7 +21,7 @@ export async function expandHtmlPlots(
 
   const plots = matches
     .slice(0, MAX_PLOTS)
-    .map(([, attributes = "", body = ""]) => ({ attributes, body }));
+    .map(([, , attributes = "", body = ""]) => ({ attributes, body }));
   const results = await runPlotWorker(plots, timeoutMs, signal);
   let index = 0;
   return html.replace(PLOT, () => {

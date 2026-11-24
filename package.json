@@ -30,6 +30,7 @@
     "js-tiktoken": "1.0.21",
     "kysely": "0.28.17",
     "mathjs": "15.3.0",
+    "mermaid": "12.3.0",
     "openai": "6.38.0",
     "playwright-core": "1.65.1",
     "rrule": "^2.8.1",

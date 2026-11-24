@@ -1,19 +1,22 @@
 import { createDebug } from "@grammyjs/debug";
 import { chromium } from "playwright-core";
-import { getRichMarkdownHtmlBlocks } from "../utils/markdown.ts";
+import { getRichMarkdownVisualBlocks } from "../utils/markdown.ts";
 import { expandHtmlPlots } from "./html-plots.ts";
 import { fetchHtmlVisualAsset } from "./html-visual-assets.ts";
 import {
   getHtmlVisualKit,
   HTML_VISUAL_KIT_FONT_PATH,
 } from "./html-visual-kit.ts";
+import { expandMediaCharts } from "./media-charts.ts";
+import { expandMediaMermaid } from "./media-mermaid.ts";
 
 const logError = createDebug("app:html-visuals:error");
 const WIDTH = 720;
 const MAX_HEIGHT = 1600;
+const PIXEL_RATIO = 4;
 const MAX_VISUALS = 4;
 const MAX_HTML_BYTES = 64 * 1024;
-const RENDER_TIMEOUT_MS = 5_000;
+const RENDER_TIMEOUT_MS = 10_000;
 const ASSET_TIMEOUT_MS = 2_500;
 const MAX_ASSETS = 12;
 const ASSET_TYPES = new Set(["image", "stylesheet", "font"]);
@@ -26,7 +29,7 @@ export async function renderHtmlVisual(
 ): Promise<Buffer> {
   signal?.throwIfAborted();
   const kit = await getHtmlVisualKit();
-  html = await expandHtmlPlots(html, signal);
+  html = await expandHtmlPlots(expandMediaCharts(html), signal);
   signal?.throwIfAborted();
   const browser = await chromium.launch({
     timeout: RENDER_TIMEOUT_MS,
@@ -41,13 +44,14 @@ export async function renderHtmlVisual(
 
   try {
     renderSignal.throwIfAborted();
+    html = await expandMediaMermaid(browser, html, kit, renderSignal);
     const context = await browser.newContext({
       colorScheme: "dark",
       javaScriptEnabled: false,
       offline: true,
       serviceWorkers: "block",
       viewport: { width: WIDTH, height: 40 },
-      deviceScaleFactor: 2,
+      deviceScaleFactor: PIXEL_RATIO,
     });
     const page = await context.newPage();
     page.setDefaultTimeout(RENDER_TIMEOUT_MS);
@@ -151,7 +155,9 @@ export async function insertHtmlVisuals(
 ): Promise<string> {
   let result = "";
   let cursor = 0;
-  for (const [index, block] of getRichMarkdownHtmlBlocks(markdown).entries()) {
+  for (const [index, block] of getRichMarkdownVisualBlocks(
+    markdown,
+  ).entries()) {
     signal?.throwIfAborted();
     let image = "*Visual unavailable.*";
     if (
@@ -166,8 +172,22 @@ export async function insertHtmlVisuals(
         logError("Failed to insert HTML visual", { error });
       }
     }
-    result += markdown.slice(cursor, block.start) + image;
+    result += markdown.slice(cursor, block.start);
+    if (block.graphic && result.trim()) {
+      result = result.replace(/[ \t]+$/, "");
+      if (!/\r?\n[ \t]*\r?\n$/.test(result)) {
+        result += result.endsWith("\n") ? "\n" : "\n\n";
+      }
+    }
+    result += image;
     cursor = block.end;
+    if (block.graphic && cursor < markdown.length) {
+      const next = markdown.slice(cursor);
+      if (!/^[ \t]*\r?\n[ \t]*\r?\n/.test(next)) {
+        result += /^[ \t]*\r?\n/.test(next) ? "\n" : "\n\n";
+      }
+      cursor += /^[ \t]*/.exec(next)?.[0].length ?? 0;
+    }
   }
   return result + markdown.slice(cursor);
 }

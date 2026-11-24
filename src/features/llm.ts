@@ -46,6 +46,11 @@ import {
   withLlmFallback,
 } from "./llm-provider.ts";
 import {
+  type LlmSteering,
+  streamSteerableResponse,
+  usesNativeSteering,
+} from "./llm-steering.ts";
+import {
   executeGetMessageContext,
   executeLike,
   executeReadLastMessages,
@@ -86,6 +91,7 @@ import type {
 } from "./telemetry.ts";
 import { createLlmCallTiming } from "./telemetry.ts";
 import { TextCreditMeter } from "./text-credit-meter.ts";
+import { countTextTokens } from "./text-tokens.ts";
 import {
   buildTrollingModeInstructions,
   getTrollingModeInstructions,
@@ -180,6 +186,7 @@ export type LlmProgress = {
 };
 
 export type LlmRequestOptions = {
+  steering?: LlmSteering;
   textCredits?: TextCreditCharge;
   toolBudget?: LlmToolBudget;
   onStreamEvent?: (
@@ -323,6 +330,7 @@ type LlmRequestState = {
   lastResponseId?: string;
   replyMessageId?: number | null;
   inputItems: ResponseInputItem[];
+  contextTokens?: number;
   memoryState?: ConversationMemory;
   receivedResponse: boolean;
   sentImmediateContentFilterWarning: boolean;
@@ -435,16 +443,25 @@ async function createModelResponseAttempt(
   textCredits?: TextCreditCharge,
   preservePartial = false,
   creditWrapUp = false,
+  steering?: LlmSteering,
+  onContinuation?: (
+    response: ApiResponse,
+    input: ResponseInputItem[],
+  ) => Promise<void>,
 ): Promise<ApiResponse> {
   // The SDK timeout only covers response headers. Also bound the wait for
   // each model event and cap the complete model call at five minutes.
   // Local accounting and delivery callbacks do not count as model inactivity.
   const deadline = new AbortController();
-  const callTimeout = setTimeout(
-    () =>
-      deadline.abort(new DOMException("Model call timed out", "TimeoutError")),
-    MODEL_CALL_TIMEOUT_MS,
-  );
+  const startCallTimeout = () =>
+    setTimeout(
+      () =>
+        deadline.abort(
+          new DOMException("Model call timed out", "TimeoutError"),
+        ),
+      MODEL_CALL_TIMEOUT_MS,
+    );
+  let callTimeout = startCallTimeout();
   const inactivity = new AbortController();
   function waitForProgress() {
     return setTimeout(
@@ -461,7 +478,7 @@ async function createModelResponseAttempt(
     inactivity.signal,
     ...(signal ? [signal] : []),
   ]);
-  const textMeter = new TextCreditMeter();
+  let textMeter = new TextCreditMeter();
   let abortStream: (() => void) | undefined;
   let receivedEvent = false;
   let billedTokens = 0;
@@ -474,11 +491,32 @@ async function createModelResponseAttempt(
     };
     let response: ApiResponse;
     if (APP_ENV.LLM_STREAMING) {
-      const stream = await client.responses.create(
-        { ...modelParams, stream: true },
-        { signal: requestSignal },
-      );
-      abortStream = () => stream.controller.abort();
+      let stream: AsyncIterable<OpenAI.Responses.ResponseStreamEvent>;
+      if (steering && usesNativeSteering(params.model ?? "", steering)) {
+        stream = streamSteerableResponse(
+          client,
+          modelParams,
+          steering,
+          requestSignal,
+          async (previous, input) => {
+            textMeter.complete(previous);
+            await flushTextCredits(true);
+            await onContinuation?.(previous, input);
+            textMeter = new TextCreditMeter();
+            billedTokens = 0;
+            lastCharge = performance.now();
+            clearTimeout(callTimeout);
+            callTimeout = startCallTimeout();
+          },
+        );
+      } else {
+        const httpStream = await client.responses.create(
+          { ...modelParams, stream: true },
+          { signal: requestSignal },
+        );
+        abortStream = () => httpStream.controller.abort();
+        stream = httpStream;
+      }
       let terminalResponse: ApiResponse | undefined;
       for await (const event of stream) {
         clearTimeout(timeout);
@@ -497,7 +535,7 @@ async function createModelResponseAttempt(
           !(await flushTextCredits(terminalResponse !== undefined)) &&
           !creditWrapUp
         ) {
-          abortStream();
+          abortStream?.();
           const checkpoint = textMeter.limitedResponse(textMeter.tokens, "");
           creditLimitedResponses.add(checkpoint);
           return checkpoint;
@@ -866,6 +904,12 @@ function createInputMessage(
 
 function createInputMessages(request: LlmRequestInput): LlmApiInput {
   return (Array.isArray(request) ? request : [request]).map(createInputMessage);
+}
+
+export function createLlmSteeringInput(
+  request: LlmRequestInput,
+): ResponseInputItem[] {
+  return createInputMessages(request);
 }
 
 // Locally synthesized checkpoint messages (text-credit/tool-limit notices) get
@@ -1765,10 +1809,12 @@ async function saveFailedResponseInputCheckpoint(
   const inputItems = closePendingToolCalls([
     ...state.inputItems,
     ...cloneResponseInputItems(input),
+    ...((await options.steering?.take()) ?? []),
   ]);
 
   state.inputItems = inputItems;
   state.lastResponseId = responseId;
+  state.contextTokens = undefined;
   await saveResponseInput(
     responseId,
     previousResponseId,
@@ -1964,6 +2010,9 @@ async function recordResponse(
 
   state.inputItems = inputItems;
   state.lastResponseId = responseId;
+  state.contextTokens = response.usage
+    ? response.usage.input_tokens + response.usage.output_tokens
+    : undefined;
   await saveResponseInput(
     responseId,
     previousResponseId,
@@ -1991,6 +2040,11 @@ async function createLlmResponse(
   textCredits?: TextCreditCharge,
   creditWrapUp = false,
   calendarMcp?: CalendarMcpTools,
+  steering?: LlmSteering,
+  onContinuation?: (
+    response: ApiResponse,
+    input: ResponseInputItem[],
+  ) => Promise<void>,
 ): Promise<ApiResponse> {
   throwIfAborted(signal);
   const toolDefinitions = getToolDefinitions(tools, financeMcp, calendarMcp);
@@ -2008,12 +2062,16 @@ async function createLlmResponse(
       tools: toolDefinitions.length > 0 ? toolDefinitions : undefined,
       tool_choice: toolDefinitions.length > 0 ? "auto" : undefined,
       store: false,
-      context_management: [
-        {
-          type: "compaction",
-          compact_threshold: APP_ENV.LLM_COMPACT_THRESHOLD,
-        },
-      ],
+      context_management:
+        APP_ENV.LLM_STREAMING &&
+        usesNativeSteering(getConfiguredDeploymentName(model), steering)
+          ? undefined
+          : [
+              {
+                type: "compaction",
+                compact_threshold: APP_ENV.LLM_COMPACT_THRESHOLD,
+              },
+            ],
       ...(model.withReasoning
         ? { include: ["reasoning.encrypted_content"] as const }
         : {}),
@@ -2027,6 +2085,8 @@ async function createLlmResponse(
     textCredits,
     true,
     creditWrapUp,
+    steering,
+    onContinuation,
   );
 }
 
@@ -2044,7 +2104,7 @@ async function createLlmResponseWithRetries(
   },
 ): Promise<ApiResponse> {
   let lastError: unknown;
-  let currentInput = input;
+  let currentInput = [...input, ...((await options.steering?.take()) ?? [])];
   let currentResponseId = responseId;
   let retryAttempts = 0;
   let emptyResponseRetries = 0;
@@ -2058,8 +2118,47 @@ async function createLlmResponseWithRetries(
     if (options.textCredits && !(await options.textCredits.hasRemaining()))
       state.creditExhausted = true;
     const creditWrapUp = state.creditExhausted === true;
-    if (creditWrapUp) state.creditWrapUpStarted = true;
+    if (creditWrapUp) {
+      state.creditWrapUpStarted = true;
+      options.steering?.close();
+    }
     try {
+      // Native steering cannot use automatic compaction. Compact between
+      // generations and retain the opaque window in the normal local history.
+      if (
+        APP_ENV.LLM_STREAMING &&
+        usesNativeSteering(
+          getConfiguredDeploymentName(model),
+          options.steering,
+        ) &&
+        state.inputItems.length > 0 &&
+        (state.contextTokens ??
+          countTextTokens(JSON.stringify(state.inputItems)) +
+            countTextTokens(instructions)) +
+          countTextTokens(JSON.stringify(currentInput)) >=
+          APP_ENV.LLM_COMPACT_THRESHOLD
+      ) {
+        const compacted = await client.responses.compact(
+          {
+            model: getConfiguredDeploymentName(model),
+            instructions,
+            input: [...state.inputItems, ...currentInput].map(
+              normalizeItemForRequest,
+            ),
+          },
+          { signal: options.signal },
+        );
+        state.inputItems = [];
+        state.contextTokens = undefined;
+        currentInput = compacted.output as ResponseInputItem[];
+        currentResponseId = await saveFailedResponseInputCheckpoint(
+          currentInput,
+          currentResponseId,
+          state,
+          options,
+        );
+        currentInput = [];
+      }
       const response = await createLlmResponse(
         client,
         currentInput,
@@ -2082,6 +2181,23 @@ async function createLlmResponseWithRetries(
         creditWrapUp || state.toolBudget.exhausted
           ? undefined
           : state.calendarMcp,
+        options.steering,
+        async (previous, steeringInput) => {
+          recordResponseDebug(previous, state, model, settings);
+          currentResponseId = await recordResponse(
+            previous,
+            currentInput,
+            state,
+            currentResponseId,
+            options,
+          );
+          currentInput = steeringInput;
+          await options.onProgress?.({
+            responseId: currentResponseId,
+            toolCallCount: state.debug.tool_calls.length,
+            segments: getResponseProgressSegments(previous, true),
+          });
+        },
       );
       const creditLimited = creditLimitedResponses.has(response);
       if (creditLimited) state.creditExhausted = true;
@@ -2089,9 +2205,15 @@ async function createLlmResponseWithRetries(
       // Exhaustion can interrupt reasoning before any visible text exists.
       // An empty local checkpoint still needs its final turn, not an empty-
       // response retry.
-      const responseError = creditLimited
+      let responseError = creditLimited
         ? undefined
         : getResponseError(response);
+      if (
+        responseError &&
+        isEmptyResponseError(responseError) &&
+        options.steering?.peek().length
+      )
+        responseError = undefined;
 
       if (responseError) {
         if (responseError.kind === "token_limit") {
@@ -2449,6 +2571,21 @@ async function resolveFunctionToolCalls(
     }
 
     if (functionCalls.length === 0) {
+      const steeringInput = await options.steering?.take(true);
+      if (steeringInput?.length) {
+        response = await createLlmResponseWithRetries(
+          client,
+          steeringInput,
+          tools,
+          state.lastResponseId,
+          state,
+          options,
+          model,
+          instructions,
+          settings,
+        );
+        continue;
+      }
       const segments = getResponseProgressSegments(response, true);
       if (segments.length > 0) {
         await options.onProgress?.({
@@ -2678,6 +2815,7 @@ async function requestLlmWithInstructions(
     status = state.hadToolErrors ? "with_errors" : "success";
     return result;
   } finally {
+    options.steering?.close();
     try {
       const closed = await Promise.allSettled([
         state.financeMcp?.close(),

@@ -1,7 +1,7 @@
 import { all, create, type EvalFunction, isMatrix } from "mathjs";
 
 /**
- * Renders `<tg-plot>` bodies to kit-styled SVG. Runs only inside the bounded
+ * Renders `<media-plot>` bodies to kit-styled SVG. Runs only inside the bounded
  * plot worker because user expressions can be arbitrarily expensive.
  */
 

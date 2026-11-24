@@ -20,7 +20,14 @@ test("agents receive formatting and memory guidance for their capabilities", () 
     'align="right"',
     "<tg-math>",
     "<tg-math-block>",
-    "standalone <html> blocks",
+    "<media-chart viewBox=",
+    "<media-plot>",
+    "<media-flow>",
+    "<media-mermaid>",
+    "<media-intervals unit=",
+    "<media-stacked-bars unit=",
+    "<media-timebands>",
+    "Consecutive graphic tags render as one image.",
   ];
 
   for (const agent of [normalAgent, guestAgent, trollAgent]) {
