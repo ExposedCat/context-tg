@@ -1,6 +1,7 @@
 .env
 secrets/
 node_modules/
+/work/
 *.db
 *.sqlite
 *.sqlite-*

@@ -4,5 +4,6 @@ secrets
 .vscode
 data
 node_modules
+work/
 *.sqlite
 *.sqlite-*
