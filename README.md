@@ -780,6 +780,15 @@ Prose and native Telegram blocks between tags start a new image group. Chromium
 captures the PNG with JavaScript disabled using the bundled component kit and fonts.
 The bot generates a 2,880-pixel-wide PNG before Telegram processes the inline photo.
 
+Use `<media-html-freeform>…</media-html-freeform>` in every explanation to
+show the idea in a static visual. It accepts HTML, CSS, and inline SVG with a
+layout of your choice. A `<style>` block applies to that canvas only. The canvas
+inherits design tokens from `src/features/html-visual-kit.css`, including
+palette and background colors, font families, type sizes, line heights,
+borders, corner radii, and spacing. Use the kit palette and add colors only
+when they communicate distinctions the palette cannot show. Put specialized
+media tags alongside the canvas to combine them in the same image.
+
 Use `<media-mermaid>…</media-mermaid>` for Mermaid source, including
 flowcharts and sequence diagrams. The renderer parses the source on a separate
 offline page and applies the kit theme and typography. Put the source directly

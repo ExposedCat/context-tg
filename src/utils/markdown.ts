@@ -10,9 +10,15 @@ const GRAPHIC_ELEMENTS = {
   plot: ["media-plot", ""],
 } as const;
 
-const DATA_GRAPHICS = ["mermaid", "intervals", "stacked-bars", "timebands"];
+const MEDIA_ONLY_GRAPHICS = [
+  "html-freeform",
+  "mermaid",
+  "intervals",
+  "stacked-bars",
+  "timebands",
+];
 const KIT_GRAPHICS = Object.keys(GRAPHIC_ELEMENTS).join("|");
-const GRAPHIC_TAG = `(?:media-(?:${KIT_GRAPHICS}|${DATA_GRAPHICS.join("|")})|tg-(?:${KIT_GRAPHICS}))`;
+const GRAPHIC_TAG = `(?:media-(?:${KIT_GRAPHICS}|${MEDIA_ONLY_GRAPHICS.join("|")})|tg-(?:${KIT_GRAPHICS}))`;
 const GRAPHIC_OPEN = `<${GRAPHIC_TAG}(?=[\\s>]|$)`;
 
 const MARKDOWN_TOKENS = new RegExp(
@@ -51,6 +57,19 @@ type VisualBlock = {
 };
 
 function graphicHtml(name: string, attributes: string, body: string): string {
+  if (name === "media-html-freeform") {
+    // Scope the canvas CSS to its contents while inheriting the kit variables.
+    return `<section><template shadowrootmode="open">
+<style>
+  :host { color: var(--ink); }
+  *, *::before, *::after { box-sizing: border-box; }
+  :where(h1, h2, h3, h4, p, figure) { margin: 0; }
+  :where(img, svg) { max-width: 100%; }
+</style>
+${body}
+</template></section>`;
+  }
+
   const suffix = name.replace(/^(?:media|tg)-/, "");
   const [element, className] = GRAPHIC_ELEMENTS[
     suffix as keyof typeof GRAPHIC_ELEMENTS

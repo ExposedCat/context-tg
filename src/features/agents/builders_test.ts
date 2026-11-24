@@ -20,6 +20,7 @@ test("agents receive formatting and memory guidance for their capabilities", () 
     'align="right"',
     "<tg-math>",
     "<tg-math-block>",
+    "<media-html-freeform>…</media-html-freeform> canvas in every explanation",
     "<media-chart viewBox=",
     "<media-plot>",
     "<media-flow>",

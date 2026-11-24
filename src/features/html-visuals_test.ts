@@ -106,6 +106,31 @@ test("incomplete graphic tags stay out of progress and do not swallow a later gr
   deepStrictEqual(rendered, [plot]);
 });
 
+test("freeform canvases keep their own styles and render alongside other media tags", async () => {
+  const body =
+    '<style>.step{color:var(--s2)}</style><div class="step">Step 1</div>';
+  const canvas = `<media-html-freeform>${body}</media-html-freeform>`;
+  const flow = "<media-flow><li><b>Step 2</b></li></media-flow>";
+  const input = `**Intro**\n\n${canvas}\n\n${flow}\n\n[Source](https://example.com)`;
+  const rendered: string[] = [];
+
+  strictEqual(
+    stripRichMarkdownVisualBlocks(input),
+    "**Intro**\n\n\n\n[Source](https://example.com)",
+  );
+  strictEqual(
+    await insertHtmlVisuals(input, async (html) => {
+      rendered.push(html);
+      return "![](tg://photo?id=combined)";
+    }),
+    "**Intro**\n\n![](tg://photo?id=combined)\n\n[Source](https://example.com)",
+  );
+  strictEqual(rendered.length, 1);
+  ok(rendered[0]?.includes('<template shadowrootmode="open">'));
+  ok(rendered[0]?.includes(`${body}\n</template></section>`));
+  ok(rendered[0]?.endsWith('<ol class="v-flow"><li><b>Step 2</b></li></ol>'));
+});
+
 test("new media tags pass their source to the same image group", async () => {
   const graphics = [
     "<media-mermaid>flowchart TD\nA --> B</media-mermaid>",
