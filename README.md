@@ -787,8 +787,10 @@ Graphics in one image flow through six columns. A tag takes the full width
 unless it sets `size="half"`, `size="third"`, or `size="two-thirds"`; sized
 graphics share a row and stretch to the row's height.
 
-Use `<media-html-freeform>…</media-html-freeform>` in every explanation to
-show the idea in a static visual. It accepts HTML, CSS, and inline SVG with a
+Use `<media-html-freeform>…</media-html-freeform>` when an explanation has
+structure prose carries poorly, such as a mechanism, a system of connected
+parts, or messages between parties. Replies without that structure, such as
+news recaps, fact-checks, and simple contrasts, get no visual. It accepts HTML, CSS, and inline SVG with a
 layout of your choice. A `<style>` block applies to that canvas only. The canvas
 inherits design tokens from `src/features/html-visual-kit.css`, including
 palette and background colors, font families, type sizes, line heights,

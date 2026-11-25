@@ -11,9 +11,12 @@ test("agents receive formatting and memory guidance for their capabilities", () 
     "<figcaption>",
   ];
   const richRespondingGuidance = [
-    "Find a visual representation that makes the details cleaner and easier to understand than prose, rather than migrating text into a visual block.",
-    "A visual must earn its pixels with 2D spatial structure",
-    "Let the visual carry the explanation instead of writing multi-paragraph prose.",
+    "Find a representation that makes the details cleaner than prose, rather than migrating text into a visual block.",
+    "It earns its pixels with 2D spatial structure",
+    "Decide on a visual by asking whether the answer has a shape",
+    "write prose with no visual",
+    "never side-by-side text boxes",
+    "When you include a visual, let it carry the explanation.",
     "Always use <media-*> tags for graphics, diagrams, schematics, and charts",
   ];
   const richSyntax = [
