@@ -10,6 +10,11 @@ test("agents receive formatting and memory guidance for their capabilities", () 
     "<tg-slideshow>",
     "<figcaption>",
   ];
+  const richRespondingGuidance = [
+    "Include a concise visual (<media-html-freeform> or a matching specialized <media-*> tag) in every explanation",
+    "Let the visual carry the explanation instead of writing multi-paragraph prose.",
+    "Always use <media-*> tags for graphics, diagrams, schematics, and charts",
+  ];
   const richSyntax = [
     "<br>",
     "||spoiler||",
@@ -20,7 +25,8 @@ test("agents receive formatting and memory guidance for their capabilities", () 
     'align="right"',
     "<tg-math>",
     "<tg-math-block>",
-    "<media-html-freeform>…</media-html-freeform> canvas in every explanation",
+    "<media-html-freeform>…</media-html-freeform>",
+    "<media-html-freeform><style>",
     "<media-chart viewBox=",
     "<media-plot>",
     "<media-flow>",
@@ -34,12 +40,28 @@ test("agents receive formatting and memory guidance for their capabilities", () 
   for (const agent of [normalAgent, guestAgent, trollAgent]) {
     const instructions = agent.buildInstructions(-1001234567890);
     const richFormatting = agent.id !== "troll";
+    const respondingSection =
+      instructions.match(/<responding>[\s\S]*?<\/responding>/)?.[0] ?? "";
+    const formattingSection =
+      instructions.match(/<formatting>[\s\S]*?<\/formatting>/)?.[0] ?? "";
     for (const syntax of mediaSyntax) {
-      ok(instructions.includes(syntax), `${agent.id}: missing ${syntax}`);
+      ok(formattingSection.includes(syntax), `${agent.id}: missing ${syntax}`);
+    }
+    for (const guidance of richRespondingGuidance) {
+      strictEqual(
+        respondingSection.includes(guidance),
+        richFormatting,
+        `${agent.id} responding: ${guidance}`,
+      );
+      strictEqual(
+        formattingSection.includes(guidance),
+        false,
+        `${agent.id} formatting should not contain behavioral rule: ${guidance}`,
+      );
     }
     for (const syntax of richSyntax) {
       strictEqual(
-        instructions.includes(syntax),
+        formattingSection.includes(syntax),
         richFormatting,
         `${agent.id}: ${syntax}`,
       );

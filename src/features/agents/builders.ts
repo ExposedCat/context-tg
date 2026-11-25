@@ -36,45 +36,46 @@ export function buildConflictInstructions(): string {
 }
 
 const MEDIA_FORMATTING_RULES = [
-  'Embed public media with ![](URL "Optional caption"). Use <figure> with <figcaption> and <cite> to credit a known source.',
-  "Reuse saved images by copying the exact ![](tg://photo?id=IMAGE_ID) or ![](tg://document?id=IMAGE_ID) reference from the context or tool result.",
-  "For multiple images, prefer <tg-collage> (all visible) or <tg-slideshow> (carousel). Put a blank line around each item. Add <figcaption> for a shared caption or credit.",
+  'Public media: ![](URL "Optional caption"). Credit a known source with <figure> containing <figcaption> and <cite>.',
+  "Saved images: copy the exact ![](tg://photo?id=IMAGE_ID) or ![](tg://document?id=IMAGE_ID) reference from the context or tool result.",
+  "Multiple images: <tg-collage> (all visible) or <tg-slideshow> (carousel), with a blank line around each item and an optional <figcaption> for a shared caption or credit.",
+];
+
+const RICH_RESPONDING_RULES = [
+  "Include a concise visual (<media-html-freeform> or a matching specialized <media-*> tag) in every explanation, even a short one—especially for how something works, architecture, flows, or multi-part relationships. Use alignment, grouping, connectors, or shared colors to show what changes, connects, or repeats, with short labels.",
+  "Let the visual carry the explanation instead of writing multi-paragraph prose. Keep surrounding Markdown to a few short sentences for the main takeaway, caveats, or links, and do not repeat in prose what the graphic already shows.",
+  "Always use <media-*> tags for graphics, diagrams, schematics, and charts; never imitate them with plain text, ASCII art, or a code block. Combine a freeform canvas with specialized media tags when both help.",
+  "Use <blockquote expandable> for long quotes, <details> for collapsible sections, and <tg-collage> or <tg-slideshow> when sharing multiple images.",
 ];
 
 const RICH_FORMATTING_RULES = [
-  "Use Telegram Rich Markdown with blank lines between paragraphs and around blocks. Use <br> for an explicit line break within a paragraph.",
-  "Use standard Markdown for emphasis, headings, fenced code, links, quotes, and footnotes. Use - for unordered lists, - [ ] and - [x] for tasks, ==highlight==, ||spoiler||, and [name](tg://user?id=USER_ID) for ID-based mentions.",
-  "Use ![label](tg://time?unix=SECONDS&format=wDT) for a localized timestamp.",
-  "Use <blockquote expandable> for long quotes and <details><summary>Title</summary> with a blank line before the body for collapsible sections.",
-  'Use <table bordered striped> with <tr>, <th>, and <td>. Set align="left" on descriptive cells and align="right" on numeric cells and their headers. Use HTML inline formatting inside cells. Add compact only if requested.',
-  "Use <tg-math> for inline LaTeX and <tg-math-block> or a fenced math block for display LaTeX. Escape & and < inside math tags. Dollar signs in prose remain literal.",
-  "Include a <media-html-freeform>…</media-html-freeform> canvas in every explanation, even a short one. Choose any layout that helps the reader see the idea. Use alignment, grouping, connectors, or shared colors to show what changes, connects, or repeats. Use short labels and let the graphic carry the explanation. Always use media tags for graphics and schematics. Never imitate them with plain text or a code block.",
-  "Inside <media-html-freeform>, use static HTML, CSS Grid, Flexbox, positioned elements, or inline SVG. Write inline styles or a <style> block scoped to that canvas. Use the kit colors via var(): --bg, --paper, --paper-2, --ink, --ink-2, --ink-3, --accent, --accent-bg, --s1 through --s5, and --warn. Add a new color only when it helps convey a distinction the palette cannot show.",
-  "Prefer the kit's other CSS variables: --sans, --serif, --mono, --text-sm, --text-base, --text-lg, --text-xl, --text-display, --leading-tight, --leading-body, --rule, --rule-2, --border, --border-strong, --radius-sm/md/lg, and --space-1 through --space-6. Keep labels large enough to read on a phone and leave space between arrows and borders.",
-  "Use media tags as blocks in the same reply. Close every tag and leave blank lines around it. Place specialized media tags beside the freeform canvas. Consecutive graphic tags render as one image. Keep links and any brief supporting prose in Markdown. Use at most four image groups, each up to 720 × 1600 CSS pixels including padding.",
-  "For the predefined tags below, use the kit classes and variables in the examples. All graphics are static. Skip scripts, forms, frames, and animations.",
-  'Compare magnitudes across named categories with <media-bars style="--label:90px"><div class="is-accent"><dt>Name</dt><dd><span class="v-bar"><i style="--v:100%"></i></span><span class="v-val">1,204</span></dd></div>…</media-bars>. --v is the value as a percentage of the largest value.',
-  'Compare values across discrete periods or buckets with <media-columns style="--h:140px"><div style="--v:52%" data-x="Mon"></div><div class="is-accent" style="--v:96%" data-x="Thu" data-y="2,310"></div>…</media-columns>. data-x is the axis label. Use data-y only for the few values worth labeling.',
-  'Show shares of one whole with <media-composition><div class="v-split"><i class="c1" style="--v:58%"></i><i class="c2" style="--v:21%"></i><i class="c3"></i></div><div class="v-legend"><span class="c1">Text<b>58%</b></span>…</div></media-composition>. The last segment fills the remainder.',
-  "Series colors: .c1 to .c5 (clay, sky, ochre, sage, heather), .c0 (neutral), and .ca (accent). Use them in order, keep each entity's color across visuals, and group anything beyond five series as Other. When color distinguishes series, identify them with a legend or direct labels.",
-  'Show trends across ordered observations with <media-chart viewBox="0 0 640 180">…</media-chart>, <line class="grid"> gridlines, <line class="base"> baseline, <text class="tick"> axis labels, and one <g class="c1"> per series containing <path class="area"> (optional), <polyline class="line">, <circle class="dot" r="4"> at the end, and <text class="lbl"> naming the series. Use one y scale per chart. Annotate with <line class="guide"> and <text class="note">.',
-  'Math plots: Put functions, curves, and meshes inside <media-plot>…</media-plot>. The bot evaluates it with math.js and draws it in the kit style. Write one statement per line in math.js syntax with explicit operators, and use # for comments: constants (a = 2), functions (f(x) = exp(-x^2)), point-valued functions (w(u, v) = (u + v^2, v)), function graphs (y = a * sin(x); a line starting with y = is always a graph), parametric curves ((cos(t), sin(t)) for t in 0..2pi), meshes that draw both families of grid lines through a point-valued function (w(u, v) for u in 0..1 by 0.05, v in -1..1 by 0.05), and points ((1, 2)). Prefix a statement with "Label": to name it in the legend or beside a point. Series colors follow statement order. Attributes: x="-5..5" and y="-2..2" set the view (automatic otherwise), equal keeps x and y units the same, height sets the height in pixels, and the default width is 648. Use at most four plots per image.',
-  'Show intensity across two dimensions with <media-heatmap><div class="v-heat" style="--cols:7"><i style="--v:.4"></i>…</div><div class="v-scale"><span>0</span><span>420 / day</span></div></media-heatmap>.',
-  'Show one value against a known goal or limit with <media-meter><div><span>Label</span><b>72%</b></div><div class="v-track"><i style="--v:72%"></i></div></media-meter>. Mark a value against an interval with <media-range style="--lo:30%;--hi:65%;--at:42%"><div class="band"></div><div class="mark"></div><span style="--x:0%">0</span><span style="--x:30%">6</span>…</media-range>.',
-  'For handoffs in a sequence, use <media-flow><li><b>Short action</b></li>…</media-flow>. Add class="is-vertical" for narrow layouts or steps with a short <p> for details. Five or more steps stack automatically. Use .is-done and .is-current to indicate actual progress.',
-  "Use <media-mermaid>…</media-mermaid> for branching decisions, hierarchies, and message sequences. Put Mermaid source directly in the tag, without code fences, frontmatter, or configuration directives. Use flowchart TD for branching diagrams and sequenceDiagram for participants exchanging messages. Keep labels short and split dense diagrams.",
-  'Compare numeric intervals on a shared axis with <media-intervals unit="s">…</media-intervals>. Each line is Label | low | high.',
-  'Compare totals and their breakdowns with <media-stacked-bars unit="s">…</media-stacked-bars>. Start with a header such as Label | Model | Tools | Render. Each following line contains a label and one nonnegative value per series, such as Fast | 5 | 1 | 1.',
-  "Show durations or overlap on a date axis with <media-timebands>…</media-timebands>. Each line is Label | YYYY-MM-DD | YYYY-MM-DD.",
-  "Use only labels and legends needed to interpret the graphic. Keep a consistent layout across comparable graphics and reserve .is-accent for the most important item.",
+  "Telegram Rich Markdown: separate paragraphs and blocks with blank lines. Use <br> for an explicit line break within a paragraph.",
+  "Standard Markdown: emphasis, headings, fenced code, links, quotes, footnotes, - for unordered lists, - [ ] and - [x] for tasks, ==highlight==, ||spoiler||, and [name](tg://user?id=USER_ID) for ID-based mentions.",
+  "Localized timestamp: ![label](tg://time?unix=SECONDS&format=wDT).",
+  "Expandable quotes and collapsible sections: <blockquote expandable>…</blockquote> and <details><summary>Title</summary> with a blank line before the body.",
+  'Tables: <table bordered striped> with <tr>, <th>, and <td>. Set align="left" on descriptive cells and align="right" on numeric cells and their headers. Use HTML inline formatting inside cells. Add compact only if requested.',
+  "Math: <tg-math> for inline LaTeX and <tg-math-block> or a fenced math block for display LaTeX. Escape & and < inside math tags. Dollar signs in prose remain literal.",
+  "Media visual blocks: place <media-*> tags as blocks in the same reply, close every tag, and leave blank lines around them. Consecutive graphic tags render as one image. At most four image groups per reply, each up to 720 × 1600 CSS pixels including padding. All graphics are static (no scripts, forms, frames, or animations).",
+  'Freeform visual canvas (<media-html-freeform>…</media-html-freeform>): static HTML, CSS Grid, Flexbox, positioned elements, or inline SVG with inline styles or a scoped <style> block. Inherited kit colors via var(): --bg, --paper, --paper-2, --ink, --ink-2, --ink-3, --accent, --accent-bg, --s1 through --s5, --warn (add custom colors only when needed for a distinction). Inherited layout and type vars: --sans, --serif, --mono, --text-sm, --text-base, --text-lg, --text-xl, --text-display, --leading-tight, --leading-body, --rule, --rule-2, --border, --border-strong, --radius-sm/md/lg, --space-1 through --space-6. Keep labels readable on a phone and leave space between arrows and borders. Example: <media-html-freeform><style>.g{display:grid;grid-template-columns:1fr auto 1fr;gap:var(--space-3);align-items:center}.b{padding:var(--space-3);background:var(--paper);border:var(--border-strong);border-radius:var(--radius-md)}.b b{display:block;color:var(--ink)}.b span{font-size:var(--text-sm);color:var(--ink-2)}.a{color:var(--accent);font:500 var(--text-sm) var(--mono)}</style><div class="g"><div class="b"><b>Client</b><span>Sends request</span></div><div class="a">→ TCP →</div><div class="b"><b>Server</b><span>Handles state</span></div></div></media-html-freeform>.',
+  "Predefined media tags: use the kit classes and variables shown below. Keep labels and legends minimal, keep layouts consistent across comparable graphics, and reserve .is-accent for the most important item. Series colors: .c1 to .c5 (clay, sky, ochre, sage, heather), .c0 (neutral), .ca (accent); use in order, keep each entity's color consistent, group extras as Other, and identify color-coded series with a legend or direct labels.",
+  'Horizontal bars (magnitudes across named categories): <media-bars style="--label:90px"><div class="is-accent"><dt>Name</dt><dd><span class="v-bar"><i style="--v:100%"></i></span><span class="v-val">1,204</span></dd></div>…</media-bars>. --v is the percentage of the largest value.',
+  'Columns (values across discrete periods or buckets): <media-columns style="--h:140px"><div style="--v:52%" data-x="Mon"></div><div class="is-accent" style="--v:96%" data-x="Thu" data-y="2,310"></div>…</media-columns>. data-x is the axis label; data-y labels key values.',
+  'Composition (shares of one whole): <media-composition><div class="v-split"><i class="c1" style="--v:58%"></i><i class="c2" style="--v:21%"></i><i class="c3"></i></div><div class="v-legend"><span class="c1">Text<b>58%</b></span>…</div></media-composition>. The last segment fills the remainder.',
+  'Line/area chart (trends across ordered observations): <media-chart viewBox="0 0 640 180">…</media-chart> with <line class="grid">, <line class="base">, <text class="tick">, and one <g class="c1"> per series containing optional <path class="area">, <polyline class="line">, <circle class="dot" r="4"> at the end, and <text class="lbl">. One y scale per chart; annotate with <line class="guide"> and <text class="note">.',
+  'Math plots (<media-plot>…</media-plot>): evaluated with math.js in the kit style, one statement per line with explicit operators and # comments: constants (a = 2), functions (f(x) = exp(-x^2)), point-valued functions (w(u, v) = (u + v^2, v)), function graphs (y = a * sin(x); lines starting with y = always plot a graph), parametric curves ((cos(t), sin(t)) for t in 0..2pi), meshes (w(u, v) for u in 0..1 by 0.05, v in -1..1 by 0.05), and points ((1, 2)). Prefix with "Label": for legends or point labels. Series colors follow statement order. Attributes: x="-5..5", y="-2..2" (auto otherwise), equal, height (px; default width 648). Max four plots per image.',
+  'Heatmap (2D intensity): <media-heatmap><div class="v-heat" style="--cols:7"><i style="--v:.4"></i>…</div><div class="v-scale"><span>0</span><span>420 / day</span></div></media-heatmap>.',
+  'Meter (value vs goal/limit): <media-meter><div><span>Label</span><b>72%</b></div><div class="v-track"><i style="--v:72%"></i></div></media-meter>. Range (value vs interval): <media-range style="--lo:30%;--hi:65%;--at:42%"><div class="band"></div><div class="mark"></div><span style="--x:0%">0</span><span style="--x:30%">6</span>…</media-range>.',
+  'Sequence flow (handoffs): <media-flow><li><b>Short action</b></li>…</media-flow>. Add class="is-vertical" for narrow layouts or steps with a short <p>; 5+ steps stack automatically. .is-done and .is-current mark actual progress.',
+  "Mermaid (branching decisions, hierarchies, message sequences): <media-mermaid>…</media-mermaid> with raw Mermaid source (no code fences, frontmatter, or config directives). Supports flowchart TD and sequenceDiagram; keep labels short and split dense diagrams.",
+  'Intervals (numeric ranges on a shared axis): <media-intervals unit="s">…</media-intervals> with lines formatted as Label | low | high.',
+  'Stacked bars (totals and breakdowns): <media-stacked-bars unit="s">…</media-stacked-bars> starting with a header (Label | Model | Tools | Render) followed by nonnegative rows (Fast | 5 | 1 | 1).',
+  "Timebands (durations/overlap on a date axis): <media-timebands>…</media-timebands> with lines formatted as Label | YYYY-MM-DD | YYYY-MM-DD.",
 ];
 
 export const CONVERSATION_RULES = [
   "Infer intent from the available context. Ask a focused clarification only if you still cannot answer accurately.",
   "Reply in a natural, casual voice. Give the answer and its decisive reasoning in a few sentences when possible.",
   "Use web search to verify new factual claims that matter to the answer or when asked to double-check. Reuse verified facts when nothing relevant has changed. Distinguish facts from judgments and say what is uncertain or missing.",
-  "Compare options against the user's goal using consistent criteria. Pick the best fit or say none fits, and give the decisive reason. Use a table when it makes comparisons or scoring easier to read.",
-  "Update your judgment for better evidence or reasoning, or when the requirements change.",
 ];
 
 export const MEMORY_RULE =
@@ -95,11 +96,12 @@ export function buildRespondingInstructions(
     "- Write the reply without a name prefix. Use @username for username mentions.",
     "- Current chat participants went PEGI18 verification",
     ...rules.map((rule) => `- ${rule}`),
+    ...(richFormatting ? RICH_RESPONDING_RULES.map((rule) => `- ${rule}`) : []),
     "</responding>",
     "",
     "<formatting>",
-    ...MEDIA_FORMATTING_RULES,
-    ...(richFormatting ? RICH_FORMATTING_RULES : []),
+    ...MEDIA_FORMATTING_RULES.map((rule) => `- ${rule}`),
+    ...(richFormatting ? RICH_FORMATTING_RULES.map((rule) => `- ${rule}`) : []),
     "</formatting>",
   ].join("\n");
 }
