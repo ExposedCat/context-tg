@@ -1,25 +1,32 @@
 /* Shared design tokens and components for HTML visuals. */
 
 :root {
-  --bg: #1c2027;
-  --paper: #262624;
-  --paper-2: #2d2c29;
+  /* Warm paper: ivory page, lighter paper cards, warm ink, clay accent. */
+  color-scheme: light;
+  --bg: #f4efe6;
+  --paper: #fbf8f2;
+  --paper-2: #ebe3d4;
   --surface: var(--bg);
-  --ink: #f0eee6;
-  --ink-2: #bfbcb0;
-  --ink-3: #8a877d;
-  --rule: rgb(240 238 230 / 0.09);
-  --rule-2: rgb(240 238 230 / 0.18);
-  --accent: #d97757;
-  --accent-bg: rgb(217 119 87 / 0.12);
-  /* Series colors in fixed order, validated for color-vision deficiency on
-     --bg and --paper. */
-  --s1: #d4714f;
-  --s2: #4a8ad8;
-  --s3: #b8891a;
-  --s4: #3fa37f;
-  --s5: #a274d9;
-  --warn: #d6a64a;
+  --ink: #29241e;
+  --ink-2: #5b5348;
+  --ink-3: #8f8576;
+  --rule: rgb(74 56 32 / 0.12);
+  --rule-2: rgb(74 56 32 / 0.24);
+  --accent: #c2603d;
+  --accent-bg: rgb(194 96 61 / 0.1);
+  --accent-line: rgb(194 96 61 / 0.35);
+  /* Opaque --accent-bg on --bg, for fills that must hide lines beneath. */
+  --accent-tint: #efe1d5;
+  /* Muted pigments in fixed order: clay, slate blue, ochre, sage, plum. */
+  --s1: #c2603d;
+  --s2: #4d6e92;
+  --s3: #b08426;
+  --s4: #5b8a68;
+  --s5: #8a5c86;
+  --warn: #b07a1e;
+  --warn-bg: rgb(176 122 30 / 0.1);
+  --shadow:
+    0 1px 0 rgb(74 56 32 / 0.05), 0 6px 18px -10px rgb(74 56 32 / 0.18);
   --serif: "Source Serif 4 Variable", Georgia, serif;
   --sans: "Inter Variable", system-ui, sans-serif;
   --mono: "JetBrains Mono Variable", ui-monospace, monospace;
@@ -34,7 +41,7 @@
   --border-strong: 1px solid var(--rule-2);
   --radius-sm: 4px;
   --radius-md: 8px;
-  --radius-lg: 10px;
+  --radius-lg: 12px;
   --space-1: 4px;
   --space-2: 8px;
   --space-3: 12px;
@@ -42,7 +49,8 @@
   --space-5: 24px;
   --space-6: 32px;
 
-  background: var(--bg);
+  background: var(--bg)
+    radial-gradient(rgb(120 90 50 / 0.035) 1px, transparent 1px) 0 0 / 3px 3px;
   color: var(--ink-2);
   font: 400 var(--text-base) / var(--leading-body) var(--sans);
   font-feature-settings: "tnum" 1, "lnum" 1;
@@ -54,11 +62,14 @@
 *::after {
   box-sizing: border-box;
 }
+/* Graphics flow through six columns. Each spans the full width unless its
+   tag requests a size (third, half, or two-thirds), so sized graphics share
+   rows and stretch to equal heights. */
 body {
   display: grid;
-  grid-template-columns: minmax(0, 1fr);
+  grid-template-columns: repeat(6, minmax(0, 1fr));
   align-content: start;
-  gap: 20px;
+  gap: 20px 16px;
   margin: 0;
   padding: 32px 36px 28px;
 }
@@ -77,6 +88,15 @@ strong {
 img,
 svg {
   max-width: 100%;
+}
+body > * {
+  grid-column: span 6;
+}
+/* Rows stretch cards to equal heights; center content when one is shorter. */
+body > .v-card {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
 }
 
 /* Type */
@@ -140,7 +160,8 @@ svg {
   padding: 18px 20px;
   background: var(--paper);
   border: 1px solid var(--rule);
-  border-radius: 10px;
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow);
 }
 .v-card > .v-eyebrow:first-child {
   display: block;
@@ -189,14 +210,21 @@ svg {
 }
 .v-bar {
   height: 8px;
-  border-left: 1px solid var(--rule-2);
+  border-radius: 4px;
+  background: var(--paper-2);
 }
 .v-bar i {
   display: block;
   width: var(--v);
   height: 100%;
-  border-radius: 0 3px 3px 0;
+  border-radius: 4px;
   background: var(--c, var(--ink-3));
+}
+.v-bars
+  > div:not(.is-accent, .c1, .c2, .c3, .c4, .c5, .ca)
+  .v-bar
+  i:not(.c1, .c2, .c3, .c4, .c5, .ca) {
+  opacity: 0.55;
 }
 .v-bars .is-accent {
   --c: var(--accent);
@@ -239,8 +267,12 @@ svg {
   height: calc(var(--v) * var(--h) / 100%);
   min-height: 1px;
   border-radius: 3px 3px 0 0;
-  background: var(--c, var(--ink-3));
-  opacity: var(--o, 0.55);
+  /* Fade by mixing with the surface so gridlines never show through. */
+  background: color-mix(
+    in oklab,
+    var(--c, var(--ink-3)) calc(var(--o, 0.55) * 100%),
+    var(--surface)
+  );
 }
 .v-cols > .is-accent {
   --c: var(--accent);
@@ -347,8 +379,8 @@ svg {
   font: 300 22px/1 var(--serif);
 }
 .v-track {
-  height: 4px;
-  border-radius: 2px;
+  height: 6px;
+  border-radius: 3px;
   background: var(--paper-2);
 }
 .v-track i {
@@ -378,7 +410,7 @@ svg {
   right: calc(100% - var(--hi));
   border-radius: 2px;
   background: var(--accent-bg);
-  border: 1px solid rgb(217 119 87 / 0.45);
+  border: 1px solid var(--accent-line);
 }
 .v-range > .mark {
   position: absolute;
@@ -516,9 +548,10 @@ svg {
 /* Chart and plot errors */
 .v-note {
   padding: 12px 16px;
-  border-left: 1.5px solid var(--ink-3);
   background: var(--paper);
-  border-radius: 0 6px 6px 0;
+  border: 1px solid var(--rule);
+  border-left: 3px solid var(--ink-3);
+  border-radius: var(--radius-md);
   font-size: 13.5px;
 }
 .v-note b:first-child {
@@ -527,7 +560,9 @@ svg {
   font: 400 15px var(--serif);
 }
 .v-note.is-warn {
-  border-color: var(--warn);
+  background: var(--warn-bg);
+  border-color: rgb(176 122 30 / 0.3);
+  border-left-color: var(--warn);
 }
 .v-note.is-warn b:first-child::before {
   content: "⚠ ";

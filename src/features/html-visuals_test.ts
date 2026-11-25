@@ -1,6 +1,9 @@
 import { test } from "bun:test";
 import { deepStrictEqual, ok, rejects, strictEqual } from "node:assert";
-import { stripRichMarkdownVisualBlocks } from "../utils/markdown.ts";
+import {
+  stripRichMarkdownVisualBlocks,
+  VISUAL_KIT_SLOT,
+} from "../utils/markdown.ts";
 import { fetchHtmlVisualAsset } from "./html-visual-assets.ts";
 import {
   getHtmlVisualKit,
@@ -60,6 +63,8 @@ test("HTML visuals are replaced in order while code and Telegram markup stay int
   deepStrictEqual(rendered, [first, second]);
 });
 
+const card = (html: string) => `<figure class="v-card">${html}</figure>`;
+
 test("adjacent media tags and legacy aliases render together among native Telegram blocks", async () => {
   const bars =
     '<media-bars style="--label:90px"><div><dt>A</dt><dd>5</dd></div></media-bars>';
@@ -80,8 +85,10 @@ test("adjacent media tags and legacy aliases render together among native Telegr
     `${literal}\n\nIntro\n\n![](tg://photo?id=visual_1)\n\n${native}\n\n![](tg://photo?id=visual_2)\n\nEnd`,
   );
   deepStrictEqual(rendered, [
-    `<dl class="v-bars" style="--label:90px"><div><dt>A</dt><dd>5</dd></div></dl>\n${plot}`,
-    '<div aria-label="A > B" class="v-meter c2"><div><span>Load</span><b>72%</b></div></div>',
+    `${card('<dl class="v-bars" style="--label:90px"><div><dt>A</dt><dd>5</dd></div></dl>')}\n${card(plot)}`,
+    card(
+      '<div aria-label="A > B" class="v-meter c2"><div><span>Load</span><b>72%</b></div></div>',
+    ),
   ]);
 });
 
@@ -103,7 +110,7 @@ test("incomplete graphic tags stay out of progress and do not swallow a later gr
     output,
     "Before\n\n*Visual unavailable.*\n\n![](tg://photo?id=plot)\n\nAfter",
   );
-  deepStrictEqual(rendered, [plot]);
+  deepStrictEqual(rendered, [card(plot)]);
 });
 
 test("freeform canvases keep their own styles and render alongside other media tags", async () => {
@@ -131,7 +138,7 @@ test("freeform canvases keep their own styles and render alongside other media t
   ok(rendered[0]?.includes(`${body}\n</template></section>`));
   ok(
     rendered[0]?.endsWith(
-      '<div class="v-meter"><div><span>Load</span><b>72%</b></div></div>',
+      card('<div class="v-meter"><div><span>Load</span><b>72%</b></div></div>'),
     ),
   );
 });
@@ -145,7 +152,7 @@ test("new media tags pass their source to the same image group", async () => {
   ];
   const markdown = graphics.join("\n\n");
   const output = await insertHtmlVisuals(markdown, async (html) => {
-    strictEqual(html, graphics.join("\n"));
+    strictEqual(html, [graphics[0], ...graphics.slice(1).map(card)].join("\n"));
     const expanded = expandMediaCharts(html);
     strictEqual(expanded.match(/<svg /g)?.length, 3);
     ok(expanded.includes("1–4 s"));
@@ -217,4 +224,39 @@ test("the visual kit serves only its bundled fonts", async () => {
     ok(await Bun.file(path).exists(), path);
   }
   strictEqual(kit.fonts.size, new Set(urls).size);
+});
+
+test("sized graphic tags share rows and freeform canvases receive kit classes", async () => {
+  const input = [
+    '<media-meter size="half"><div><span>A</span><b>1</b></div></media-meter>',
+    "<media-meter size=third><div><span>B</span><b>2</b></div></media-meter>",
+    '<media-mermaid size="two-thirds">flowchart TD\nA --> B</media-mermaid>',
+    '<media-bars size="huge" style="font-size:2px"><div></div></media-bars>',
+    '<media-html-freeform size="half"><figure class="v-card">X</figure></media-html-freeform>',
+  ].join("\n\n");
+  const rendered: string[] = [];
+  await insertHtmlVisuals(input, async (html) => {
+    rendered.push(html);
+    return "![](tg://photo?id=layout)";
+  });
+  const [html] = rendered;
+  ok(
+    html?.includes(
+      '<figure class="v-card" style="grid-column:span 3"><div class="v-meter">',
+    ),
+  );
+  ok(html?.includes('<figure class="v-card" style="grid-column:span 2">'));
+  ok(
+    html?.includes(
+      '<div style="grid-column:span 4"><media-mermaid>flowchart TD',
+    ),
+  );
+  ok(
+    html?.includes(
+      '<figure class="v-card"><dl class="v-bars" style="font-size:2px">',
+    ),
+  );
+  ok(html?.includes('<div style="grid-column:span 3"><section><template'));
+  ok(html?.includes(VISUAL_KIT_SLOT));
+  ok(!/\ssize=/.test(html ?? ""));
 });

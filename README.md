@@ -775,17 +775,26 @@ code, and HTML blocks such as tables, quotes, and media captions.
 Replies can combine Telegram Rich Markdown with graphic blocks such as
 `<media-bars>`, `<media-columns>`, `<media-composition>`, `<media-heatmap>`,
 `<media-meter>`, `<media-range>`, `<media-chart>`, and `<media-plot>`.
-Each run of tags separated only by whitespace becomes one inline 4× PNG in place.
+Each run of tags separated only by whitespace becomes one inline PNG in place.
 Prose and native Telegram blocks between tags start a new image group. Chromium
-captures the PNG with JavaScript disabled using the bundled component kit and fonts.
-The bot generates a 2,880-pixel-wide PNG before Telegram processes the inline photo.
+captures the PNG with JavaScript disabled using the bundled component kit and fonts,
+in a warm paper style: ivory page, paper cards, warm ink, and a clay accent.
+Each predefined chart renders on its own card. The capture scale puts the long
+side at exactly 2,560 pixels, Telegram's photo limit, up to 4×, so Telegram does
+not resample it.
+
+Graphics in one image flow through six columns. A tag takes the full width
+unless it sets `size="half"`, `size="third"`, or `size="two-thirds"`; sized
+graphics share a row and stretch to the row's height.
 
 Use `<media-html-freeform>…</media-html-freeform>` in every explanation to
 show the idea in a static visual. It accepts HTML, CSS, and inline SVG with a
 layout of your choice. A `<style>` block applies to that canvas only. The canvas
 inherits design tokens from `src/features/html-visual-kit.css`, including
 palette and background colors, font families, type sizes, line heights,
-borders, corner radii, and spacing. Use the kit palette and add colors only
+borders, corner radii, shadow, and spacing, and the kit classes such as
+`v-card`, `v-bars`, and `v-meter`, so a canvas can compose kit components in
+its own layout. Use the kit palette and add colors only
 when they communicate distinctions the palette cannot show. Put specialized
 media tags alongside the canvas to combine them in the same image.
 

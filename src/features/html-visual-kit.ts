@@ -13,6 +13,8 @@ const FONT_STYLESHEETS = [
 export type HtmlVisualKit = {
   /** Font faces and component styles injected before every visual. */
   css: string;
+  /** Component styles alone, for scoped canvases that inherit the faces. */
+  components: string;
   /** Bundled font files by name, served under HTML_VISUAL_KIT_FONT_PATH. */
   fonts: ReadonlyMap<string, string>;
 };
@@ -38,7 +40,7 @@ async function loadHtmlVisualKit(): Promise<HtmlVisualKit> {
   const components = await Bun.file(
     new URL("./html-visual-kit.css", import.meta.url),
   ).text();
-  return { css: [...faces, components].join("\n"), fonts };
+  return { css: [...faces, components].join("\n"), components, fonts };
 }
 
 export function getHtmlVisualKit(): Promise<HtmlVisualKit> {

@@ -1,6 +1,9 @@
 import { createDebug } from "@grammyjs/debug";
 import { chromium } from "playwright-core";
-import { getRichMarkdownVisualBlocks } from "../utils/markdown.ts";
+import {
+  getRichMarkdownVisualBlocks,
+  VISUAL_KIT_SLOT,
+} from "../utils/markdown.ts";
 import { expandHtmlPlots } from "./html-plots.ts";
 import { fetchHtmlVisualAsset } from "./html-visual-assets.ts";
 import {
@@ -13,7 +16,10 @@ import { expandMediaMermaid } from "./media-mermaid.ts";
 const logError = createDebug("app:html-visuals:error");
 const WIDTH = 720;
 const MAX_HEIGHT = 1600;
-const PIXEL_RATIO = 4;
+const MAX_PIXEL_RATIO = 4;
+// Telegram recompresses photos to this long side. Rendering exactly to it
+// keeps the sharpest pixels without a second, blurring resample.
+const TELEGRAM_PHOTO_SIDE = 2560;
 const MAX_VISUALS = 4;
 const MAX_HTML_BYTES = 64 * 1024;
 const RENDER_TIMEOUT_MS = 10_000;
@@ -30,6 +36,8 @@ export async function renderHtmlVisual(
   signal?.throwIfAborted();
   const kit = await getHtmlVisualKit();
   html = await expandHtmlPlots(expandMediaCharts(html), signal);
+  // Freeform canvases are shadow roots; give them the kit classes too.
+  html = html.replaceAll(VISUAL_KIT_SLOT, kit.components);
   signal?.throwIfAborted();
   const browser = await chromium.launch({
     timeout: RENDER_TIMEOUT_MS,
@@ -46,12 +54,11 @@ export async function renderHtmlVisual(
     renderSignal.throwIfAborted();
     html = await expandMediaMermaid(browser, html, kit, renderSignal);
     const context = await browser.newContext({
-      colorScheme: "dark",
+      colorScheme: "light",
       javaScriptEnabled: false,
       offline: true,
       serviceWorkers: "block",
       viewport: { width: WIDTH, height: 40 },
-      deviceScaleFactor: PIXEL_RATIO,
     });
     const page = await context.newPage();
     page.setDefaultTimeout(RENDER_TIMEOUT_MS);
@@ -137,7 +144,18 @@ export async function renderHtmlVisual(
     }
 
     await page.setViewportSize({ width: WIDTH, height });
-    const png = await page.screenshot({ animations: "disabled" });
+    // Chromium rasterizes the clip at this scale, so text and SVG stay vector
+    // sharp at any ratio instead of being resampled from a fixed one.
+    const scale = Math.min(
+      MAX_PIXEL_RATIO,
+      TELEGRAM_PHOTO_SIDE / Math.max(WIDTH, height),
+    );
+    const cdp = await context.newCDPSession(page);
+    const { data } = await cdp.send("Page.captureScreenshot", {
+      format: "png",
+      clip: { x: 0, y: 0, width: WIDTH, height, scale },
+    });
+    const png = Buffer.from(data, "base64");
     if (png.byteLength > 10_000_000) {
       throw new Error("HTML visual exceeds Telegram's photo size limit.");
     }

@@ -55,11 +55,53 @@ type VisualBlock = {
   graphic: boolean;
 };
 
+/**
+ * Freeform canvases carry this comment in their scoped stylesheet. The
+ * renderer replaces it with the kit's component CSS so kit classes work
+ * inside the canvas.
+ */
+export const VISUAL_KIT_SLOT = "/* visual-kit */";
+
+/** Grid columns, out of six, for each `size` a graphic tag may request. */
+const GRAPHIC_SIZES: Record<string, number> = {
+  third: 2,
+  half: 3,
+  "two-thirds": 4,
+};
+const SIZE_ATTRIBUTE =
+  /\s+size\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s'"=<>]+))|"[^"]*"|'[^']*'/gi;
+
 function graphicHtml(name: string, attributes: string, body: string): string {
+  let span: number | undefined;
+  const rest = attributes.replace(
+    SIZE_ATTRIBUTE,
+    (token, doubleQuoted, singleQuoted, unquoted) => {
+      const value = doubleQuoted ?? singleQuoted ?? unquoted;
+      if (value === undefined) return token;
+      span = GRAPHIC_SIZES[value.trim().toLowerCase()] ?? span;
+      return "";
+    },
+  );
+  const sizeStyle = span ? ` style="grid-column:span ${span}"` : "";
+  const html = graphicContentHtml(name, rest, body);
+  if (name === "media-html-freeform" || name.endsWith("-mermaid")) {
+    return sizeStyle ? `<div${sizeStyle}>${html}</div>` : html;
+  }
+  // Every predefined chart sits on its own paper card, like the kit's cards.
+  return `<figure class="v-card"${sizeStyle}>${html}</figure>`;
+}
+
+function graphicContentHtml(
+  name: string,
+  attributes: string,
+  body: string,
+): string {
   if (name === "media-html-freeform") {
-    // Scope the canvas CSS to its contents while inheriting the kit variables.
+    // Scope the canvas CSS to its contents while inheriting the kit variables
+    // and component classes.
     return `<section><template shadowrootmode="open">
 <style>
+  ${VISUAL_KIT_SLOT}
   :host { color: var(--ink); }
   *, *::before, *::after { box-sizing: border-box; }
   :where(h1, h2, h3, h4, p, figure) { margin: 0; }

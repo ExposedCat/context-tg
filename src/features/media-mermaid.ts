@@ -27,7 +27,7 @@ export async function expandMediaMermaid(
   // Only this separate page runs JavaScript. It never receives the reply HTML,
   // and can load only the packaged Mermaid script and the kit's bundled fonts.
   const context = await browser.newContext({
-    colorScheme: "dark",
+    colorScheme: "light",
     offline: true,
     serviceWorkers: "block",
   });
@@ -126,7 +126,7 @@ function initMermaid(page: Page): Promise<void> {
       theme: "base",
       look: "classic",
       themeVariables: {
-        darkMode: true,
+        darkMode: false,
         background: color("--bg"),
         mainBkg: color("--paper"),
         primaryColor: color("--paper"),
@@ -139,34 +139,86 @@ function initMermaid(page: Page): Promise<void> {
         lineColor: color("--ink-2"),
         textColor: color("--ink"),
         edgeLabelBackground: color("--bg"),
+        clusterBkg: color("--paper-2"),
+        clusterBorder: color("--rule-2"),
         actorBkg: color("--paper"),
-        actorBorder: color("--ink-3"),
+        actorBorder: color("--rule-2"),
         actorTextColor: color("--ink"),
         actorLineColor: color("--ink-3"),
-        signalColor: color("--ink-2"),
+        signalColor: color("--ink"),
         signalTextColor: color("--ink"),
-        noteBkgColor: color("--paper-2"),
+        noteBkgColor: color("--accent-tint"),
+        noteBorderColor: color("--accent-line"),
         noteTextColor: color("--ink"),
+        labelBoxBkgColor: color("--paper"),
+        labelBoxBorderColor: color("--rule-2"),
+        labelTextColor: color("--ink"),
+        loopTextColor: color("--ink-2"),
+        activationBkgColor: color("--paper-2"),
+        activationBorderColor: color("--ink-3"),
         fontSize: "18px",
       },
+      // Nodes and actors match .v-card: paper fill, hairline rule border,
+      // 12px corners, and the same soft lifted shadow. Theme variables cannot
+      // express these, and the kit tokens resolve inside the inlined SVG.
+      themeCSS: `
+        rect.actor, .node rect, .node polygon, .node circle, .node ellipse,
+        .node path {
+          fill: var(--paper) !important;
+          stroke: var(--rule-2) !important;
+          stroke-width: 1px !important;
+          stroke-linejoin: round;
+          filter: drop-shadow(0 1px 0 rgb(74 56 32 / 0.05))
+            drop-shadow(0 4px 7px rgb(74 56 32 / 0.1));
+        }
+        rect.actor, .node rect { rx: 12px; ry: 12px; }
+        text.actor, text.actor > tspan {
+          font-family: ${color("--serif")};
+          font-size: 20px;
+        }
+        .nodeLabel, .node text { fill: var(--ink) !important; }
+        .actor-line { stroke-dasharray: 3 4; stroke-width: 1px; }
+        rect.note { rx: 10px; ry: 10px; }
+        .noteText, .noteText > tspan { font-family: ${color("--serif")}; font-style: italic; }
+        .messageLine0, .messageLine1 { stroke-width: 1.4px; }
+        .cluster rect {
+          rx: 12px; ry: 12px;
+          fill: var(--paper-2) !important;
+          stroke: var(--rule) !important;
+        }
+        .edgeLabel rect, .labelBkg {
+          fill: var(--bg) !important;
+          opacity: 1 !important;
+        }
+      `,
       flowchart: {
         useMaxWidth: false,
         wrappingWidth: 155,
         curve: "linear",
         nodeSpacing: 36,
         rankSpacing: 40,
-        padding: 10,
+        padding: 16,
       },
       sequence: {
         useMaxWidth: false,
         mirrorActors: false,
+        // Messages render at the theme's 18px, so lifelines need room for
+        // a typical label (about 280px) to sit between them unwrapped.
+        width: 160,
+        height: 56,
+        actorMargin: 130,
+        messageMargin: 44,
+        boxMargin: 12,
+        noteMargin: 14,
+        wrapPadding: 16,
         actorFontSize: 18,
-        messageFontSize: 17,
-        noteFontSize: 16,
+        messageFontSize: 18,
+        noteFontSize: 17,
         wrap: true,
       },
     });
     await document.fonts.load(`18px ${fontFamily}`, "Diagram labels");
+    await document.fonts.load(`20px ${color("--serif")}`, "Diagram actors");
   });
 }
 

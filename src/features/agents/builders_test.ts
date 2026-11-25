@@ -35,6 +35,8 @@ test("agents receive formatting and memory guidance for their capabilities", () 
     "<media-stacked-bars unit=",
     "<media-timebands>",
     "Consecutive graphic tags render as one image.",
+    'size="half"',
+    "Kit classes work inside the canvas",
   ];
 
   for (const agent of [normalAgent, guestAgent, trollAgent]) {
