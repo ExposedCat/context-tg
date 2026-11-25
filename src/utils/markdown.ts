@@ -6,7 +6,6 @@ const GRAPHIC_ELEMENTS = {
   meter: ["div", "v-meter"],
   range: ["div", "v-range"],
   chart: ["svg", "v-chart"],
-  flow: ["ol", "v-flow"],
   plot: ["media-plot", ""],
 } as const;
 

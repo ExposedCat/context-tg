@@ -66,10 +66,10 @@ test("adjacent media tags and legacy aliases render together among native Telegr
   const plot = '<media-plot height="150">y = x^2</media-plot>';
   const native =
     "<table bordered striped><tr><td>Exact value</td></tr></table>\n\n<tg-math>x^2</tg-math>";
-  const flow =
-    "<TG-FLOW aria-label=\"A > B\" CLASS='is-vertical'><li><b>A</b></li><li><b>B</b></li></TG-FLOW>";
+  const meter =
+    "<TG-METER aria-label=\"A > B\" CLASS='c2'><div><span>Load</span><b>72%</b></div></TG-METER>";
   const literal = `\`\`${plot}\`\`\n\n\`\`\`html\n${bars}\n\`\`\`\n\n\\<media-plot>`;
-  const input = `${literal}\n\nIntro ${bars}\n\n${plot}\n${native}\n\n${flow} End`;
+  const input = `${literal}\n\nIntro ${bars}\n\n${plot}\n${native}\n\n${meter} End`;
   const rendered: string[] = [];
 
   strictEqual(
@@ -81,7 +81,7 @@ test("adjacent media tags and legacy aliases render together among native Telegr
   );
   deepStrictEqual(rendered, [
     `<dl class="v-bars" style="--label:90px"><div><dt>A</dt><dd>5</dd></div></dl>\n${plot}`,
-    '<ol aria-label="A > B" class="v-flow is-vertical"><li><b>A</b></li><li><b>B</b></li></ol>',
+    '<div aria-label="A > B" class="v-meter c2"><div><span>Load</span><b>72%</b></div></div>',
   ]);
 });
 
@@ -110,8 +110,9 @@ test("freeform canvases keep their own styles and render alongside other media t
   const body =
     '<style>.step{color:var(--s2)}</style><div class="step">Step 1</div>';
   const canvas = `<media-html-freeform>${body}</media-html-freeform>`;
-  const flow = "<media-flow><li><b>Step 2</b></li></media-flow>";
-  const input = `**Intro**\n\n${canvas}\n\n${flow}\n\n[Source](https://example.com)`;
+  const meter =
+    "<media-meter><div><span>Load</span><b>72%</b></div></media-meter>";
+  const input = `**Intro**\n\n${canvas}\n\n${meter}\n\n[Source](https://example.com)`;
   const rendered: string[] = [];
 
   strictEqual(
@@ -128,7 +129,11 @@ test("freeform canvases keep their own styles and render alongside other media t
   strictEqual(rendered.length, 1);
   ok(rendered[0]?.includes('<template shadowrootmode="open">'));
   ok(rendered[0]?.includes(`${body}\n</template></section>`));
-  ok(rendered[0]?.endsWith('<ol class="v-flow"><li><b>Step 2</b></li></ol>'));
+  ok(
+    rendered[0]?.endsWith(
+      '<div class="v-meter"><div><span>Load</span><b>72%</b></div></div>',
+    ),
+  );
 });
 
 test("new media tags pass their source to the same image group", async () => {

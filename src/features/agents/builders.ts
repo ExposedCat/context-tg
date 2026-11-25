@@ -42,7 +42,8 @@ const MEDIA_FORMATTING_RULES = [
 ];
 
 const RICH_RESPONDING_RULES = [
-  "Include a concise visual (<media-html-freeform> or a matching specialized <media-*> tag) in every explanation, even a short one—especially for how something works, architecture, flows, or multi-part relationships. Use alignment, grouping, connectors, or shared colors to show what changes, connects, or repeats, with short labels.",
+  "Include a concise visual in every explanation, even a short one—using <media-html-freeform> for schematics, architecture, mechanics, and multi-part relationships, or a specialized <media-*> tag when data, math, or Mermaid genuinely fits. Find a visual representation that makes the details cleaner and easier to understand than prose, rather than migrating text into a visual block.",
+  "A visual must earn its pixels with 2D spatial structure (side-by-side components, shared boundaries, bidirectional or branching connectors, layers, or data scales)—never stacked paragraphs or a linear list in boxes. Use short labels (a few words per node or edge) and let alignment, grouping, connectors, and shared colors carry the structure.",
   "Let the visual carry the explanation instead of writing multi-paragraph prose. Keep surrounding Markdown to a few short sentences for the main takeaway, caveats, or links, and do not repeat in prose what the graphic already shows.",
   "Always use <media-*> tags for graphics, diagrams, schematics, and charts; never imitate them with plain text, ASCII art, or a code block. Combine a freeform canvas with specialized media tags when both help.",
   "Use <blockquote expandable> for long quotes, <details> for collapsible sections, and <tg-collage> or <tg-slideshow> when sharing multiple images.",
@@ -65,7 +66,6 @@ const RICH_FORMATTING_RULES = [
   'Math plots (<media-plot>…</media-plot>): evaluated with math.js in the kit style, one statement per line with explicit operators and # comments: constants (a = 2), functions (f(x) = exp(-x^2)), point-valued functions (w(u, v) = (u + v^2, v)), function graphs (y = a * sin(x); lines starting with y = always plot a graph), parametric curves ((cos(t), sin(t)) for t in 0..2pi), meshes (w(u, v) for u in 0..1 by 0.05, v in -1..1 by 0.05), and points ((1, 2)). Prefix with "Label": for legends or point labels. Series colors follow statement order. Attributes: x="-5..5", y="-2..2" (auto otherwise), equal, height (px; default width 648). Max four plots per image.',
   'Heatmap (2D intensity): <media-heatmap><div class="v-heat" style="--cols:7"><i style="--v:.4"></i>…</div><div class="v-scale"><span>0</span><span>420 / day</span></div></media-heatmap>.',
   'Meter (value vs goal/limit): <media-meter><div><span>Label</span><b>72%</b></div><div class="v-track"><i style="--v:72%"></i></div></media-meter>. Range (value vs interval): <media-range style="--lo:30%;--hi:65%;--at:42%"><div class="band"></div><div class="mark"></div><span style="--x:0%">0</span><span style="--x:30%">6</span>…</media-range>.',
-  'Sequence flow (handoffs): <media-flow><li><b>Short action</b></li>…</media-flow>. Add class="is-vertical" for narrow layouts or steps with a short <p>; 5+ steps stack automatically. .is-done and .is-current mark actual progress.',
   "Mermaid (branching decisions, hierarchies, message sequences): <media-mermaid>…</media-mermaid> with raw Mermaid source (no code fences, frontmatter, or config directives). Supports flowchart TD and sequenceDiagram; keep labels short and split dense diagrams.",
   'Intervals (numeric ranges on a shared axis): <media-intervals unit="s">…</media-intervals> with lines formatted as Label | low | high.',
   'Stacked bars (totals and breakdowns): <media-stacked-bars unit="s">…</media-stacked-bars> starting with a header (Label | Model | Tools | Render) followed by nonnegative rows (Fast | 5 | 1 | 1).',
@@ -75,6 +75,7 @@ const RICH_FORMATTING_RULES = [
 export const CONVERSATION_RULES = [
   "Infer intent from the available context. Ask a focused clarification only if you still cannot answer accurately.",
   "Reply in a natural, casual voice. Give the answer and its decisive reasoning in a few sentences when possible.",
+  "Identify the parts that are easy to misunderstand or leave vague and state them precisely up front—name exact mechanisms, boundaries, defaults, or caveats instead of hand-waving—so the reader does not need follow-up questions.",
   "Use web search to verify new factual claims that matter to the answer or when asked to double-check. Reuse verified facts when nothing relevant has changed. Distinguish facts from judgments and say what is uncertain or missing.",
 ];
 

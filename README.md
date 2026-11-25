@@ -774,7 +774,7 @@ code, and HTML blocks such as tables, quotes, and media captions.
 
 Replies can combine Telegram Rich Markdown with graphic blocks such as
 `<media-bars>`, `<media-columns>`, `<media-composition>`, `<media-heatmap>`,
-`<media-meter>`, `<media-range>`, `<media-chart>`, `<media-flow>`, and `<media-plot>`.
+`<media-meter>`, `<media-range>`, `<media-chart>`, and `<media-plot>`.
 Each run of tags separated only by whitespace becomes one inline 4× PNG in place.
 Prose and native Telegram blocks between tags start a new image group. Chromium
 captures the PNG with JavaScript disabled using the bundled component kit and fonts.

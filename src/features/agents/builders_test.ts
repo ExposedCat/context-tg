@@ -11,7 +11,8 @@ test("agents receive formatting and memory guidance for their capabilities", () 
     "<figcaption>",
   ];
   const richRespondingGuidance = [
-    "Include a concise visual (<media-html-freeform> or a matching specialized <media-*> tag) in every explanation",
+    "Find a visual representation that makes the details cleaner and easier to understand than prose, rather than migrating text into a visual block.",
+    "A visual must earn its pixels with 2D spatial structure",
     "Let the visual carry the explanation instead of writing multi-paragraph prose.",
     "Always use <media-*> tags for graphics, diagrams, schematics, and charts",
   ];
@@ -29,7 +30,6 @@ test("agents receive formatting and memory guidance for their capabilities", () 
     "<media-html-freeform><style>",
     "<media-chart viewBox=",
     "<media-plot>",
-    "<media-flow>",
     "<media-mermaid>",
     "<media-intervals unit=",
     "<media-stacked-bars unit=",
@@ -44,6 +44,18 @@ test("agents receive formatting and memory guidance for their capabilities", () 
       instructions.match(/<responding>[\s\S]*?<\/responding>/)?.[0] ?? "";
     const formattingSection =
       instructions.match(/<formatting>[\s\S]*?<\/formatting>/)?.[0] ?? "";
+    strictEqual(
+      instructions.includes("<media-flow>"),
+      false,
+      `${agent.id} should not mention removed <media-flow>`,
+    );
+    strictEqual(
+      respondingSection.includes(
+        "Identify the parts that are easy to misunderstand or leave vague",
+      ),
+      richFormatting,
+      `${agent.id} precision guidance`,
+    );
     for (const syntax of mediaSyntax) {
       ok(formattingSection.includes(syntax), `${agent.id}: missing ${syntax}`);
     }
